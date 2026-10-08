@@ -8,6 +8,8 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+## [0.0.0] - 2026-10-08
+
 The first open-source release of k4a, under the Apache License 2.0.
 
 ### Added
