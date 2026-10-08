@@ -321,18 +321,25 @@ func patternRecall(pattern string) (recall, note string) {
 	return "full", ""
 }
 
+// Wire scope names, as the daemon's SearchRequest.scopes reads them.
+const (
+	scopeKey     = "key"
+	scopeValue   = "value"
+	scopeHeaders = "headers"
+)
+
 // parseScope maps the scope string to the wire scope list. Empty → nil, which
 // the daemon reads as the key+value default.
 func parseScope(s string) []string {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "key+value":
 		return nil
-	case "key":
-		return []string{"key"}
-	case "value":
-		return []string{"value"}
+	case scopeKey:
+		return []string{scopeKey}
+	case scopeValue:
+		return []string{scopeValue}
 	case "key+value+headers":
-		return []string{"key", "value", "headers"}
+		return []string{scopeKey, scopeValue, scopeHeaders}
 	default:
 		return nil
 	}

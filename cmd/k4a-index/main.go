@@ -98,64 +98,11 @@ func run(args []string) int {
 			"path", path, "err", err)
 	}
 
-	// The allowlist is the v1 authorization boundary — build it first so a
-	// malformed pattern (or an empty list) fails fast before we touch Kafka.
-	policy, err := newAllowPolicy(f.Allow)
-	if err != nil {
-		log.Error("allowlist", "err", err)
+	lim, ok := validateFlags(&f)
+	if !ok {
 		return 1
 	}
-	if policy.empty() {
-		log.Error("allowlist is empty — the daemon would follow no topics; set --allow / K4A_INDEX_ALLOW")
-		return 1
-	}
-	// Pre-follow topics are operator-pinned but still subject to the allowlist:
-	// a pinned topic outside the allowlist is a config contradiction, so reject
-	// it here rather than silently never following it.
-	for _, t := range f.Prefollow {
-		if !policy.allowed(t) {
-			log.Error("pre-follow topic is not in the allowlist", "topic", t, "allow", policy.String())
-			return 1
-		}
-	}
-
-	topicMaxBytes, err := parseByteSize(f.TopicMaxBytes)
-	if err != nil {
-		log.Error("topic-max-bytes", "err", err)
-		return 1
-	}
-
-	maxTotalBytes, err := parseByteSize(f.MaxTotalBytes)
-	if err != nil {
-		log.Error("max-total-bytes", "err", err)
-		return 1
-	}
-	// A budget below one topic's cap would evict every topic on every sweep and
-	// still never fit. Refuse it rather than thrash. Note the on-disk footprint
-	// runs well above the stored-bytes cap, so this is a floor, not a target.
-	if maxTotalBytes > 0 && maxTotalBytes < topicMaxBytes {
-		log.Error("max-total-bytes is below topic-max-bytes — every topic would be evicted and it still would not fit",
-			"max_total_bytes", maxTotalBytes, "topic_max_bytes", topicMaxBytes)
-		return 1
-	}
-
-	log.Info(
-		"k4a-index starting",
-		"version", version.String(),
-		"allow", policy.String(),
-		"prefollow", f.Prefollow,
-		"max_followed", f.MaxFollow,
-		"topic_max_bytes", topicMaxBytes,
-		"max_total_bytes", maxTotalBytes,
-		"evict_after", f.EvictAfter,
-		"drain_stall_timeout", f.DrainStall,
-		"drain_stall_merge_grace", f.MergeGrace,
-		"drain_stall_wipe_after", f.WipeStrikes,
-		"listen", f.Listen,
-		"data_dir", f.dataRoot(),
-		"auth", f.Auth,
-		"log_level", f.LogLevel,
-	)
+	logStartup(&f, lim)
 
 	brokers, authCfg, err := resolveConnection(&f)
 	if err != nil {
@@ -174,6 +121,86 @@ func run(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	return serve(ctx, &f, lim, client)
+}
+
+// startupLimits is what validateFlags derives from the flags before anything
+// touches Kafka.
+type startupLimits struct {
+	policy        allowPolicy
+	topicMaxBytes int64
+	maxTotalBytes int64
+}
+
+// validateFlags checks the flags that can be refused without a broker, logging
+// the reason and reporting false on the first bad one.
+func validateFlags(f *flags) (startupLimits, bool) {
+	// The allowlist is the v1 authorization boundary — build it first so a
+	// malformed pattern (or an empty list) fails fast before we touch Kafka.
+	policy, err := newAllowPolicy(f.Allow)
+	if err != nil {
+		log.Error("allowlist", "err", err)
+		return startupLimits{}, false
+	}
+	if policy.empty() {
+		log.Error("allowlist is empty — the daemon would follow no topics; set --allow / K4A_INDEX_ALLOW")
+		return startupLimits{}, false
+	}
+	// Pre-follow topics are operator-pinned but still subject to the allowlist:
+	// a pinned topic outside the allowlist is a config contradiction, so reject
+	// it here rather than silently never following it.
+	for _, t := range f.Prefollow {
+		if !policy.allowed(t) {
+			log.Error("pre-follow topic is not in the allowlist", "topic", t, "allow", policy.String())
+			return startupLimits{}, false
+		}
+	}
+
+	topicMaxBytes, err := parseByteSize(f.TopicMaxBytes)
+	if err != nil {
+		log.Error("topic-max-bytes", "err", err)
+		return startupLimits{}, false
+	}
+
+	maxTotalBytes, err := parseByteSize(f.MaxTotalBytes)
+	if err != nil {
+		log.Error("max-total-bytes", "err", err)
+		return startupLimits{}, false
+	}
+	// A budget below one topic's cap would evict every topic on every sweep and
+	// still never fit. Refuse it rather than thrash. Note the on-disk footprint
+	// runs well above the stored-bytes cap, so this is a floor, not a target.
+	if maxTotalBytes > 0 && maxTotalBytes < topicMaxBytes {
+		log.Error("max-total-bytes is below topic-max-bytes — every topic would be evicted and it still would not fit",
+			"max_total_bytes", maxTotalBytes, "topic_max_bytes", topicMaxBytes)
+		return startupLimits{}, false
+	}
+	return startupLimits{policy: policy, topicMaxBytes: topicMaxBytes, maxTotalBytes: maxTotalBytes}, true
+}
+
+func logStartup(f *flags, lim startupLimits) {
+	log.Info(
+		"k4a-index starting",
+		"version", version.String(),
+		"allow", lim.policy.String(),
+		"prefollow", f.Prefollow,
+		"max_followed", f.MaxFollow,
+		"topic_max_bytes", lim.topicMaxBytes,
+		"max_total_bytes", lim.maxTotalBytes,
+		"evict_after", f.EvictAfter,
+		"drain_stall_timeout", f.DrainStall,
+		"drain_stall_merge_grace", f.MergeGrace,
+		"drain_stall_wipe_after", f.WipeStrikes,
+		"listen", f.Listen,
+		"data_dir", f.dataRoot(),
+		"auth", f.Auth,
+		"log_level", f.LogLevel,
+	)
+}
+
+// serve builds the follow-set and runs the gRPC server until ctx is signaled,
+// returning the process exit code.
+func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Client) int {
 	// The cluster ID keys the index directory so two clusters' identically
 	// named topics never collide — the same isolation the local index uses.
 	cluster, err := client.ClusterID(ctx)
@@ -186,12 +213,12 @@ func run(args []string) int {
 	}
 
 	root := state.NewRoot(f.dataRoot())
-	mgr := newManager(ctx, root, cluster, client, policy, managerConfig{
+	mgr := newManager(ctx, root, cluster, client, lim.policy, managerConfig{
 		MaxFollowed:   f.MaxFollow,
 		EvictAfter:    f.EvictAfter,
-		MaxTotalBytes: maxTotalBytes,
+		MaxTotalBytes: lim.maxTotalBytes,
 		Worker: workerOptions{
-			TrimBytes:   topicMaxBytes,
+			TrimBytes:   lim.topicMaxBytes,
 			StallAfter:  f.DrainStall,
 			MergeGrace:  f.MergeGrace,
 			WipeStrikes: f.WipeStrikes,
@@ -233,6 +260,27 @@ func run(args []string) int {
 	return 0
 }
 
+// byteSuffixes are tried in order; the first suffix that matches wins, so a
+// longer spelling must precede any suffix it ends with ("TIB" before "B").
+var byteSuffixes = []struct {
+	suffix string
+	mult   int64
+}{
+	{"TIB", 1 << 40},
+	{"TI", 1 << 40},
+	{"GIB", 1 << 30},
+	{"GI", 1 << 30},
+	{"MIB", 1 << 20},
+	{"MI", 1 << 20},
+	{"KIB", 1 << 10},
+	{"KI", 1 << 10},
+	{"TB", 1_000_000_000_000},
+	{"GB", 1_000_000_000},
+	{"MB", 1_000_000},
+	{"KB", 1_000},
+	{"B", 1},
+}
+
 // parseByteSize parses a human byte-size string into bytes. Accepts binary
 // suffixes (KiB/MiB/GiB/TiB and their k8s Ki/Mi/Gi/Ti forms, ×1024), decimal
 // suffixes (KB/MB/GB/TB, ×1000), a trailing "B", or a bare integer (bytes).
@@ -244,32 +292,11 @@ func parseByteSize(s string) (int64, error) {
 	}
 	u := strings.ToUpper(s)
 	var mult int64 = 1
-	trim := func(suf string) bool {
-		rest, ok := strings.CutSuffix(u, suf)
-		if ok {
-			u = rest
+	for _, bs := range byteSuffixes {
+		if rest, ok := strings.CutSuffix(u, bs.suffix); ok {
+			u, mult = rest, bs.mult
+			break
 		}
-		return ok
-	}
-	switch {
-	case trim("TIB") || trim("TI"):
-		mult = 1 << 40
-	case trim("GIB") || trim("GI"):
-		mult = 1 << 30
-	case trim("MIB") || trim("MI"):
-		mult = 1 << 20
-	case trim("KIB") || trim("KI"):
-		mult = 1 << 10
-	case trim("TB"):
-		mult = 1_000_000_000_000
-	case trim("GB"):
-		mult = 1_000_000_000
-	case trim("MB"):
-		mult = 1_000_000
-	case trim("KB"):
-		mult = 1_000
-	case trim("B"):
-		mult = 1
 	}
 	n, err := strconv.ParseInt(strings.TrimSpace(u), 10, 64)
 	if err != nil {
