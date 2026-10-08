@@ -253,6 +253,38 @@ func (v *MessagesView) HandleKey(key string) (string, string) {
 	case "o":
 		// Switch to topic overview.
 		return "topic_detail", v.topic
+	case "p", "P", "a":
+		v.handlePartitionKey(key)
+	default:
+		v.handleNavKey(key)
+	}
+	return "", ""
+}
+
+// handlePartitionKey steps the partition filter forward (p) or back (P), or
+// clears it (a).
+func (v *MessagesView) handlePartitionKey(key string) {
+	switch key {
+	case "p":
+		v.cyclePartitionForward()
+	case "P":
+		v.cyclePartitionBackward()
+	case "a":
+		if v.partitionFilter < 0 {
+			return
+		}
+		v.partitionFilter = -1
+	}
+	v.rebuildRows()
+	if v.follow {
+		v.table.GotoTop()
+	}
+}
+
+// handleNavKey handles follow mode and scrolling. Moving off the newest row
+// leaves follow mode; jumping back to it rejoins.
+func (v *MessagesView) handleNavKey(key string) {
+	switch key {
 	case "f":
 		v.follow = !v.follow
 		if v.follow {
@@ -265,26 +297,6 @@ func (v *MessagesView) HandleKey(key string) (string, string) {
 		v.follow = false
 	case "up", "down", "j", "k", "pgup", "pgdown", "ctrl+f", "ctrl+b":
 		v.follow = false
-	case "p":
-		v.cyclePartitionForward()
-		v.rebuildRows()
-		if v.follow {
-			v.table.GotoTop()
-		}
-	case "P":
-		v.cyclePartitionBackward()
-		v.rebuildRows()
-		if v.follow {
-			v.table.GotoTop()
-		}
-	case "a":
-		if v.partitionFilter >= 0 {
-			v.partitionFilter = -1
-			v.rebuildRows()
-			if v.follow {
-				v.table.GotoTop()
-			}
-		}
 	case "h", "left":
 		if v.valueOffset > 0 {
 			v.valueOffset--
@@ -303,7 +315,6 @@ func (v *MessagesView) HandleKey(key string) (string, string) {
 			v.rebuildRows()
 		}
 	}
-	return "", ""
 }
 
 // GetMessage returns a message by index.

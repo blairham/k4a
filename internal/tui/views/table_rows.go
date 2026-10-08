@@ -5,6 +5,10 @@ package views
 
 import "charm.land/bubbles/v2/table"
 
+// colName is the title of the name column the topics, topic-config and ACL
+// tables share.
+const colName = "NAME"
+
 // setTableRows replaces a table's rows and repairs the cursor.
 //
 // bubbles' Model.SetRows clamps the cursor *down* when the row set shrinks —

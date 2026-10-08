@@ -66,8 +66,7 @@ func (v *TopicDetailView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *TopicDetailView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case TopicDetailRefreshMsg:
+	if msg, ok := msg.(TopicDetailRefreshMsg); ok {
 		v.loading = false
 		if msg.Err != nil {
 			v.err = kafka.FormatUserError(msg.Err)

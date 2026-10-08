@@ -54,8 +54,7 @@ func (v *BrokerDetailView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *BrokerDetailView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case BrokerDetailRefreshMsg:
+	if msg, ok := msg.(BrokerDetailRefreshMsg); ok {
 		v.loading = false
 		if msg.Err != nil {
 			v.err = kafka.FormatUserError(msg.Err)

@@ -55,8 +55,7 @@ func (v *GroupDetailView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *GroupDetailView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case GroupDetailRefreshMsg:
+	if msg, ok := msg.(GroupDetailRefreshMsg); ok {
 		v.loading = false
 		if msg.Err != nil {
 			v.err = kafka.FormatUserError(msg.Err)

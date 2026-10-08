@@ -58,8 +58,7 @@ func (v *ContextView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *ContextView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case ContextRefreshMsg:
+	if msg, ok := msg.(ContextRefreshMsg); ok {
 		v.entries = msg.Contexts
 		v.rebuildRows()
 	}

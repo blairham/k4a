@@ -35,7 +35,7 @@ type ACLsView struct {
 
 var aclFixedCols = []table.Column{
 	{Title: "RESOURCE", Width: 10},
-	{Title: "NAME", Width: 28},
+	{Title: colName, Width: 28},
 	{Title: "PATTERN", Width: 10},
 	{Title: "HOST", Width: 16},
 	{Title: "OPERATION", Width: 16},
@@ -74,8 +74,7 @@ func (v *ACLsView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *ACLsView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case ACLsRefreshMsg:
+	if msg, ok := msg.(ACLsRefreshMsg); ok {
 		v.loading = false
 		if msg.Err != nil {
 			v.err = kafka.FormatUserError(msg.Err)

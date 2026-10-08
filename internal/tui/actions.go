@@ -198,26 +198,14 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		cmd := a.selectContext(param)
 		return a, cmd
 	case "message_detail":
-		if v := typedView[*views.MessagesView](a, style.ViewMessages); v != nil {
-			if idx, ok := parseIndex(param); ok {
-				if msg := v.GetMessage(idx); msg != nil {
-					cmd := a.openMessageDetail(msg)
-					return a, cmd
-				}
-			}
-		}
+		cmd := a.openMessageAt(param)
+		return a, cmd
 	case "search_message_detail":
 		// Opens the detail view for a SearchView match. The search keeps
 		// running in the background — popping back returns to streaming
 		// results, no scan restart.
-		if v := typedView[*views.SearchView](a, style.ViewSearch); v != nil {
-			if idx, ok := parseIndex(param); ok {
-				if msg, ok := v.GetMatch(idx); ok {
-					cmd := a.openMessageDetail(&msg)
-					return a, cmd
-				}
-			}
-		}
+		cmd := a.openSearchMatchAt(param)
+		return a, cmd
 	case "save_message":
 		return a.promptSaveMessage(param)
 	}
@@ -270,6 +258,42 @@ func (a *App) selectContext(name string) tea.Cmd {
 		return a.switchView(style.ViewTopics)
 	}
 	return a.doSwitchContext(name)
+}
+
+// openMessageAt opens the detail view for the Messages row param indexes,
+// doing nothing when there is no such row.
+func (a *App) openMessageAt(param string) tea.Cmd {
+	v := typedView[*views.MessagesView](a, style.ViewMessages)
+	if v == nil {
+		return nil
+	}
+	idx, ok := parseIndex(param)
+	if !ok {
+		return nil
+	}
+	msg := v.GetMessage(idx)
+	if msg == nil {
+		return nil
+	}
+	return a.openMessageDetail(msg)
+}
+
+// openSearchMatchAt opens the detail view for the search match param indexes,
+// doing nothing when there is no such match.
+func (a *App) openSearchMatchAt(param string) tea.Cmd {
+	v := typedView[*views.SearchView](a, style.ViewSearch)
+	if v == nil {
+		return nil
+	}
+	idx, ok := parseIndex(param)
+	if !ok {
+		return nil
+	}
+	msg, ok := v.GetMatch(idx)
+	if !ok {
+		return nil
+	}
+	return a.openMessageDetail(&msg)
 }
 
 // openMessageDetail pushes the current view and shows msg in the detail view.

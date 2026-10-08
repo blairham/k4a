@@ -83,7 +83,7 @@ func buildTopicColumns(totalWidth int) []table.Column {
 	}
 
 	cols := make([]table.Column, 0, len(topicFixedCols)+1)
-	cols = append(cols, table.Column{Title: "NAME", Width: nameWidth})
+	cols = append(cols, table.Column{Title: colName, Width: nameWidth})
 	cols = append(cols, topicFixedCols...)
 	return cols
 }
@@ -153,49 +153,44 @@ func (v *TopicsView) Count() int {
 	return len(v.table.Rows())
 }
 
+// topicRowActions are the keys that act on the selected topic, mapped to the
+// action they dispatch with its name.
+var topicRowActions = map[string]string{
+	KeyEnter: "messages",             // the most common action
+	"o":      "topic_detail",         // overview
+	"p":      "produce",              // produce to it
+	keyCtrlD: "confirm_delete_topic", // delete, with confirmation
+}
+
 // HandleKey processes non-table keys, returning navigation actions.
 func (v *TopicsView) HandleKey(key string) (action, param string) {
 	switch key {
 	case "i":
 		v.showInternal = !v.showInternal
 		v.rebuildRows()
-	case KeyEnter:
-		// Enter goes to messages (most common action).
-		if row := v.table.SelectedRow(); row != nil {
-			idx := v.table.Cursor()
-			if idx >= 0 && idx < len(v.visible) {
-				return "messages", v.visible[idx].Name
-			}
-		}
-	case "o":
-		// Overview/detail for the selected topic.
-		if row := v.table.SelectedRow(); row != nil {
-			idx := v.table.Cursor()
-			if idx >= 0 && idx < len(v.visible) {
-				return "topic_detail", v.visible[idx].Name
-			}
-		}
-	case "p":
-		// Produce messages to the selected topic.
-		if row := v.table.SelectedRow(); row != nil {
-			idx := v.table.Cursor()
-			if idx >= 0 && idx < len(v.visible) {
-				return "produce", v.visible[idx].Name
-			}
-		}
+		return "", ""
 	case "c":
 		// Create a new topic.
 		return "create_topic", ""
-	case keyCtrlD:
-		// Delete the selected topic (with confirmation).
-		if row := v.table.SelectedRow(); row != nil {
-			idx := v.table.Cursor()
-			if idx >= 0 && idx < len(v.visible) {
-				return "confirm_delete_topic", v.visible[idx].Name
-			}
+	}
+	if act, ok := topicRowActions[key]; ok {
+		if name, ok := v.selectedTopic(); ok {
+			return act, name
 		}
 	}
 	return "", ""
+}
+
+// selectedTopic is the name of the topic under the cursor.
+func (v *TopicsView) selectedTopic() (string, bool) {
+	if v.table.SelectedRow() == nil {
+		return "", false
+	}
+	idx := v.table.Cursor()
+	if idx < 0 || idx >= len(v.visible) {
+		return "", false
+	}
+	return v.visible[idx].Name, true
 }
 
 // SetFilter sets the filter and rebuilds rows.
