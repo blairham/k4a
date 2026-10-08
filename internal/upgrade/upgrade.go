@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blair Hamilton
 // SPDX-License-Identifier: Apache-2.0
 
+// Package upgrade replaces the running k4a with its latest GitHub release,
+// verified against the release's checksums.txt.
 package upgrade
 
 import (
@@ -11,10 +13,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
-	selfupdate "github.com/creativeprojects/go-selfupdate"
+	"golang.org/x/mod/semver"
 )
 
 const repo = "blairham/k4a"
@@ -72,31 +75,59 @@ func Run(ctx context.Context, currentVersion string, w io.Writer) (string, error
 	if inHomebrewKeg(exe) {
 		return "", ErrHomebrewManaged
 	}
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	return run(ctx, newClient(), currentVersion, exe, runtime.GOOS, runtime.GOARCH, w)
+}
 
+func run(ctx context.Context, c *client, currentVersion, exe, goos, goarch string, w io.Writer) (string, error) {
 	fprintln(w, "Checking for updates...")
 
-	updater, err := newUpdater()
-	if err != nil {
-		return "", fmt.Errorf("failed to initialize updater: %w", err)
-	}
-
-	latest, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(repo))
+	latest, err := c.latest(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to check for updates: %w", err)
 	}
-	if !found {
-		return "", fmt.Errorf("no release found for this platform")
-	}
-
-	if !needsUpdate(currentVersion, latest) {
+	if !needsUpdate(currentVersion, latest.Version()) {
 		return "", fmt.Errorf("already up to date (%s)", currentVersion)
 	}
 
-	fprintf(w, "Upgrading %s -> %s\n", currentVersion, latest.Version())
+	name, ok := archiveName(goos, goarch)
+	if !ok {
+		return "", fmt.Errorf("no release for %s/%s", goos, goarch)
+	}
+	archiveURL, ok := latest.Assets[name]
+	if !ok {
+		return "", fmt.Errorf("release %s has no %s", latest.Tag, name)
+	}
+	sumsURL, ok := latest.Assets[checksumsAsset]
+	if !ok {
+		return "", fmt.Errorf("release %s has no %s", latest.Tag, checksumsAsset)
+	}
 
+	fprintf(w, "Upgrading %s -> %s\n", currentVersion, latest.Version())
 	fprintf(w, "Downloading and installing to %s...\n", exe)
 
-	if err := updater.UpdateTo(ctx, latest, exe); err != nil {
+	sums, err := c.download(ctx, sumsURL, maxChecksumsBytes)
+	if err != nil {
+		return "", fmt.Errorf("upgrade failed: %w", err)
+	}
+	want, err := checksumFor(sums, name)
+	if err != nil {
+		return "", fmt.Errorf("upgrade failed: %w", err)
+	}
+	archive, err := c.download(ctx, archiveURL, maxArchiveBytes)
+	if err != nil {
+		return "", fmt.Errorf("upgrade failed: %w", err)
+	}
+	if err = verifyChecksum(archive, want); err != nil {
+		return "", fmt.Errorf("upgrade failed: %s: %w", name, err)
+	}
+	bin, err := extractBinary(archive, name, binaryName(goos))
+	if err != nil {
+		return "", fmt.Errorf("upgrade failed: %w", err)
+	}
+	if err = replaceExecutable(exe, bin, goos); err != nil {
 		return "", fmt.Errorf("upgrade failed: %w", err)
 	}
 
@@ -108,32 +139,28 @@ func Run(ctx context.Context, currentVersion string, w io.Writer) (string, error
 // Check reports whether an update is available without installing it.
 // Returns the latest version and whether it is newer than currentVersion.
 func Check(ctx context.Context, currentVersion string) (string, bool, error) {
-	updater, err := newUpdater()
-	if err != nil {
-		return "", false, err
-	}
-
-	latest, found, err := updater.DetectLatest(ctx, selfupdate.ParseSlug(repo))
-	if err != nil {
-		return "", false, err
-	}
-	if !found {
-		return "", false, nil
-	}
-
-	if !needsUpdate(currentVersion, latest) {
-		return latest.Version(), false, nil
-	}
-	return latest.Version(), true, nil
+	return check(ctx, newClient(), currentVersion)
 }
 
-// needsUpdate returns true when the detected release is newer than current.
-func needsUpdate(current string, latest *selfupdate.Release) bool {
+func check(ctx context.Context, c *client, currentVersion string) (string, bool, error) {
+	latest, err := c.latest(ctx)
+	if errors.Is(err, errNoRelease) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return latest.Version(), needsUpdate(currentVersion, latest.Version()), nil
+}
+
+// needsUpdate returns true when the latest release version is newer than
+// current.
+func needsUpdate(current, latest string) bool {
 	clean, dev := cleanVersion(current)
 	if dev {
 		return true
 	}
-	return latest.GreaterThan(clean)
+	return semver.Compare("v"+latest, "v"+clean) > 0
 }
 
 // cleanVersion strips the "v" prefix and any "-suffix" (e.g. "-dirty",
@@ -149,22 +176,6 @@ func cleanVersion(current string) (clean string, dev bool) {
 		clean = clean[:idx]
 	}
 	return clean, false
-}
-
-func newUpdater() (*selfupdate.Updater, error) {
-	token := resolveGitHubToken()
-
-	source, err := selfupdate.NewGitHubSource(selfupdate.GitHubConfig{
-		APIToken: token,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return selfupdate.NewUpdater(selfupdate.Config{
-		Source:    source,
-		Validator: &selfupdate.ChecksumValidator{UniqueFilename: "checksums.txt"},
-	})
 }
 
 func resolveGitHubToken() string {

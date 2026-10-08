@@ -343,8 +343,9 @@ SSM parameter resolution for broker endpoints. Env var expansion with `$VAR`.
   unless both `version` and `appVersion` in each `Chart.yaml` match the tag.
   Rerun it alone with `gh workflow run chart.yml -f tag=<tag>`. Read
   `.claude/commands/release-tag.md` before cutting a tag.
-- `osv-scanner.toml` ignores one advisory, with its reason; re-check it when
-  the module graph changes.
+- The go-vulncheck commit hook fails a commit whose module graph reaches a
+  known vulnerability; there is no `osv-scanner.toml` ignore list. Before
+  adding one, prefer dropping the dependency (as #17 did for go-selfupdate).
 
 ## Key Dependencies
 
@@ -356,7 +357,7 @@ SSM parameter resolution for broker endpoints. Env var expansion with `$VAR`.
 - `blairham/tuikit` — Shared Charm TUI widgets
 - `charm.land/bubbletea`, `bubbles`, `lipgloss`, `huh` — TUI framework, components, styling, forms
 - `jessevdk/go-flags` — CLI flag parsing; `hashicorp/cli` — subcommand framework
-- `creativeprojects/go-selfupdate` — `k4a upgrade`
+- `golang.org/x/mod/semver` — version comparison for `k4a upgrade`, which is otherwise standard library (`internal/upgrade/release.go`)
 
 ## Testing
 

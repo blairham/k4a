@@ -99,9 +99,6 @@ linters:
       # Path-scoped exceptions still awaiting a fix.
       - path: internal/upgrade/upgrade.go
         linters: [contextcheck]
-      - path: internal/upgrade/upgrade.go
-        linters: [revive]
-        text: "package-comments"
       - path: internal/tui/actions.go
         linters: [revive]
         text: "package-comments"

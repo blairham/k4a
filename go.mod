@@ -14,7 +14,6 @@ require (
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/log v1.0.0
-	github.com/creativeprojects/go-selfupdate v1.6.0
 	github.com/hashicorp/cli v1.1.7
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
@@ -22,6 +21,7 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v1.19.0
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260721222903-95f7d9a51d6a
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
+	golang.org/x/mod v0.41.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -107,7 +107,6 @@ require (
 	github.com/golangci/swaggoswag v0.0.0-20250504205917-77f2aca3143e // indirect
 	github.com/golangci/unconvert v0.0.0-20250410112200-a129a6e6413e // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/go-github/v86 v86.0.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gordonklaus/ineffassign v0.2.0 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
@@ -207,7 +206,6 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
-	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
@@ -218,9 +216,7 @@ require (
 )
 
 require (
-	code.gitea.io/sdk/gitea v0.24.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/42wim/httpsig v1.2.4 // indirect
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/Masterminds/sprig/v3 v3.3.0 // indirect
@@ -277,19 +273,14 @@ require (
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/davidmz/go-pageant v1.0.2 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fatih/color v1.19.0 // indirect
-	github.com/go-fed/httpsig v1.1.0 // indirect
 	github.com/go-logfmt/logfmt v0.6.1 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
-	github.com/google/go-querystring v1.2.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
-	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
-	github.com/hashicorp/go-retryablehttp v0.7.8 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
@@ -315,12 +306,10 @@ require (
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/xo/terminfo v1.0.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
-	gitlab.com/gitlab-org/api/client-go v1.46.0 // indirect
 	go.etcd.io/bbolt v1.4.3 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect

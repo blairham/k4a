@@ -45,11 +45,8 @@ repos:
         args: [--license, Apache-2.0]
       - id: check-go-version-sync
       - id: check-conflict-markers
-      # go-vulncheck (the siblings' fourth hook) is left out until
-      # GO-2026-5932 has an answer: go-selfupdate imports
-      # golang.org/x/crypto/openpgp, which has no fixed version, and
-      # govulncheck counts its package init as reachable, so the hook would
-      # fail every commit that touches go.mod. osv-scanner.toml records why.
+      # Known-vulnerable dependencies fail the commit, not the release.
+      - id: go-vulncheck
 
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
