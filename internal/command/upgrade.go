@@ -58,6 +58,6 @@ func (c *UpgradeCommand) check(ctx context.Context) int {
 		fmt.Printf("k4a %s is already the latest version\n", c.Version)
 		return 0
 	}
-	fmt.Printf("Update available: %s -> %s\nRun 'k4a upgrade' to install\n", c.Version, latest)
+	fmt.Printf("Update available: %s -> %s\nRun '%s' to install\n", c.Version, latest, upgrade.Command())
 	return 0
 }
