@@ -1,0 +1,9 @@
+# k4a tool versions — managed by asdf (https://asdf-vm.com)
+# Install all: asdf install
+#
+# ONE golang pin per repo, at the root, governing every go.mod here. The shared
+# `check-go-version-sync` hook enforces both halves: a `golang` line outside
+# this file is rejected, and every module's `go` directive must equal this pin.
+# Move this pin and go.mod's `go` directive together. Go tools (golangci-lint,
+# gofumpt) are pinned in go.mod's `tool` block and run with `go tool`.
+golang 1.26.8

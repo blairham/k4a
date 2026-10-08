@@ -1,0 +1,26 @@
+name: Feature request
+description: Something k4a should show, do or search
+labels: [enhancement]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What would you like k4a to do?
+      description: The task, not the implementation.
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Where?
+      options:
+        - TUI
+        - headless subcommand
+        - search or index
+        - k4a-index or k4a-mcp
+        - something else
+  - type: textarea
+    id: clusters
+    attributes:
+      label: Which clusters?
+      description: MSK with IAM, SCRAM or mTLS; self-managed Kafka; Confluent; Redpanda.

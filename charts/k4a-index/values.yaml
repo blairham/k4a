@@ -1,0 +1,145 @@
+# Default values for k4a-index. Set image.repository/tag to wherever you push
+# the `index` target of the repo-root Dockerfile.
+#
+# 1 replica day one. HA is read-only fan-out replicas (each independently tailing
+# the same topics with its own index) — never Raft, because the index is fully
+# reconstructable from the broker (docs/design/shared-index-service.md §Availability).
+# Bumping replicaCount is the whole HA story; no leadership to elect.
+replicaCount: 1
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# The ServiceAccount the pod runs as. If the daemon authenticates to Kafka with
+# IAM (MSK), bind this name to an IAM role via EKS Pod Identity or IRSA (for
+# IRSA, add the role ARN under annotations).
+serviceAccount:
+  name: k4a-index
+  annotations: {}
+
+service:
+  # gRPC (Search/Follow/Coverage). The Service is ClusterIP; expose it to
+  # clients outside the cluster with an internal LoadBalancer or Ingress that
+  # terminates TLS and negotiates ALPN h2 (see docs/guides/deploy.md).
+  port: 9500
+
+kafka:
+  # Bootstrap servers, comma-separated. Required. Rendered as KAFKA_BROKERS.
+  brokers: ""
+  # Auth method: plaintext, tls, scram, mtls, iam. Rendered as KAFKA_AUTH.
+  # With iam the daemon uses the pod's AWS credentials (Pod Identity / IRSA),
+  # so no SASL secret is needed.
+  auth: iam
+
+aws:
+  # Region for IAM auth. Rendered as AWS_REGION when set; the daemon defaults
+  # to us-east-1 otherwise.
+  region: ""
+
+resources:
+  requests:
+    # Sized to measured usage, NOT to merge headroom. A stalled-merge wedge is
+    # a merger goroutine that has DIED (panic recovered in scorch's mergerLoop),
+    # not a CPU-starved one, so there is no merge to give CPU to — a wedged pod
+    # draws about the same CPU at a 100m request as at a full core, i.e. it was
+    # never throttled. Steady-state draw is roughly 120–670m across a handful
+    # of followed topics, so 500m is a realistic request with burst headroom
+    # (there is no CPU limit).
+    cpu: 500m
+    memory: 512Mi
+    ephemeral-storage: 1Gi
+  limits:
+    # 2Gi so a merge of a capped topic has scratch room alongside the resident
+    # index; at 1Gi a large merge competes with the very index it is compacting.
+    memory: 2Gi
+    # Bounds the emptyDir index + scratch. The per-topic byte cap
+    # (config.topicMaxBytes) keeps each followed topic's index bounded so the
+    # working set stays well under this. Raise with the cap / followed-topic count.
+    ephemeral-storage: 12Gi
+
+# Disposable index storage. emptyDir, NOT a PVC: the index is a pure optimization
+# that rebuilds from the broker, so index loss is a non-event — on restart the
+# daemon re-tails from latest and re-warms (design doc §Storage). sizeLimit caps
+# the volume; keep it at/under the ephemeral-storage limit above.
+storage:
+  sizeLimit: 10Gi
+
+config:
+  # Follow allowlist — the v1 authorization boundary (design doc §Security).
+  # REQUIRED: the chart refuses to render without it.
+  #
+  # The daemon follows a topic ON DEMAND the first time it's searched, but ONLY
+  # if it matches one of these glob patterns (default-deny). Keep it in step
+  # with the topic grants on the daemon's Kafka identity (IAM policy or ACLs) —
+  # the identity can only read those topics anyway, and the allowlist keeps a
+  # sensitive topic from being followed even if the grant were ever widened.
+  # Comma-separated (the flag is a repeatable list; K4A_INDEX_ALLOW splits on
+  # ","), e.g.
+  #   allow: example.ingest.*,quotes-*-book
+  allow: ""
+  # Topics to pre-follow (warm + pinned, exempt from LRU eviction) at startup, so
+  # a hot topic is indexed before the first search. Comma-separated; each MUST
+  # match `allow`. Empty = purely demand-driven.
+  prefollow: ""
+  # Hard cap on concurrently-followed topics; at the cap a new follow evicts the
+  # coldest. Bounds consumer connections + emptyDir disk.
+  maxFollowed: 256
+  # Drop a topic not searched within this idle window (LRU). Pinned pre-follow
+  # topics are exempt. Go duration string. 48h rather than the 168h daemon
+  # default: an idle topic's index holds disk the whole time (measured ~3x its
+  # logical cap on disk — scorch defers segment reclamation), and re-following
+  # costs one scanned search plus ~1s of warm-up. Disk is the scarcer resource.
+  evictAfter: 48h
+  # Per-topic index byte cap: once a followed topic's index exceeds this, the
+  # daemon trims its OLDEST records inline (advancing the covered window forward)
+  # so a high-volume topic can't fill the emptyDir and evict the pod. Human size
+  # (1GiB, 512MB, …); "0" disables. Raise this and `storage.sizeLimit` together
+  # for a longer searchable window.
+  #
+  # 512MiB rather than the 1GiB daemon default, for two measured reasons:
+  #   - DISK. The cap counts STORED bytes; on disk a topic runs ~3x that while
+  #     scorch holds unreclaimed segments (~2.8GB on disk under a 1GiB cap). So
+  #     budget ~1.5GB of the 10Gi emptyDir per hot topic — about 6
+  #     concurrently-hot topics, versus ~3 at 1GiB.
+  #   - MERGE DURATION. Worst-case merge size scales with the cap, and an
+  #     unfinishable merge is what wedges a drain. A smaller cap bounds the stall.
+  # These indexes answer "is X flowing / find this record now"; for a
+  # long-horizon history, archive the topic elsewhere rather than growing the
+  # hot index.
+  topicMaxBytes: 512MiB
+  # Drain-stall watchdog. The daemon's defaults are 5m / 30m / 3; they are
+  # templated here so they can be retuned per install without a code release.
+  drainStall:
+    # Fail fast if a topic's drain makes no progress this long while records are
+    # queued: dump every goroutine stack to stderr and exit. 0 disables.
+    timeout: 5m
+    # Tolerate a stall up to this long while a scorch segment merge is actually
+    # in flight — the merger is working, and killing it restarts the merge from
+    # scratch on the same (pod-scoped) emptyDir, which turns the watchdog into a
+    # restart livelock. 0 disables the grace.
+    #
+    # With the CPU request above a capped-topic merge finishes in minutes, so
+    # 10m rarely binds and a genuine hang is caught 3x sooner than the 30m code
+    # default. If the CPU request is ever lowered, raise this in the same change.
+    mergeGrace: 10m
+    # On the Nth consecutive stall exit for the same topic index (counted in a
+    # file inside the index dir, so it survives container restarts), quarantine
+    # that index before exiting — the next container boots onto a fresh dir and
+    # re-warms from Kafka. 0 disables. Worst case to self-heal is
+    # N x (timeout + mergeGrace).
+    wipeAfter: 3
+  # Disk budget for the WHOLE index root, measured on disk. Nothing else bounds
+  # the total: topicMaxBytes is per-topic and counts STORED bytes (on disk a
+  # topic runs ~3x that), maxFollowed bounds the topic COUNT, and evictAfter
+  # bounds IDLE TIME. Without this the only backstop is the kubelet evicting
+  # the pod when the emptyDir hits storage.sizeLimit.
+  #
+  # Over budget the daemon deletes orphaned index dirs first (free — nothing
+  # owns them), then evicts the coldest non-pinned topics until it fits. So a
+  # busy day costs the coldest coverage instead of the whole service.
+  #
+  # 7GiB against a 10Gi sizeLimit leaves headroom for scorch merge scratch and
+  # for the gap between two one-minute sweeps. Raise both together.
+  maxTotalBytes: 7GiB

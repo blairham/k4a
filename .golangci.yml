@@ -1,0 +1,236 @@
+# golangci-lint v2 configuration for k4a.
+# See: https://golangci-lint.run/usage/configuration/
+#
+# golangci-lint is pinned twice and the two must move together: go.mod's `tool`
+# block (`go tool golangci-lint`) and the hook `rev` in .pre-commit-config.yaml.
+
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+  modules-download-mode: readonly
+  allow-parallel-runners: true
+  # Bounds the footprint: golangci-lint defaults to NumCPU.
+  concurrency: 4
+
+output:
+  formats:
+    text:
+      print-linter-name: true
+      print-issued-lines: true
+      colors: true
+
+linters:
+  # The hook reports only what a commit introduces, so an older finding surfaces
+  # when its lines are next touched: fix it then rather than adding a disable.
+  enable:
+    # Core linters (enabled by default)
+    - errcheck # Check for unchecked errors
+    - govet # Go vet analysis
+    - ineffassign # Detect ineffectual assignments
+    - staticcheck # Static analysis (includes stylecheck, gosimple)
+    - unused # Check for unused constants, variables, functions and types
+
+    # Code quality and style
+    - misspell # Finds commonly misspelled English words
+    - whitespace # Detection of leading and trailing whitespace
+    - unconvert # Remove unnecessary type conversions
+    - unparam # Reports unused function parameters
+    - revive # Fast, configurable linter for Go
+
+    # Bug detection
+    - bodyclose # Check whether HTTP response body is closed
+    - contextcheck # Check if function use a non-inherited context
+    - nilerr # Check for simultaneous return of nil error and invalid value
+    - rowserrcheck # Check whether Err of rows is checked
+    - sqlclosecheck # Check that sql.Rows and sql.Stmt are closed
+    - errname # Checks sentinel errors are prefixed with Err
+    - errorlint # Find code that will cause problems with error wrapping
+    - forcetypeassert # Finds forced type assertions
+    - nilnil # Checks for simultaneous return of nil error and nil value
+    - noctx # Finds HTTP requests without context.Context
+    - predeclared # Find code that shadows predeclared identifiers
+
+    # Performance
+    - prealloc # Finds slice declarations that could be preallocated
+    - sloglint # Ensure consistent code style when using log/slog
+
+    # Security
+    - gosec # Inspects source code for security problems
+
+    # Code complexity
+    - nestif # Reports deeply nested if statements
+
+    # Testing
+    - thelper # Detects test helpers not starting with t.Helper()
+    - tparallel # Detects inappropriate usage of t.Parallel()
+    - testableexamples # Checks if examples are testable
+
+    # Import management
+    - importas # Enforces consistent import aliases
+
+    # Interfaces
+    - interfacebloat # Checks the number of methods in an interface
+
+    # Memory
+    - wastedassign # Finds wasted assignment statements
+
+  # Off until the existing findings are burned down; the counts are what each
+  # reported at the thresholds in `settings` below when it was switched off.
+  # Turning one back on means fixing its findings in the same change.
+  disable:
+    - goconst  # 67
+    - gocritic # 23
+    - gocognit # 17
+    - gocyclo  # 16
+    - funlen   # 5
+
+  exclusions:
+    rules:
+      # Exclude test files from strict checks
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - gocritic
+          - funlen
+          - gocognit
+          - gocyclo
+          - nestif
+          - goconst # test fixtures legitimately repeat literals (JSON, expected values)
+          - noctx # httptest.NewRequest et al. are test-only, not real HTTP calls
+
+      # Path-scoped exceptions awaiting the same burn-down as `disable` above.
+      - path: internal/upgrade/upgrade.go
+        linters: [contextcheck]
+      - path: internal/upgrade/upgrade.go
+        linters: [revive]
+        text: "package-comments"
+      - path: internal/tui/actions.go
+        linters: [revive]
+        text: "package-comments"
+      - path: internal/tui/app_test.go
+        linters: [tparallel]
+
+      # Allow init() in main packages
+      - path: cmd/
+        linters:
+          - gocritic
+        text: "initClause"
+
+  settings:
+    misspell:
+      locale: US
+
+    gosec:
+      severity: medium
+      confidence: medium
+      excludes:
+        - G107 # URL provided to HTTP request as taint input
+        - G204 # Subprocess launched with variable
+        - G404 # Weak random number generator
+        - G115 # Integer overflow conversion (safe when values are properly clamped)
+
+    gocyclo:
+      min-complexity: 15
+
+    gocognit:
+      min-complexity: 20
+
+    nestif:
+      min-complexity: 5
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+      disabled-checks:
+        - hugeParam # Noisy for SDK structs
+        - rangeValCopy # Noisy for SDK structs
+        - unnamedResult # Acceptable in some cases
+        - paramTypeCombine # Explicit types can be clearer
+
+    revive:
+      severity: warning
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: error-return
+        - name: error-strings
+        - name: error-naming
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: time-naming
+        - name: unexported-return
+        - name: indent-error-flow
+        - name: errorf
+        - name: empty-block
+        - name: superfluous-else
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    govet:
+      enable:
+        - atomicalign
+        - fieldalignment
+        - nilness
+        - reflectvaluecompare
+        - shadow
+        - timeformat
+        - unusedwrite
+
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+    - gci
+    - golines
+
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/blairham/k4a
+
+    gofumpt:
+      extra-rules: true
+
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/blairham/k4a)
+
+    golines:
+      max-len: 120
+      tab-len: 1
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false

@@ -1,0 +1,4 @@
+# gitleaks configuration: the default rules, nothing allowlisted. Add an
+# entry here only with the reason it is not a secret.
+[extend]
+useDefault = true

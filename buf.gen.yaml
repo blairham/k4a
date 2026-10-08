@@ -1,0 +1,12 @@
+version: v2
+plugins:
+  # `module` strips the go module prefix from each file's go_package option, so
+  # generated files land next to their package: go_package
+  # github.com/blairham/k4a/internal/indexwire/indexv1 →
+  # internal/indexwire/indexv1/index.pb.go.
+  - local: protoc-gen-go
+    out: .
+    opt: module=github.com/blairham/k4a
+  - local: protoc-gen-go-grpc
+    out: .
+    opt: module=github.com/blairham/k4a

@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "k4a-index.fullname" . }}
+  labels:
+    {{- include "k4a-index.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # RollingUpdate is safe: the daemon is pure read-only (it never produces, no
+  # single-writer requirement), each pod owns its own emptyDir index, and two
+  # pods briefly both tailing is harmless. Nothing to fence.
+  selector:
+    matchLabels:
+      {{- include "k4a-index.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "k4a-index.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "k4a-index.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532        # distroless nonroot
+        runAsGroup: 65532
+        fsGroup: 65532          # so the nonroot process can write the emptyDir index
+      containers:
+        - name: k4a-index
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ required "kafka.brokers is required" .Values.kafka.brokers | quote }}
+            - name: KAFKA_AUTH
+              value: {{ .Values.kafka.auth | quote }}
+            {{- if .Values.aws.region }}
+            - name: AWS_REGION
+              value: {{ .Values.aws.region | quote }}
+            {{- end }}
+            # Follow allowlist (default-deny) — the v1 authorization boundary.
+            - name: K4A_INDEX_ALLOW
+              value: {{ required "config.allow is required (the follow allowlist is default-deny)" .Values.config.allow | quote }}
+            {{- if .Values.config.prefollow }}
+            # Pre-follow (pinned) topics warmed at startup.
+            - name: K4A_INDEX_TOPIC
+              value: {{ .Values.config.prefollow | quote }}
+            {{- end }}
+            - name: K4A_INDEX_MAX_FOLLOWED
+              value: {{ .Values.config.maxFollowed | quote }}
+            # Per-topic index byte cap — trims oldest records so a high-volume
+            # topic can't fill the emptyDir and evict the pod.
+            - name: K4A_INDEX_TOPIC_MAX_BYTES
+              value: {{ .Values.config.topicMaxBytes | quote }}
+            - name: K4A_INDEX_EVICT_AFTER
+              value: {{ .Values.config.evictAfter | quote }}
+            # Whole-index-root disk budget: reclaims orphaned dirs and evicts
+            # the coldest topics before the volume fills and the kubelet
+            # evicts the pod.
+            - name: K4A_INDEX_MAX_TOTAL_BYTES
+              value: {{ .Values.config.maxTotalBytes | quote }}
+            # Drain-stall watchdog: fail-fast timeout, the in-flight
+            # merge grace that keeps the exit from becoming a restart livelock,
+            # and the strike count at which the wedged index is quarantined.
+            - name: K4A_INDEX_DRAIN_STALL_TIMEOUT
+              value: {{ .Values.config.drainStall.timeout | quote }}
+            - name: K4A_INDEX_DRAIN_STALL_MERGE_GRACE
+              value: {{ .Values.config.drainStall.mergeGrace | quote }}
+            - name: K4A_INDEX_DRAIN_STALL_WIPE_AFTER
+              value: {{ .Values.config.drainStall.wipeAfter | quote }}
+            - name: K4A_INDEX_LISTEN
+              value: ":{{ .Values.service.port }}"
+            - name: K4A_INDEX_DATA_DIR
+              value: /data
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          # No HTTP health endpoint yet — the daemon exposes only gRPC. A TCP
+          # probe on the gRPC port is the honest readiness signal: it can accept
+          # queries as soon as it's listening (a query for a cold topic returns
+          # NONE coverage and the client scans), so warmth is not a gate here.
+          startupProbe:
+            tcpSocket: { port: grpc }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket: { port: grpc }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: grpc }
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: index
+              mountPath: /data
+      volumes:
+        # Disposable index storage — rebuilt from the broker on restart.
+        - name: index
+          emptyDir:
+            sizeLimit: {{ .Values.storage.sizeLimit }}

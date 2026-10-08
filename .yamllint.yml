@@ -1,0 +1,28 @@
+# yamllint configuration.
+#
+# Block sequences are indented under their parent key, the Kubernetes/Helm
+# convention. Prettier dedents them, so keep YAML out of format-on-save.
+extends: default
+
+# Helm templates are Go templates until rendered. yamllint wants `ignore` as a
+# block-scalar string (one gitignore-style pattern per line); a YAML list is
+# silently not applied. The pre-commit hook excludes them too, for runs that
+# pass file names explicitly.
+ignore: |
+  charts/*/templates/
+
+rules:
+  indentation:
+    spaces: 2
+    indent-sequences: true
+  # Long lines are widespread (URLs, image refs, generated blocks) and not
+  # worth reflowing — relax rather than fix.
+  line-length: disable
+  truthy:
+    check-keys: false
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  document-start: disable

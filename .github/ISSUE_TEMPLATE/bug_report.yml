@@ -1,0 +1,62 @@
+name: Bug report
+description: Something k4a did that it should not have
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **If k4a-index followed or served a topic
+        outside its allowlist, a credential reached a log or ~/.k4a, or a TLS
+        connection went unverified without --insecure, that is a security
+        issue** -- report it privately through Security → Report a
+        vulnerability, not here.
+
+        Never paste passwords, SCRAM credentials, AWS keys, certificates,
+        message payloads or real broker addresses. Redact them.
+  - type: input
+    id: version
+    attributes:
+      label: k4a version or commit
+      description: The output of `k4a version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part?
+      options:
+        - TUI (k4a)
+        - headless subcommand (k4a <command>)
+        - search, local index or search cache
+        - k4a-index (shared index daemon)
+        - k4a-mcp or k4a mcp
+        - authentication or TLS
+        - Helm chart
+        - container image
+        - k4a upgrade
+    validations:
+      required: true
+  - type: input
+    id: cluster
+    attributes:
+      label: Cluster, version and auth method
+      description: e.g. MSK 3.6.0 (IAM), Apache Kafka 3.9 (SCRAM), Redpanda 24.2 (plaintext)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and terminal
+      description: e.g. macOS 15 / Ghostty, Ubuntu 24.04 / tmux in GNOME Terminal
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect instead?
+      description: The command you ran, or the keys you pressed in which view.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output or logs (redacted)
+      render: shell

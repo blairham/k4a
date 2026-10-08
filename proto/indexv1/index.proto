@@ -1,0 +1,135 @@
+// SPDX-FileCopyrightText: 2026 Blair Hamilton
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// Package k4a.index.v1 is the wire contract between a k4a client and the
+// shared index daemon (k4a-index). See docs/design/shared-index-service.md.
+//
+// The service is an accelerator, never a hard dependency: a client that
+// cannot reach it falls back to its in-process Tier 1/2/3 search. Every
+// response therefore reports *coverage* explicitly so the client makes the
+// same index-vs-scan decision it makes locally (local-index.md §Dispatcher),
+// and a stale index can never masquerade as current — the client tops up the
+// uncovered tail with its own scan.
+package k4a.index.v1;
+
+option go_package = "github.com/blairham/k4a/internal/indexwire/indexv1;indexv1";
+
+// Index is the daemon's query surface.
+service Index {
+  // Search streams a leading Coverage event, then zero or more Match events
+  // (newest-first), then a terminal Progress event with done=true. If the
+  // topic is not yet followed (and policy allows), the daemon begins
+  // following it as a side effect and returns coverage with following=false
+  // for this call — the client scans this time, the next call is warm.
+  rpc Search(SearchRequest) returns (stream SearchEvent);
+
+  // Follow registers a topic without querying it. Used by the client's
+  // fire-and-forget warm-up when it scanned a cold topic itself.
+  rpc Follow(FollowRequest) returns (FollowResponse);
+
+  // Coverage reports a topic's indexed ranges without running a query.
+  // Used by the Topics view to render an "indexed?" column.
+  rpc Coverage(CoverageRequest) returns (CoverageResponse);
+}
+
+// SearchRequest mirrors the fields the client dispatcher already computed
+// (kafka.SearchParams / index.QueryParams) — the regex is passed as its
+// source string; scopes name the record fields to match.
+message SearchRequest {
+  string topic = 1;
+  string pattern = 2;            // regex source; empty = match all
+  repeated string scopes = 3;    // any of: "key", "value", "headers"; empty = key+value
+  int64 since_ms = 4;            // Unix millis; 0 = no lower bound
+  int64 until_ms = 5;            // Unix millis; 0 = no upper bound
+  repeated int32 partitions = 6; // empty = all partitions
+  int32 limit = 7;              // 0 = server default cap
+}
+
+// PartitionCoverage is the indexed offset+time window for one partition —
+// the wire form of index.Bookkeeper's per-partition maps.
+message PartitionCoverage {
+  int32 partition = 1;
+  int64 offset_lo = 2;       // oldest indexed offset
+  int64 offset_hi = 3;       // newest indexed offset
+  int64 timestamp_lo_ms = 4; // oldest indexed record time (Unix millis)
+  int64 timestamp_hi_ms = 5; // newest indexed record time (Unix millis)
+}
+
+// Gap is a contiguous offset range the daemon knows it did NOT index, so the
+// client must not assume coverage across it (mirrors index.Gap).
+message Gap {
+  int32 partition = 1;
+  int64 start = 2;
+  int64 end = 3;
+  string reason = 4;
+}
+
+// Coverage is what the index authoritatively holds for a topic at the moment
+// the daemon answered. The client compares its query window against this to
+// decide covered / partial / uncovered.
+message Coverage {
+  repeated PartitionCoverage partitions = 1;
+  repeated Gap gaps = 2;
+  bool following = 3;   // topic is in the follow-set
+  bool backfilling = 4; // catch-up scan still in progress (window has a moving floor)
+}
+
+message Header {
+  string key = 1;
+  string value = 2;
+}
+
+// Match is one indexed record — the wire form of kafka.ConsumedMessage.
+message Match {
+  int32 partition = 1;
+  int64 offset = 2;
+  int64 timestamp_ms = 3;
+  string key = 4;
+  string value = 5;
+  repeated Header headers = 6;
+}
+
+// Progress carries the running match count and marks the stream terminal.
+message Progress {
+  int64 matched = 1;
+  bool done = 2;
+  // capped reports that more records matched than the request's limit
+  // allowed, so the stream carried only the newest page. Without it a
+  // truncated answer is indistinguishable from a complete one.
+  //
+  // An older daemon leaves this at the proto default false, so clients
+  // must ALSO infer capping from receiving exactly `limit` matches rather
+  // than trusting this field alone.
+  bool capped = 3;
+}
+
+// SearchEvent is the streamed union: exactly one field is set per frame.
+message SearchEvent {
+  oneof event {
+    Coverage coverage = 1;
+    Match match = 2;
+    Progress progress = 3;
+  }
+}
+
+message FollowRequest {
+  string topic = 1;
+}
+
+// FollowResponse reports whether the daemon accepted the topic into the
+// follow-set. accepted=false with a reason when policy denied it or the
+// follow-set is at capacity and all entries are hot.
+message FollowResponse {
+  bool accepted = 1;
+  string reason = 2;
+}
+
+message CoverageRequest {
+  string topic = 1;
+}
+
+message CoverageResponse {
+  Coverage coverage = 1;
+}

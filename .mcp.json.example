@@ -1,0 +1,9 @@
+{
+  "_comment": "Copy to .mcp.json (project scope, auto-loaded by Claude Code in this repo) or merge into ~/.claude.json. See docs/guides/mcp-setup.md. Reaching the shared server requires network access to wherever it is deployed (private network / VPN); the daemon holds the Kafka credentials, so none are needed on your side for this path.",
+  "mcpServers": {
+    "k4a-index": {
+      "type": "http",
+      "url": "https://k4a-mcp.example.com/mcp"
+    }
+  }
+}

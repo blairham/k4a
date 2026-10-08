@@ -1,0 +1,138 @@
+name: CI
+
+# Everything that gates a merge.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    # A squash merge lands a tree no pull request built, so main gets its own run.
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The same pinned hooks as the local commit gate, including golangci-lint.
+  pre-commit:
+    name: Pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          # go-mod-tidy-repo resolves the whole graph; uncached it is slow and flaky.
+          cache: true
+      - name: Run pre-commit hooks
+        uses: blairham/go-pre-commit@b3deb289b038678e3b5af79e1442f71fc0f8a28c # v4.6.16
+
+  # Gating happens inside the jobs, not with `paths:`, because a required check
+  # that never runs stays pending forever. Anything unrecognized counts as code.
+  changes:
+    name: Detect changed files
+    needs: pre-commit
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the diff needs the base commit, not just HEAD
+      - id: filter
+        name: Is any of this code?
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          code=false
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "push to $GITHUB_REF_NAME — running everything"
+            code=true
+          elif ! git cat-file -e "$BASE" 2>/dev/null; then
+            # No usable base (a force push): an empty diff would skip every test.
+            echo "base commit $BASE is not present — running everything"
+            code=true
+          else
+            while IFS= read -r f; do
+              [ -n "$f" ] || continue
+              case "$f" in
+                docs/*|*.md|LICENSE|LICENSE.*|NOTICE|*.png|*.jpg|*.gif|*.svg) ;; # prose
+                *) code=true; break ;;
+              esac
+            done <<<"$(git diff --name-only "$BASE"...HEAD)"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "changed files are $([ "$code" = true ] && echo 'code — full run' || echo 'prose only — skipping the code jobs')"
+
+  test:
+    name: Build and test
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.changes.outputs.code == 'true'
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+      - name: Build all three binaries
+        if: needs.changes.outputs.code == 'true'
+        run: make build
+      - name: Verify the generated gRPC code is current
+        if: needs.changes.outputs.code == 'true'
+        run: make check-proto
+      - run: go vet ./...
+        if: needs.changes.outputs.code == 'true'
+      # Includes every fuzz target's seed corpus; no Kafka needed.
+      - name: Unit tests
+        if: needs.changes.outputs.code == 'true'
+        run: go test -race ./...
+
+  # Build only; a v* tag publishes (goreleaser.yml).
+  image:
+    name: Build image
+    needs: [changes, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: needs.changes.outputs.code == 'true'
+      - name: k4a-index
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        if: needs.changes.outputs.code == 'true'
+        with:
+          context: .
+          target: index
+          push: false
+          tags: k4a-index:ci
+      # Shares the build stage with the first, so it is mostly cache.
+      - name: k4a-mcp
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        if: needs.changes.outputs.code == 'true'
+        with:
+          context: .
+          target: mcp
+          push: false
+          tags: k4a-mcp:ci
+
+  # Lints both charts and renders them, including that k4a-index still refuses
+  # to render without an allowlist.
+  charts:
+    name: Helm chart
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.code == 'true'
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        if: needs.changes.outputs.code == 'true'
+      - name: Lint and render
+        if: needs.changes.outputs.code == 'true'
+        run: make helm-lint

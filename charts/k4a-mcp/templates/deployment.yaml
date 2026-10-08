@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "k4a-mcp.fullname" . }}
+  labels:
+    {{- include "k4a-mcp.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "k4a-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "k4a-mcp.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "k4a-mcp.serviceAccountName" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532        # distroless nonroot
+        runAsGroup: 65532
+      containers:
+        - name: k4a-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: K4A_MCP_INDEX_ADDR
+              value: {{ .Values.config.indexAddr | quote }}
+            - name: K4A_MCP_LISTEN
+              value: ":{{ .Values.service.port }}"
+            - name: K4A_MCP_PATH
+              value: {{ .Values.config.path | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          # k4a-mcp serves a plain /health endpoint (200) alongside the MCP
+          # handler, so HTTP probes are honest. Readiness does NOT gate on the
+          # index being reachable — the gRPC client is lazy and reconnects, and
+          # a tool call surfaces served_from_index=false if the index is down.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

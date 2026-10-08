@@ -1,0 +1,10 @@
+# Allow-list: the images build ./cmd/k4a-index and ./cmd/k4a-mcp, which import
+# only internal/, so nothing else needs to reach the build context. Anything
+# new the build needs has to be listed here.
+*
+
+!Dockerfile
+!go.mod
+!go.sum
+!cmd/
+!internal/

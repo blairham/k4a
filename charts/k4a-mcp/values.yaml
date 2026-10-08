@@ -1,0 +1,38 @@
+# Default values for k4a-mcp. Set image.repository/tag to wherever you push the
+# `mcp` target of the repo-root Dockerfile.
+#
+# k4a-mcp is stateless: it holds no index and no Kafka client, it just proxies
+# MCP tool calls to k4a-index over gRPC. Scale replicas freely — there is
+# nothing to coordinate.
+replicaCount: 1
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# k4a-mcp needs no cloud credentials — it never talks to Kafka — so nothing
+# needs to be bound to this ServiceAccount.
+serviceAccount:
+  name: k4a-mcp
+
+service:
+  # MCP streamable-HTTP. The Service is ClusterIP; expose it to MCP clients
+  # with an internal LoadBalancer or Ingress that terminates TLS.
+  port: 9501
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+config:
+  # In-cluster gRPC endpoint of the k4a-index daemon. Same namespace, so the
+  # short Service name resolves; ClusterIP, plaintext (the TLS edge is for
+  # external MCP clients hitting k4a-mcp, not this hop).
+  indexAddr: k4a-index:9500
+  # HTTP path the MCP endpoint is served at. Clients register
+  #   claude mcp add --transport http k4a-index https://<k4a-mcp-host>/mcp
+  path: /mcp

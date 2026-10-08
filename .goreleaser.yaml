@@ -1,0 +1,210 @@
+version: 2
+
+# GoReleaser configuration for k4a
+# See: https://goreleaser.com
+project_name: k4a
+
+builds:
+  # The CLI/TUI ships as archives and through the Homebrew tap. The Windows
+  # build is kept: the state lock and `k4a upgrade`'s re-exec have Windows
+  # implementations.
+  - id: k4a
+    binary: k4a
+    main: ./cmd/k4a
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/blairham/k4a/internal/version.Version={{.Version}}
+      - -X github.com/blairham/k4a/internal/version.Commit={{.Commit}}
+      - -X github.com/blairham/k4a/internal/version.Date={{.Date}}
+  # The two daemons ship only as images.
+  - id: k4a-index
+    binary: k4a-index
+    main: ./cmd/k4a-index
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/blairham/k4a/internal/version.Version={{.Version}}
+      - -X github.com/blairham/k4a/internal/version.Commit={{.Commit}}
+      - -X github.com/blairham/k4a/internal/version.Date={{.Date}}
+  - id: k4a-mcp
+    binary: k4a-mcp
+    main: ./cmd/k4a-mcp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/blairham/k4a/internal/version.Version={{.Version}}
+      - -X github.com/blairham/k4a/internal/version.Commit={{.Commit}}
+      - -X github.com/blairham/k4a/internal/version.Date={{.Date}}
+
+archives:
+  - id: k4a
+    ids:
+      - k4a
+    formats:
+      - tar.gz
+    # Matches uname, and is the shape `k4a upgrade` looks for in a release.
+    name_template: >-
+      k4a_ {{- title .Os }}_ {{- if eq .Arch "amd64" }}x86_64 {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+# macOS signing and notarization, skipped when the secrets are absent.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - k4a
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+
+# The images the Helm charts pull. --snapshot never builds the multi-arch
+# index, and SBOM attestation is on by default, so it is turned off. Each
+# `--target` must agree with its `ids`, or the COPY in the Dockerfile fails.
+dockers_v2:
+  - id: k4a-index
+    ids:
+      - k4a-index
+    images:
+      - ghcr.io/blairham/k4a-index
+    dockerfile: Dockerfile
+    flags:
+      - --target=index-release
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    sbom: false
+    # `latest` moves only on a real release, never a prerelease.
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    labels:
+      org.opencontainers.image.title: k4a-index
+      org.opencontainers.image.description: Shared Kafka search index daemon for k4a
+      org.opencontainers.image.url: https://github.com/blairham/k4a
+      org.opencontainers.image.source: https://github.com/blairham/k4a
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+  - id: k4a-mcp
+    ids:
+      - k4a-mcp
+    images:
+      - ghcr.io/blairham/k4a-mcp
+    dockerfile: Dockerfile
+    flags:
+      - --target=mcp-release
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    sbom: false
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    labels:
+      org.opencontainers.image.title: k4a-mcp
+      org.opencontainers.image.description: Model Context Protocol server in front of k4a-index
+      org.opencontainers.image.url: https://github.com/blairham/k4a
+      org.opencontainers.image.source: https://github.com/blairham/k4a
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+
+checksum:
+  name_template: 'checksums.txt'
+
+# Keyless cosign signatures from the release workflow's identity. Signing
+# checksums.txt covers every archive. See SECURITY.md to verify.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+
+# Each published image, by digest.
+docker_signs:
+  - cmd: cosign
+    args:
+      - sign
+      - "${artifact}@${digest}"
+      - "--yes"
+
+# A formula, not a cask. homebrew-core has no k4a, so the keg name is free.
+brews:
+  - name: k4a
+    ids:
+      - k4a
+    repository:
+      owner: blairham
+      name: homebrew-tap
+      # A fine-grained token with contents:write on blairham/homebrew-tap only.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/blairham/k4a
+    description: Terminal UI for Kafka clusters, in the style of k9s
+    license: Apache-2.0
+    # A prerelease does not move the formula.
+    skip_upload: auto
+    install: |
+      bin.install "k4a"
+    test: |
+      system "#{bin}/k4a", "version"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# The notes are the tag's CHANGELOG.md section, passed by goreleaser.yml with
+# --release-notes, which replaces the generated commit list. Do not set
+# `changelog.disable`: it skips the stage that reads --release-notes too.
+
+release:
+  draft: false
+  replace_existing_draft: true
+  # No target_commitish: the tag already exists, and naming a commit makes
+  # GitHub treat the release as a ref write. When the release range touches
+  # .github/workflows, that needs the workflows permission GITHUB_TOKEN
+  # cannot have, and creating the release fails with a 403.
+  prerelease: auto
+  mode: replace
+  footer: |
+    **Full Changelog**: https://github.com/blairham/k4a/compare/{{ .PreviousTag }}...{{ .Tag }}

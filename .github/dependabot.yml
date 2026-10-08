@@ -1,0 +1,42 @@
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 10
+    groups:
+      # aws-sdk-go-v2 releases its modules together; one PR, not six.
+      aws-sdk:
+        patterns: ["github.com/aws/aws-sdk-go-v2*"]
+      # kgo, kadm and kmsg are versioned separately but released together.
+      franz-go:
+        patterns: ["github.com/twmb/franz-go*"]
+      # bubbletea, bubbles, lipgloss and huh move as one major line, and
+      # tuikit builds on them.
+      charm:
+        patterns:
+          - "charm.land/*"
+          - "github.com/charmbracelet/*"
+          - "github.com/blairham/tuikit"
+      # The generated code in internal/indexwire/indexv1 is tied to both.
+      grpc:
+        patterns:
+          - "google.golang.org/grpc"
+          - "google.golang.org/protobuf"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    ignore:
+      # A Go minor bump moves go.mod and .tool-versions by hand, not as a lone
+      # Dockerfile bump. The mirror path makes the name docker/library/golang.
+      - dependency-name: docker/library/golang
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor

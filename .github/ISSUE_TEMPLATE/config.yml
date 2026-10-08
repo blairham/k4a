@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability
+    url: https://github.com/blairham/k4a/security/advisories/new
+    about: Privately, please -- especially k4a-index serving a topic outside its allowlist, a credential in a log or under ~/.k4a, or TLS left unverified without --insecure.

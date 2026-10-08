@@ -1,0 +1,30 @@
+# Example topic schema for `k4a produce -s`.
+#
+# Each produced message is one of the samples below (cycled in order), plus a
+# `seq` counter and a `producedAt` timestamp. `key` names the sample field that
+# becomes the record key; leave it out to produce unkeyed records.
+topic: example.orders.v1
+key: orderId
+
+samples:
+  - orderId: 100001
+    customer: "c-001"
+    status: "created"
+    items:
+      - sku: "SKU-RED-S"
+        quantity: 2
+        unitPrice: 19.99
+  - orderId: 100002
+    customer: "c-002"
+    status: "paid"
+    items:
+      - sku: "SKU-BLUE-M"
+        quantity: 1
+        unitPrice: 24.50
+  - orderId: 100003
+    customer: "c-001"
+    status: "shipped"
+    items:
+      - sku: "SKU-GREEN-L"
+        quantity: 3
+        unitPrice: 12.00

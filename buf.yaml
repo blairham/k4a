@@ -1,0 +1,15 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Our package is k4a.index.v1; the file lives at proto/indexv1/index.proto
+    # rather than proto/k4a/index/v1/ to keep the tree shallow. That trips the
+    # directory-matches-package rule, which buys nothing for a single internal
+    # module.
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

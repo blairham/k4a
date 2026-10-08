@@ -1,0 +1,67 @@
+# Pre-commit configuration for k4a.
+# Install: pre-commit install
+# Run:     pre-commit run --all-files
+# Update:  pre-commit autoupdate
+
+repos:
+  # General hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^dist/
+      - id: end-of-file-fixer
+        exclude: ^dist/
+      - id: check-yaml
+        args: ['--allow-multiple-documents']
+        # Helm templates are Go templates until rendered; `helm lint` and the
+        # render in CI's Helm chart job validate them.
+        exclude: ^charts/[^/]+/templates/
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: detect-private-key
+
+  # `golangci-lint-fmt` runs the formatters in .golangci.yml; `golangci-lint`
+  # lints what changed since HEAD. Keep the rev in step with go.mod's `tool`.
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.14.0
+    hooks:
+      - id: golangci-lint-fmt
+      - id: golangci-lint
+
+  # Go housekeeping.
+  - repo: https://github.com/TekWizely/pre-commit-golang
+    rev: v1.0.0-rc.4
+    hooks:
+      - id: go-mod-tidy-repo
+
+  # go.mod and .tool-versions must pin the same Go. check-conflict-markers
+  # replaces upstream's check-merge-conflict, which misses diff3 base markers.
+  # Generated *.pb.go files are exempt from the license header check.
+  - repo: https://github.com/blairham/pre-commit-hooks
+    rev: v0.4.0
+    hooks:
+      - id: check-license-headers
+        args: [--license, Apache-2.0]
+      - id: check-go-version-sync
+      - id: check-conflict-markers
+      # go-vulncheck (the siblings' fourth hook) is left out until
+      # GO-2026-5932 has an answer: go-selfupdate imports
+      # golang.org/x/crypto/openpgp, which has no fixed version, and
+      # govulncheck counts its package init as reachable, so the hook would
+      # fail every commit that touches go.mod. osv-scanner.toml records why.
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        exclude: ^dist/
+
+  # YAML style (sequence indentation etc.; config in .yamllint.yml)
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: ['-c', '.yamllint.yml']
+        # Helm templates are Go templates, not hand-written YAML.
+        exclude: ^charts/[^/]+/templates/
