@@ -79,21 +79,6 @@ func TestProgressWriters(t *testing.T) {
 	}
 }
 
-func TestNewUpdater(t *testing.T) {
-	t.Parallel()
-
-	// Sanity: the constructor wires both source and validator with no
-	// panics on the happy path. This is the closest we can get to
-	// testing newUpdater without a network round-trip.
-	u, err := newUpdater()
-	if err != nil {
-		t.Fatalf("newUpdater: %v", err)
-	}
-	if u == nil {
-		t.Fatal("newUpdater returned nil updater")
-	}
-}
-
 func TestInHomebrewKeg(t *testing.T) {
 	t.Parallel()
 

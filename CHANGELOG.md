@@ -8,6 +8,13 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+### Changed
+
+- `k4a upgrade` no longer depends on go-selfupdate: it finds, verifies and
+  installs the release itself, so the build no longer links
+  `golang.org/x/crypto/openpgp` (GO-2026-5932) and the go-vulncheck commit
+  hook is back on (#17).
+
 ## [0.0.1] - 2026-10-08
 
 ### Added
