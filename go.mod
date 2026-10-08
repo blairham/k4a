@@ -23,7 +23,7 @@ require (
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260721222903-95f7d9a51d6a
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	golang.org/x/sys v0.48.0
-	google.golang.org/grpc v1.83.2
+	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
