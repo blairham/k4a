@@ -93,28 +93,8 @@ func (b Bookkeeper) CanServe(params QueryParams) (bool, string) {
 		untilMS = params.Until.UnixMilli()
 	}
 
-	partitions := params.Partitions
-	if len(partitions) == 0 {
-		partitions = make([]int32, 0, len(b.NewestOffsetPerPartition))
-		for p := range b.NewestOffsetPerPartition {
-			partitions = append(partitions, p)
-		}
-	}
-
-	for _, p := range partitions {
-		oldest, ok := b.OldestTimePerPartition[p]
-		if !ok {
-			return false, fmt.Sprintf("partition %d not indexed", p)
-		}
-		newest := b.NewestTimePerPartition[p]
-		if sinceMS != 0 && oldest > sinceMS {
-			return false, fmt.Sprintf("partition %d only indexed back to %s",
-				p, time.UnixMilli(oldest).UTC().Format(time.RFC3339))
-		}
-		if untilMS != 0 && newest < untilMS {
-			return false, fmt.Sprintf("partition %d not indexed up to %s",
-				p, params.Until.Format(time.RFC3339))
-		}
+	if reason := b.uncoveredPartition(params, sinceMS, untilMS); reason != "" {
+		return false, reason
 	}
 
 	// Any partition-spanning gap means we can't claim coverage even if
@@ -127,6 +107,36 @@ func (b Bookkeeper) CanServe(params QueryParams) (bool, string) {
 	}
 
 	return true, ""
+}
+
+// uncoveredPartition checks each requested partition (all indexed ones when
+// none were named) against the time bounds, returning why the first one that
+// falls short cannot be served, or "" when all are covered.
+func (b Bookkeeper) uncoveredPartition(params QueryParams, sinceMS, untilMS int64) string {
+	partitions := params.Partitions
+	if len(partitions) == 0 {
+		partitions = make([]int32, 0, len(b.NewestOffsetPerPartition))
+		for p := range b.NewestOffsetPerPartition {
+			partitions = append(partitions, p)
+		}
+	}
+
+	for _, p := range partitions {
+		oldest, ok := b.OldestTimePerPartition[p]
+		if !ok {
+			return fmt.Sprintf("partition %d not indexed", p)
+		}
+		newest := b.NewestTimePerPartition[p]
+		if sinceMS != 0 && oldest > sinceMS {
+			return fmt.Sprintf("partition %d only indexed back to %s",
+				p, time.UnixMilli(oldest).UTC().Format(time.RFC3339))
+		}
+		if untilMS != 0 && newest < untilMS {
+			return fmt.Sprintf("partition %d not indexed up to %s",
+				p, params.Until.Format(time.RFC3339))
+		}
+	}
+	return ""
 }
 
 func gapOverlapsRange(g Gap, _, _ int64) bool {
@@ -165,7 +175,7 @@ func (ix *Indexer) Query(ctx context.Context, params QueryParams) (QueryResult, 
 
 	req := bleve.NewSearchRequestOptions(q, limit, 0, false)
 	req.SortBy([]string{"-timestamp"})
-	req.Fields = []string{"key", "value", "headers", "timestamp", "partition", "offset"}
+	req.Fields = []string{fieldKey, fieldValue, fieldHeaders, fieldTimestamp, fieldPartition, fieldOffset}
 
 	res, err := idx.SearchInContext(ctx, req)
 	if err != nil {
@@ -203,7 +213,7 @@ func buildBleveQuery(params QueryParams) query.Query {
 		for _, p := range params.Partitions {
 			lo, hi := float64(p), float64(p)
 			rng := bleve.NewNumericRangeQuery(&lo, &hi)
-			rng.SetField("partition")
+			rng.SetField(fieldPartition)
 			parts = append(parts, rng)
 		}
 		must = append(must, bleve.NewDisjunctionQuery(parts...))
@@ -212,14 +222,14 @@ func buildBleveQuery(params QueryParams) query.Query {
 	if !params.Since.IsZero() || !params.Until.IsZero() {
 		incl := true
 		dr := bleve.NewDateRangeInclusiveQuery(params.Since, params.Until, &incl, &incl)
-		dr.SetField("timestamp")
+		dr.SetField(fieldTimestamp)
 		must = append(must, dr)
 	}
 
 	if params.Pattern != nil {
 		scopes := params.Scopes
 		if len(scopes) == 0 {
-			scopes = []string{"key", "value"}
+			scopes = []string{fieldKey, fieldValue}
 		}
 		shoulds := make([]query.Query, 0, len(scopes))
 		// Not the pattern verbatim: Bleve regexes are term-anchored, so the
@@ -254,24 +264,24 @@ func buildBleveQuery(params QueryParams) query.Query {
 func hitToConsumed(h *bleveSearchHit, topic string, re *regexp.Regexp, scopes []string) (kafka.ConsumedMessage, bool) {
 	msg := kafka.ConsumedMessage{Topic: topic}
 
-	if v, ok := h.Fields["partition"].(float64); ok {
+	if v, ok := h.Fields[fieldPartition].(float64); ok {
 		msg.Partition = int(v)
 	}
-	if v, ok := h.Fields["offset"].(float64); ok {
+	if v, ok := h.Fields[fieldOffset].(float64); ok {
 		msg.Offset = int64(v)
 	}
-	if v, ok := h.Fields["timestamp"].(string); ok {
+	if v, ok := h.Fields[fieldTimestamp].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
 			msg.Time = t
 		}
 	}
-	if v, ok := h.Fields["key"].(string); ok {
+	if v, ok := h.Fields[fieldKey].(string); ok {
 		msg.Key = v
 	}
-	if v, ok := h.Fields["value"].(string); ok {
+	if v, ok := h.Fields[fieldValue].(string); ok {
 		msg.Value = v
 	}
-	if v, ok := h.Fields["headers"].(string); ok {
+	if v, ok := h.Fields[fieldHeaders].(string); ok {
 		msg.Headers = parseHeaders(v)
 	}
 	if re != nil && !matchesScopes(re, &msg, scopes) {
@@ -287,19 +297,19 @@ func hitToConsumed(h *bleveSearchHit, topic string, re *regexp.Regexp, scopes []
 // key+value, same as buildBleveQuery.
 func matchesScopes(re *regexp.Regexp, msg *kafka.ConsumedMessage, scopes []string) bool {
 	if len(scopes) == 0 {
-		scopes = []string{"key", "value"}
+		scopes = []string{fieldKey, fieldValue}
 	}
 	for _, s := range scopes {
 		switch s {
-		case "key":
+		case fieldKey:
 			if re.MatchString(msg.Key) {
 				return true
 			}
-		case "value":
+		case fieldValue:
 			if re.MatchString(msg.Value) {
 				return true
 			}
-		case "headers":
+		case fieldHeaders:
 			if regexMatchesHeaders(re, msg.Headers) {
 				return true
 			}

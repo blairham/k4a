@@ -78,12 +78,7 @@ func Catchup(
 	topic string,
 	opts CatchupOptions,
 ) (CatchupResult, error) {
-	if opts.MaxRecords <= 0 {
-		opts.MaxRecords = DefaultMaxRecords
-	}
-	if opts.MaxDuration <= 0 {
-		opts.MaxDuration = DefaultMaxDuration
-	}
+	opts = opts.withDefaults()
 
 	res := CatchupResult{StartedAt: time.Now().UTC()}
 	defer func() { res.FinishedAt = time.Now().UTC() }()
@@ -102,20 +97,7 @@ func Catchup(
 		return res, err
 	}
 
-	starts := make(map[int32]int64, len(book.NewestOffsetPerPartition))
-	ends := make(map[int32]int64, len(endOffsets))
-	for partition, newestIndexed := range book.NewestOffsetPerPartition {
-		hwm, ok := endOffsets[partition]
-		if !ok {
-			continue
-		}
-		nextWanted := newestIndexed + 1
-		if hwm <= nextWanted {
-			continue
-		}
-		starts[partition] = nextWanted
-		ends[partition] = hwm
-	}
+	starts, ends := catchupRanges(book.NewestOffsetPerPartition, endOffsets)
 	if len(starts) == 0 {
 		return res, nil
 	}
@@ -171,6 +153,38 @@ func Catchup(
 		return res, err
 	}
 	return res, nil
+}
+
+// withDefaults fills the zero-valued limits.
+func (o CatchupOptions) withDefaults() CatchupOptions {
+	if o.MaxRecords <= 0 {
+		o.MaxRecords = DefaultMaxRecords
+	}
+	if o.MaxDuration <= 0 {
+		o.MaxDuration = DefaultMaxDuration
+	}
+	return o
+}
+
+// catchupRanges pairs each partition's next unindexed offset with its high
+// watermark, leaving out partitions the broker did not report and those
+// already caught up.
+func catchupRanges(newest, endOffsets map[int32]int64) (starts, ends map[int32]int64) {
+	starts = make(map[int32]int64, len(newest))
+	ends = make(map[int32]int64, len(endOffsets))
+	for partition, newestIndexed := range newest {
+		hwm, ok := endOffsets[partition]
+		if !ok {
+			continue
+		}
+		nextWanted := newestIndexed + 1
+		if hwm <= nextWanted {
+			continue
+		}
+		starts[partition] = nextWanted
+		ends[partition] = hwm
+	}
+	return starts, ends
 }
 
 // computeRemainingGaps figures out which offset ranges were not
