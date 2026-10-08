@@ -2,8 +2,8 @@ apiVersion: v2
 name: k4a-mcp
 description: Networked MCP server fronting the shared k4a-index daemon
 type: application
-version: 0.0.0
-appVersion: "0.0.0"
+version: 0.0.1
+appVersion: "0.0.1"
 keywords:
   - kafka
   - mcp

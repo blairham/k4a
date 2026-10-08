@@ -8,6 +8,17 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-10-08
+
+### Added
+
+- The README documents installing with `brew install blairham/tap/k4a`.
+
+### Changed
+
+- Dependency updates: aws-sdk-go-v2, franz-go (and kadm/kmsg), bubbletea,
+  tuikit, gRPC, bleve, the MCP Go SDK, go-selfupdate and smithy-go.
+
 ### Fixed
 
 - `k4a upgrade` and `:upgrade` no longer overwrite a Homebrew-installed
