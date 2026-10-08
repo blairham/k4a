@@ -131,6 +131,31 @@ func Run(
 		lastProg kafka.DeepSearchProgress
 		scanErr  error
 	)
+	out.Matches, lastProg, scanErr = collect(ctx, matchCh, progCh, errCh)
+
+	out.Stats = Stats{
+		Source:     lastProg.Source.String(),
+		ElapsedMs:  lastProg.Elapsed.Milliseconds(),
+		Scanned:    lastProg.Scanned,
+		Bytes:      lastProg.Bytes,
+		Partitions: lastProg.Partitions,
+		Capped:     lastProg.Capped,
+		Truncated:  lastProg.Truncated,
+	}
+	if scanErr != nil {
+		out.Error = scanErr.Error()
+	}
+	return out
+}
+
+// collect drains a search's three channels until they all close or ctx ends,
+// returning the matches, the last progress frame and the last error reported.
+func collect(
+	ctx context.Context,
+	matchCh <-chan kafka.ConsumedMessage,
+	progCh <-chan kafka.DeepSearchProgress,
+	errCh <-chan error,
+) (matches []Match, lastProg kafka.DeepSearchProgress, scanErr error) {
 	for matchCh != nil || progCh != nil || errCh != nil {
 		select {
 		case <-ctx.Done():
@@ -140,7 +165,7 @@ func Run(
 				matchCh = nil
 				continue
 			}
-			out.Matches = append(out.Matches, matchOf(m))
+			matches = append(matches, matchOf(m))
 		case prog, ok := <-progCh:
 			if !ok {
 				progCh = nil
@@ -157,20 +182,7 @@ func Run(
 			}
 		}
 	}
-
-	out.Stats = Stats{
-		Source:     lastProg.Source.String(),
-		ElapsedMs:  lastProg.Elapsed.Milliseconds(),
-		Scanned:    lastProg.Scanned,
-		Bytes:      lastProg.Bytes,
-		Partitions: lastProg.Partitions,
-		Capped:     lastProg.Capped,
-		Truncated:  lastProg.Truncated,
-	}
-	if scanErr != nil {
-		out.Error = scanErr.Error()
-	}
-	return out
+	return matches, lastProg, scanErr
 }
 
 func paramPattern(p kafka.SearchParams) string {
