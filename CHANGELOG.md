@@ -8,6 +8,12 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+### Fixed
+
+- `k4a upgrade` and `:upgrade` no longer overwrite a Homebrew-installed
+  binary; they point at `brew upgrade blairham/tap/k4a` instead, and
+  `k4a upgrade --check` names that command (#12).
+
 ## [0.0.0] - 2026-10-08
 
 The first open-source release of k4a, under the Apache License 2.0.

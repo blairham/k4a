@@ -12,6 +12,7 @@ import (
 
 	"github.com/blairham/k4a/internal/tui/style"
 	"github.com/blairham/k4a/internal/tui/views"
+	"github.com/blairham/k4a/internal/upgrade"
 )
 
 // knownCommands is the list of commands for fuzzy matching in command mode.
@@ -256,6 +257,11 @@ func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 		_, c := a.handleAction("search", topic)
 		return "", c
 	case "upgrade":
+		// Checked before quitting: the upgrade itself runs after the TUI
+		// exits, and a Homebrew install would only refuse there.
+		if upgrade.HomebrewManaged() {
+			return upgrade.ErrHomebrewManaged.Error(), nil
+		}
 		a.upgradeRequested = true
 		a.shutdown()
 		return "", tea.Quit

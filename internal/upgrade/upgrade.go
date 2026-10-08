@@ -5,10 +5,12 @@ package upgrade
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,9 +19,60 @@ import (
 
 const repo = "blairham/k4a"
 
+// BrewUpgradeCommand is how a Homebrew-installed k4a is upgraded.
+const BrewUpgradeCommand = "brew upgrade blairham/tap/k4a"
+
+// ErrHomebrewManaged is returned by Run when the running binary belongs to a
+// Homebrew keg. Replacing it in place would leave brew recording the old
+// version, and the next `brew upgrade` would swap it back.
+var ErrHomebrewManaged = errors.New("k4a is installed by Homebrew; run `" + BrewUpgradeCommand + "` instead")
+
+// HomebrewManaged reports whether the running binary was installed by
+// Homebrew.
+func HomebrewManaged() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	return inHomebrewKeg(exe)
+}
+
+// Command is the command that upgrades this k4a: brew's for a Homebrew
+// install, k4a's own otherwise.
+func Command() string {
+	if HomebrewManaged() {
+		return BrewUpgradeCommand
+	}
+	return "k4a upgrade"
+}
+
+// inHomebrewKeg reports whether exe, once symlinks are resolved, lives in a
+// k4a keg: <prefix>/Cellar/k4a/<version>/... Brew's bin/ and opt/ entries are
+// symlinks into the keg, so they resolve there too.
+func inHomebrewKeg(exe string) bool {
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	parts := strings.Split(filepath.ToSlash(exe), "/")
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == "Cellar" && parts[i+1] == "k4a" {
+			return true
+		}
+	}
+	return false
+}
+
 // Run checks for the latest release, downloads it, and replaces the current
 // binary. Progress is written to w. Returns the new version tag on success.
 func Run(ctx context.Context, currentVersion string, w io.Writer) (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("cannot determine executable path: %w", err)
+	}
+	if inHomebrewKeg(exe) {
+		return "", ErrHomebrewManaged
+	}
+
 	fprintln(w, "Checking for updates...")
 
 	updater, err := newUpdater()
@@ -40,11 +93,6 @@ func Run(ctx context.Context, currentVersion string, w io.Writer) (string, error
 	}
 
 	fprintf(w, "Upgrading %s -> %s\n", currentVersion, latest.Version())
-
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("cannot determine executable path: %w", err)
-	}
 
 	fprintf(w, "Downloading and installing to %s...\n", exe)
 
