@@ -13,6 +13,12 @@ Built with [Charm](https://charm.sh) (bubbletea, bubbles, lipgloss). Supports SA
 
 ## Install
 
+### Homebrew
+
+```bash
+brew install blairham/tap/k4a
+```
+
 ### Go
 
 ```bash
