@@ -5,6 +5,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -131,6 +132,111 @@ func (a *App) renderInfoPanel() []string {
 	}
 }
 
+// Shortcut keys and descriptions that recur across the per-view shortcut
+// sets and the help panel.
+const (
+	keyEnter = "<enter>"
+	keyEsc   = "<esc>"
+	keySlash = "</>"
+	keyHelp  = "<?>"
+	keyCtrlD = "<ctrl-d>"
+	keyCtrlF = "<ctrl-f>"
+	keyCtrlB = "<ctrl-b>"
+	keyP     = "<p>"
+	keyS     = "<s>"
+	keyR     = "<R>"
+
+	descBack     = "Back"
+	descFilter   = "Filter"
+	descHelp     = "Help"
+	descDelete   = "Delete"
+	descMessages = "Messages"
+)
+
+// viewShortcuts is each view's action column, before the always-on actions
+// are merged in. A view with no entry gets defaultShortcuts.
+var viewShortcuts = map[style.ViewType][]chrome.Shortcut{
+	style.ViewTopics: {
+		{Key: keyEnter, Desc: descMessages},
+		{Key: "<o>", Desc: "Overview"},
+		{Key: keyP, Desc: "Produce"},
+		{Key: keyCtrlD, Desc: descDelete},
+	},
+	style.ViewTopicDetail: {
+		{Key: "<m>", Desc: descMessages},
+		{Key: "<e>", Desc: "Config"},
+		{Key: keyP, Desc: "Partitions"},
+		{Key: keyR, Desc: "Replicas"},
+	},
+	style.ViewTopicConfig: {
+		{Key: keyEnter, Desc: "Edit"},
+		{Key: "<d>", Desc: "Defaults"},
+		{Key: keySlash, Desc: descFilter},
+		{Key: keyEsc, Desc: descBack},
+	},
+	style.ViewGroups: {
+		{Key: keyEnter, Desc: "Detail"},
+		{Key: keyCtrlD, Desc: descDelete},
+		{Key: keySlash, Desc: descFilter},
+		{Key: keyHelp, Desc: descHelp},
+	},
+	style.ViewMessages: {
+		{Key: keyEnter, Desc: "View"},
+		{Key: keyS, Desc: "Search"},
+		{Key: keyCtrlD, Desc: "Purge"},
+		{Key: "<f>", Desc: "Follow"},
+	},
+	style.ViewMessageDetail: {
+		{Key: keyS, Desc: "Save"},
+		{Key: keyCtrlF, Desc: "PgDn"},
+		{Key: keyCtrlB, Desc: "PgUp"},
+		{Key: keyEsc, Desc: descBack},
+	},
+	style.ViewContext: {
+		{Key: keyEnter, Desc: "Switch"},
+		{Key: keyEsc, Desc: descBack},
+		{Key: keyCtrlF, Desc: "PgDn"},
+		{Key: keyCtrlB, Desc: "PgUp"},
+	},
+	style.ViewACLs: {
+		{Key: "<a>", Desc: "Create"},
+		{Key: keyCtrlD, Desc: descDelete},
+		{Key: keySlash, Desc: descFilter},
+		{Key: keyHelp, Desc: descHelp},
+	},
+	style.ViewGroupDetail: {
+		{Key: keyR, Desc: "Reset"},
+		{Key: "<:reset>", Desc: descDelete},
+		{Key: keySlash, Desc: descFilter},
+		{Key: keyEsc, Desc: descBack},
+	},
+	style.ViewBrokerDetail: {
+		{Key: "<d>", Desc: "Defaults"},
+		{Key: keyEsc, Desc: descBack},
+		{Key: keySlash, Desc: descFilter},
+		{Key: keyHelp, Desc: descHelp},
+	},
+	style.ViewProduce:      formShortcuts,
+	style.ViewCreateTopic:  formShortcuts,
+	style.ViewCreateACL:    formShortcuts,
+	style.ViewResetOffsets: formShortcuts,
+}
+
+// formShortcuts is the action column of every form view.
+var formShortcuts = []chrome.Shortcut{
+	{Key: "<tab>", Desc: "Next"},
+	{Key: keyEnter, Desc: "Submit"},
+	{Key: keyEsc, Desc: descBack},
+	{Key: keyHelp, Desc: descHelp},
+}
+
+var defaultShortcuts = []chrome.Shortcut{
+	{Key: keyEnter, Desc: "Select"},
+	{Key: keyEsc, Desc: descBack},
+	{Key: keySlash, Desc: descFilter},
+	{Key: keyHelp, Desc: descHelp},
+}
+
 // renderShortcuts returns the shortcut grid for the active view,
 // k9s-style: view-switch hotkeys (<1>..<4>) stacked in the leftmost
 // column, per-view actions plus always-on actions stacked in the
@@ -143,93 +249,12 @@ func (a *App) renderShortcuts() []string {
 		{Key: "<4>", Desc: "ACLs"},
 	}
 
-	var actions []chrome.Shortcut //nolint:prealloc // each case below assigns a fresh literal
-	switch a.view {
-	case style.ViewTopics:
-		actions = []chrome.Shortcut{
-			{Key: "<enter>", Desc: "Messages"},
-			{Key: "<o>", Desc: "Overview"},
-			{Key: "<p>", Desc: "Produce"},
-			{Key: "<ctrl-d>", Desc: "Delete"},
-		}
-	case style.ViewTopicDetail:
-		actions = []chrome.Shortcut{
-			{Key: "<m>", Desc: "Messages"},
-			{Key: "<e>", Desc: "Config"},
-			{Key: "<p>", Desc: "Partitions"},
-			{Key: "<R>", Desc: "Replicas"},
-		}
-	case style.ViewTopicConfig:
-		actions = []chrome.Shortcut{
-			{Key: "<enter>", Desc: "Edit"},
-			{Key: "<d>", Desc: "Defaults"},
-			{Key: "</>", Desc: "Filter"},
-			{Key: "<esc>", Desc: "Back"},
-		}
-	case style.ViewGroups:
-		actions = []chrome.Shortcut{
-			{Key: "<enter>", Desc: "Detail"},
-			{Key: "<ctrl-d>", Desc: "Delete"},
-			{Key: "</>", Desc: "Filter"},
-			{Key: "<?>", Desc: "Help"},
-		}
-	case style.ViewMessages:
-		actions = []chrome.Shortcut{
-			{Key: "<enter>", Desc: "View"},
-			{Key: "<s>", Desc: "Search"},
-			{Key: "<ctrl-d>", Desc: "Purge"},
-			{Key: "<f>", Desc: "Follow"},
-		}
-	case style.ViewMessageDetail:
-		actions = []chrome.Shortcut{
-			{Key: "<s>", Desc: "Save"},
-			{Key: "<ctrl-f>", Desc: "PgDn"},
-			{Key: "<ctrl-b>", Desc: "PgUp"},
-			{Key: "<esc>", Desc: "Back"},
-		}
-	case style.ViewContext:
-		actions = []chrome.Shortcut{
-			{Key: "<enter>", Desc: "Switch"},
-			{Key: "<esc>", Desc: "Back"},
-			{Key: "<ctrl-f>", Desc: "PgDn"},
-			{Key: "<ctrl-b>", Desc: "PgUp"},
-		}
-	case style.ViewACLs:
-		actions = []chrome.Shortcut{
-			{Key: "<a>", Desc: "Create"},
-			{Key: "<ctrl-d>", Desc: "Delete"},
-			{Key: "</>", Desc: "Filter"},
-			{Key: "<?>", Desc: "Help"},
-		}
-	case style.ViewGroupDetail:
-		actions = []chrome.Shortcut{
-			{Key: "<R>", Desc: "Reset"},
-			{Key: "<:reset>", Desc: "Delete"},
-			{Key: "</>", Desc: "Filter"},
-			{Key: "<esc>", Desc: "Back"},
-		}
-	case style.ViewBrokerDetail:
-		actions = []chrome.Shortcut{
-			{Key: "<d>", Desc: "Defaults"},
-			{Key: "<esc>", Desc: "Back"},
-			{Key: "</>", Desc: "Filter"},
-			{Key: "<?>", Desc: "Help"},
-		}
-	case style.ViewProduce, style.ViewCreateTopic, style.ViewCreateACL, style.ViewResetOffsets:
-		actions = []chrome.Shortcut{
-			{Key: "<tab>", Desc: "Next"},
-			{Key: "<enter>", Desc: "Submit"},
-			{Key: "<esc>", Desc: "Back"},
-			{Key: "<?>", Desc: "Help"},
-		}
-	default:
-		actions = []chrome.Shortcut{
-			{Key: "<enter>", Desc: "Select"},
-			{Key: "<esc>", Desc: "Back"},
-			{Key: "</>", Desc: "Filter"},
-			{Key: "<?>", Desc: "Help"},
-		}
+	perView, ok := viewShortcuts[a.view]
+	if !ok {
+		perView = defaultShortcuts
 	}
+	// A copy: the append and sort below must not touch the shared table.
+	actions := slices.Clone(perView)
 
 	// Always-on actions land in the action column alongside the
 	// per-view set; sortShortcuts then orders the merged set k9s-style
@@ -296,28 +321,28 @@ func (a *App) helpPanel() chrome.HelpPanel {
 					{Key: "<2>", Desc: "Groups"},
 					{Key: "<3>", Desc: "Cluster"},
 					{Key: "<4>", Desc: "ACLs"},
-					{Key: "<enter>", Desc: "Messages"},
+					{Key: keyEnter, Desc: descMessages},
 					{Key: "<o>", Desc: "Topic Overview"},
 					{Key: "<e>", Desc: "Topic Config"},
-					{Key: "<p>", Desc: "Produce"},
+					{Key: keyP, Desc: "Produce"},
 					{Key: "<c>", Desc: "Create Topic"},
 					{Key: "<a>", Desc: "Create ACL"},
 					{Key: "<i>", Desc: "Toggle Internal"},
-					{Key: "<p>", Desc: "Add Partitions"},
-					{Key: "<s>", Desc: "Save Message"},
-					{Key: "<ctrl-d>", Desc: "Delete"},
-					{Key: "<ctrl-d>", Desc: "Purge Topic"},
-					{Key: "<R>", Desc: "Reset Offsets"},
+					{Key: keyP, Desc: "Add Partitions"},
+					{Key: keyS, Desc: "Save Message"},
+					{Key: keyCtrlD, Desc: descDelete},
+					{Key: keyCtrlD, Desc: "Purge Topic"},
+					{Key: keyR, Desc: "Reset Offsets"},
 				},
 			},
 			{
 				Title: "GENERAL",
 				Entries: []chrome.HelpEntry{
 					{Key: "<:cmd>", Desc: "Command mode"},
-					{Key: "</>", Desc: "Filter"},
-					{Key: "<esc>", Desc: "Back/Close"},
+					{Key: keySlash, Desc: descFilter},
+					{Key: keyEsc, Desc: "Back/Close"},
 					{Key: "<r>", Desc: "Refresh"},
-					{Key: "<?>", Desc: "Help"},
+					{Key: keyHelp, Desc: descHelp},
 				},
 			},
 			{
@@ -330,8 +355,8 @@ func (a *App) helpPanel() chrome.HelpPanel {
 					{Key: "<k>", Desc: "Up"},
 					{Key: "<g>", Desc: "Goto Top"},
 					{Key: "<shift-g>", Desc: "Goto Bottom"},
-					{Key: "<ctrl-f>", Desc: "Page Down"},
-					{Key: "<ctrl-b>", Desc: "Page Up"},
+					{Key: keyCtrlF, Desc: "Page Down"},
+					{Key: keyCtrlB, Desc: "Page Up"},
 					{Key: "<f>", Desc: "Toggle Follow"},
 				},
 			},

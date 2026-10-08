@@ -56,8 +56,7 @@ func (v *ClusterView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *ClusterView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case ClusterRefreshMsg:
+	if msg, ok := msg.(ClusterRefreshMsg); ok {
 		v.loading = false
 		if msg.Err != nil {
 			v.err = kafka.FormatUserError(msg.Err)

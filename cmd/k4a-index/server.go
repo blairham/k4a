@@ -89,7 +89,10 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 
 	cov := indexwire.CoverageFromBookkeeper(book)
 	cov.Following = true
-	if err = sendCoverage(stream, cov); err != nil {
+	// A plain assignment rather than an if-init: an `err :=` there would
+	// shadow the err the query below reuses.
+	err = sendCoverage(stream, cov)
+	if err != nil {
 		return err
 	}
 
@@ -100,7 +103,7 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 	}
 	for _, m := range res.Matches {
 		ev := &indexv1.SearchEvent{Event: &indexv1.SearchEvent_Match{Match: indexwire.MatchFromConsumed(m)}}
-		if err = stream.Send(ev); err != nil {
+		if err := stream.Send(ev); err != nil {
 			return err
 		}
 	}

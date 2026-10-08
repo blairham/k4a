@@ -68,7 +68,7 @@ func buildConfigColumns(totalWidth int) []table.Column {
 	cols := make([]table.Column, 0, len(configFixedCols)+2)
 	cols = append(
 		cols,
-		table.Column{Title: "NAME", Width: nameWidth},
+		table.Column{Title: colName, Width: nameWidth},
 		table.Column{Title: "VALUE", Width: valueWidth},
 	)
 	cols = append(cols, configFixedCols...)
@@ -83,8 +83,7 @@ func (v *TopicConfigView) Init() tea.Cmd { return v.refresh() }
 
 // Update handles messages.
 func (v *TopicConfigView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case TopicConfigRefreshMsg:
+	if msg, ok := msg.(TopicConfigRefreshMsg); ok {
 		v.loading = false
 		if msg.Err != nil {
 			v.err = kafka.FormatUserError(msg.Err)

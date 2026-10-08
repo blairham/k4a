@@ -124,29 +124,11 @@ func (c *TopicSizeCmd) Run(args []string) int {
 
 	// Drop internal topics unless explicitly requested or explicitly named.
 	if len(topics) == 0 && !flags.Internal {
-		filtered := sizes[:0]
-		for _, s := range sizes {
-			if !s.Internal {
-				filtered = append(filtered, s)
-			}
-		}
-		sizes = filtered
+		sizes = dropInternalTopics(sizes)
 	}
 
 	if flags.Counts {
-		names := make([]string, len(sizes))
-		for i, s := range sizes {
-			names[i] = s.Name
-		}
-		if counts, cErr := client.FetchTopicMessageCounts(ctx, names); cErr != nil {
-			log.Warn("message counts unavailable", "err", cErr)
-		} else {
-			for i := range sizes {
-				if n, ok := counts[sizes[i].Name]; ok {
-					sizes[i].Messages = n
-				}
-			}
-		}
+		fillMessageCounts(ctx, client, sizes)
 	}
 
 	sortTopicSizes(sizes, flags.SortBy)
@@ -156,6 +138,36 @@ func (c *TopicSizeCmd) Run(args []string) int {
 	}
 	emitTopicSizesTable(sizes, flags.Counts)
 	return 0
+}
+
+// dropInternalTopics filters sizes in place, keeping only non-internal topics.
+func dropInternalTopics(sizes []kafka.TopicSize) []kafka.TopicSize {
+	filtered := sizes[:0]
+	for _, s := range sizes {
+		if !s.Internal {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
+}
+
+// fillMessageCounts sets each topic's message count. Counts are optional
+// garnish, so a failed lookup is logged and leaves the sizes as they were.
+func fillMessageCounts(ctx context.Context, client *kafka.Client, sizes []kafka.TopicSize) {
+	names := make([]string, len(sizes))
+	for i, s := range sizes {
+		names[i] = s.Name
+	}
+	counts, err := client.FetchTopicMessageCounts(ctx, names)
+	if err != nil {
+		log.Warn("message counts unavailable", "err", err)
+		return
+	}
+	for i := range sizes {
+		if n, ok := counts[sizes[i].Name]; ok {
+			sizes[i].Messages = n
+		}
+	}
 }
 
 // sortTopicSizes orders sizes in place: by ONDISK descending (default), or by

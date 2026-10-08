@@ -38,6 +38,8 @@ linters:
     - unconvert # Remove unnecessary type conversions
     - unparam # Reports unused function parameters
     - revive # Fast, configurable linter for Go
+    - gocritic # Diagnostic, performance and style checks
+    - goconst # Repeated strings that should be constants
 
     # Bug detection
     - bodyclose # Check whether HTTP response body is closed
@@ -61,6 +63,9 @@ linters:
 
     # Code complexity
     - nestif # Reports deeply nested if statements
+    - funlen # Reports overly long functions
+    - gocognit # Reports high cognitive complexity
+    - gocyclo # Reports high cyclomatic complexity
 
     # Testing
     - thelper # Detects test helpers not starting with t.Helper()
@@ -75,16 +80,6 @@ linters:
 
     # Memory
     - wastedassign # Finds wasted assignment statements
-
-  # Off until the existing findings are burned down; the counts are what each
-  # reported at the thresholds in `settings` below when it was switched off.
-  # Turning one back on means fixing its findings in the same change.
-  disable:
-    - goconst  # 67
-    - gocritic # 23
-    - gocognit # 17
-    - gocyclo  # 16
-    - funlen   # 5
 
   exclusions:
     rules:
@@ -101,7 +96,7 @@ linters:
           - goconst # test fixtures legitimately repeat literals (JSON, expected values)
           - noctx # httptest.NewRequest et al. are test-only, not real HTTP calls
 
-      # Path-scoped exceptions awaiting the same burn-down as `disable` above.
+      # Path-scoped exceptions still awaiting a fix.
       - path: internal/upgrade/upgrade.go
         linters: [contextcheck]
       - path: internal/upgrade/upgrade.go

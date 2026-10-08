@@ -130,12 +130,11 @@ func (v *CreateACLView) Init() tea.Cmd {
 
 // Update handles messages.
 func (v *CreateACLView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case CreateACLResultMsg:
+	if res, ok := msg.(CreateACLResultMsg); ok {
 		v.state = createACLStateDone
-		if msg.Err != nil {
-			v.err = msg.Err
-			v.result = fmt.Sprintf("Error creating ACL: %v", msg.Err)
+		if res.Err != nil {
+			v.err = res.Err
+			v.result = fmt.Sprintf("Error creating ACL: %v", res.Err)
 		} else {
 			v.result = fmt.Sprintf("ACL created: %s %s on %s:%s for %s",
 				v.permission, v.operation, v.resourceType, v.resourceName, v.principal)

@@ -273,17 +273,7 @@ func runSearch(
 	if format == "summary" {
 		// Buffer-and-emit-once path. Reuses the shared searchcli.Run
 		// helper so the wire format is identical to the MCP tool.
-		sum := searchcli.Run(ctx, cache, client, remote, flags.Topic, pattern, params, flags.CaseSensitive)
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(sum); err != nil {
-			log.Error("writing summary", "err", err)
-			return 1
-		}
-		if sum.Error != "" {
-			return 1
-		}
-		return 0
+		return emitSearchSummary(searchcli.Run(ctx, cache, client, remote, flags.Topic, pattern, params, flags.CaseSensitive))
 	}
 
 	// Streaming path: text or NDJSON. Wrap the cache scan with the shared index
@@ -297,13 +287,56 @@ func runSearch(
 		search = remote.Wrap(search)
 	}
 	matchCh, progCh, errCh := search(ctx, flags.Topic, params)
-	encoder := newSearchOutput(format)
 
-	var (
-		scanErr  error
-		lastProg kafka.DeepSearchProgress
-		matches  int
-	)
+	res, err := drainSearch(ctx, matchCh, progCh, errCh, newSearchOutput(format))
+	if err != nil {
+		log.Error("writing match", "err", err)
+		return 1
+	}
+
+	if !flags.Quiet {
+		fmt.Fprintln(os.Stderr, searchSummaryLine(res.lastProg, res.matches))
+	}
+	if res.scanErr != nil {
+		log.Error("search failed", "err", res.scanErr)
+		return 1
+	}
+	return 0
+}
+
+// emitSearchSummary writes the buffered summary document to stdout, returning
+// 1 if it could not be written or the search itself failed.
+func emitSearchSummary(sum searchcli.Summary) int {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(sum); err != nil {
+		log.Error("writing summary", "err", err)
+		return 1
+	}
+	if sum.Error != "" {
+		return 1
+	}
+	return 0
+}
+
+// searchDrain is what drainSearch collected from a streaming search.
+type searchDrain struct {
+	scanErr  error
+	lastProg kafka.DeepSearchProgress
+	matches  int
+}
+
+// drainSearch emits every match as it arrives and keeps the last progress and
+// error until all three channels close or ctx ends. The returned error is a
+// failure to write a match, which stops the drain.
+func drainSearch(
+	ctx context.Context,
+	matchCh <-chan kafka.ConsumedMessage,
+	progCh <-chan kafka.DeepSearchProgress,
+	errCh <-chan error,
+	encoder *searchOutput,
+) (searchDrain, error) {
+	var res searchDrain
 	for matchCh != nil || progCh != nil || errCh != nil {
 		select {
 		case <-ctx.Done():
@@ -313,62 +346,59 @@ func runSearch(
 				matchCh = nil
 				continue
 			}
-			matches++
+			res.matches++
 			if err := encoder.emit(m); err != nil {
-				log.Error("writing match", "err", err)
-				return 1
+				return res, err
 			}
 		case p, ok := <-progCh:
 			if !ok {
 				progCh = nil
 				continue
 			}
-			lastProg = p
+			res.lastProg = p
 		case e, ok := <-errCh:
 			if !ok {
 				errCh = nil
 				continue
 			}
 			if e != nil {
-				scanErr = e
+				res.scanErr = e
 			}
 		}
 	}
+	return res, nil
+}
 
-	if !flags.Quiet {
-		var summary string
-		if lastProg.Source == kafka.SourceScan {
-			// Broker scan: report what it read (msgs + bytes + wall time).
-			summary = fmt.Sprintf(
-				"\nscanned %s msgs (%s) in %s · %d matches",
-				formatCount(lastProg.Scanned),
-				formatBytes(lastProg.Bytes),
-				lastProg.Elapsed.Round(time.Millisecond),
-				matches,
-			)
-		} else {
-			// Cache / local index / shared index: nothing was scanned, so the
-			// msgs+bytes counters are meaningless — report source, matches, time.
-			summary = fmt.Sprintf(
-				"\n%s · %d matches · %s",
-				lastProg.Source.String(),
-				matches,
-				lastProg.Elapsed.Round(time.Millisecond),
-			)
-		}
-		if lastProg.Capped {
-			summary += " (capped — narrow your search)"
-		}
-		if lastProg.Truncated {
-			summary += " (INCOMPLETE — could not read the whole range; results are missing records)"
-		}
-		fmt.Fprintln(os.Stderr, summary)
+// searchSummaryLine is the human summary printed to stderr after a streaming
+// search.
+func searchSummaryLine(lastProg kafka.DeepSearchProgress, matches int) string {
+	var summary string
+	if lastProg.Source == kafka.SourceScan {
+		// Broker scan: report what it read (msgs + bytes + wall time).
+		summary = fmt.Sprintf(
+			"\nscanned %s msgs (%s) in %s · %d matches",
+			formatCount(lastProg.Scanned),
+			formatBytes(lastProg.Bytes),
+			lastProg.Elapsed.Round(time.Millisecond),
+			matches,
+		)
+	} else {
+		// Cache / local index / shared index: nothing was scanned, so the
+		// msgs+bytes counters are meaningless — report source, matches, time.
+		summary = fmt.Sprintf(
+			"\n%s · %d matches · %s",
+			lastProg.Source.String(),
+			matches,
+			lastProg.Elapsed.Round(time.Millisecond),
+		)
 	}
-	if scanErr != nil {
-		log.Error("search failed", "err", scanErr)
-		return 1
+	if lastProg.Capped {
+		summary += " (capped — narrow your search)"
 	}
-	return 0
+	if lastProg.Truncated {
+		summary += " (INCOMPLETE — could not read the whole range; results are missing records)"
+	}
+	return summary
 }
 
 // searchOutput abstracts the per-match emission for text vs json (NDJSON).

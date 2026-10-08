@@ -101,19 +101,31 @@ func (a *App) resolveMessage(param string) *kafka.ConsumedMessage {
 	return nil
 }
 
+// Action names a view, key or command dispatches through handleAction, for
+// those spelled in more than one place.
+const (
+	actionProduce            = "produce"
+	actionSearch             = "search"
+	actionIncreasePartitions = "increase_partitions"
+	actionChangeReplication  = "change_replication"
+	actionCreateTopic        = "create_topic"
+	actionCreateACL          = "create_acl"
+	actionContextView        = "context_view"
+)
+
 // writeActions are actions that mutate Kafka state and are blocked in readonly mode.
 var writeActions = map[string]bool{
-	"produce":              true,
-	"create_topic":         true,
-	"create_acl":           true,
-	"reset_offsets":        true,
-	"edit_topic_config":    true,
-	"increase_partitions":  true,
-	"change_replication":   true,
-	"confirm_purge_topic":  true,
-	"confirm_delete_topic": true,
-	"confirm_delete_acl":   true,
-	"confirm_delete_group": true,
+	actionProduce:            true,
+	actionCreateTopic:        true,
+	actionCreateACL:          true,
+	"reset_offsets":          true,
+	"edit_topic_config":      true,
+	actionIncreasePartitions: true,
+	actionChangeReplication:  true,
+	"confirm_purge_topic":    true,
+	"confirm_delete_topic":   true,
+	"confirm_delete_acl":     true,
+	"confirm_delete_group":   true,
 }
 
 func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint:gocyclo,funlen // flat action dispatch
@@ -138,54 +150,31 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		// available, or another instance holds the writer lock.
 		a.startIndexer(param)
 		return a.openView(style.ViewMessages, a.viewMap[style.ViewMessages].Init())
-	case "produce":
+	case actionProduce:
 		a.stopStoppableViews()
 		a.setView(style.ViewProduce, views.NewProduceView(a.client, param))
 		return a.openView(style.ViewProduce, a.viewMap[style.ViewProduce].Init())
-	case "search":
-		// Two forms:
-		//   "topic"                 → open the search bar (no query yet)
-		//   "topic\x00query"        → run a search for topic+query
-		// The first form is dispatched by the `s` key in MessagesView and
-		// by the `:search` command. The second form is dispatched by the
-		// command-bar's Enter handler after the user types a query.
-		topic, query := splitSearchParam(param)
-		if query == "" {
-			return a.openSearchBar(topic)
-		}
-		runFn := a.searchRunner()
-		a.setView(style.ViewSearch, views.NewSearchView(runFn, topic, query))
-		return a.openView(style.ViewSearch, a.viewMap[style.ViewSearch].Init())
-	case "create_topic":
+	case actionSearch:
+		return a.openSearch(param)
+	case actionCreateTopic:
 		a.setView(style.ViewCreateTopic, views.NewCreateTopicView(a.client))
 		return a.openView(style.ViewCreateTopic, a.viewMap[style.ViewCreateTopic].Init())
-	case "create_acl":
+	case actionCreateACL:
 		a.setView(style.ViewCreateACL, views.NewCreateACLView(a.client))
 		return a.openView(style.ViewCreateACL, a.viewMap[style.ViewCreateACL].Init())
 	case "topic_config":
 		a.setView(style.ViewTopicConfig, views.NewTopicConfigView(a.client, param))
 		return a.openView(style.ViewTopicConfig, a.viewMap[style.ViewTopicConfig].Init())
 	case "broker_detail":
-		brokerID := 0
-		fmt.Sscanf(param, "%d", &brokerID) //nolint:errcheck // best-effort parse
-		cv := typedView[*views.ClusterView](a, style.ViewCluster)
-		if cv == nil {
-			return a, nil
-		}
-		broker, isController := cv.BrokerByID(brokerID)
-		if broker == nil {
-			return a, nil
-		}
-		a.setView(style.ViewBrokerDetail, views.NewBrokerDetailView(a.client, *broker, isController))
-		return a.openView(style.ViewBrokerDetail, a.viewMap[style.ViewBrokerDetail].Init())
+		return a.openBrokerDetail(param)
 	case "reset_offsets":
 		a.setView(style.ViewResetOffsets, views.NewResetOffsetsView(a.client, param))
 		return a.openView(style.ViewResetOffsets, a.viewMap[style.ViewResetOffsets].Init())
 	case "edit_topic_config":
 		return a.startConfigEdit(param)
-	case "increase_partitions":
+	case actionIncreasePartitions:
 		return a.startIncreasePartitions(param)
-	case "change_replication":
+	case actionChangeReplication:
 		return a.startChangeReplication(param)
 	case "confirm_purge_topic":
 		return a.startPurgeTopic(param)
@@ -196,7 +185,7 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		return a.promptConfirm("delete_acl", param, fmt.Sprintf("delete ACL %s?", label))
 	case "confirm_delete_group":
 		return a.promptConfirm("delete_group", param, fmt.Sprintf("delete group %s?", param))
-	case "context_view":
+	case actionContextView:
 		if a.cfg == nil {
 			return a, nil
 		}
@@ -206,49 +195,121 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		if a.cfg == nil {
 			return a, nil
 		}
-		// If already connected to this context, go straight to topics
-		// with a fresh view so the loading spinner shows until counts arrive.
-		if param == a.connInfo.Context {
-			delete(a.viewMap, style.ViewContext)
-			a.setView(style.ViewTopics, views.NewTopicsView(a.client))
-			a.loading = true
-			return a, a.switchView(style.ViewTopics)
-		}
-		a.loading = true
-		return a, a.doSwitchContext(param)
+		cmd := a.selectContext(param)
+		return a, cmd
 	case "message_detail":
-		if v := typedView[*views.MessagesView](a, style.ViewMessages); v != nil {
-			idx := 0
-			if n, err := fmt.Sscanf(param, "%d", &idx); n == 1 && err == nil {
-				if msg := v.GetMessage(idx); msg != nil {
-					a.pushView(a.view)
-					a.setView(style.ViewMessageDetail, views.NewMessageDetailView(msg))
-					a.view = style.ViewMessageDetail
-					a.resizeActiveView()
-					return a, a.viewMap[style.ViewMessageDetail].Init()
-				}
-			}
-		}
+		cmd := a.openMessageAt(param)
+		return a, cmd
 	case "search_message_detail":
 		// Opens the detail view for a SearchView match. The search keeps
 		// running in the background — popping back returns to streaming
 		// results, no scan restart.
-		if v := typedView[*views.SearchView](a, style.ViewSearch); v != nil {
-			idx := 0
-			if n, err := fmt.Sscanf(param, "%d", &idx); n == 1 && err == nil {
-				if msg, ok := v.GetMatch(idx); ok {
-					a.pushView(a.view)
-					a.setView(style.ViewMessageDetail, views.NewMessageDetailView(&msg))
-					a.view = style.ViewMessageDetail
-					a.resizeActiveView()
-					return a, a.viewMap[style.ViewMessageDetail].Init()
-				}
-			}
-		}
+		cmd := a.openSearchMatchAt(param)
+		return a, cmd
 	case "save_message":
 		return a.promptSaveMessage(param)
 	}
 	return a, nil
+}
+
+// openSearch handles the search action's two forms:
+//
+//	"topic"                 → open the search bar (no query yet)
+//	"topic\x00query"        → run a search for topic+query
+//
+// The first form is dispatched by the `s` key in MessagesView and by the
+// `:search` command. The second form is dispatched by the command-bar's Enter
+// handler after the user types a query.
+func (a *App) openSearch(param string) (tea.Model, tea.Cmd) {
+	topic, query := splitSearchParam(param)
+	if query == "" {
+		return a.openSearchBar(topic)
+	}
+	runFn := a.searchRunner()
+	a.setView(style.ViewSearch, views.NewSearchView(runFn, topic, query))
+	return a.openView(style.ViewSearch, a.viewMap[style.ViewSearch].Init())
+}
+
+// openBrokerDetail opens the detail view for the broker whose ID is param,
+// doing nothing when the cluster view does not know it.
+func (a *App) openBrokerDetail(param string) (tea.Model, tea.Cmd) {
+	brokerID := 0
+	fmt.Sscanf(param, "%d", &brokerID) //nolint:errcheck // best-effort parse
+	cv := typedView[*views.ClusterView](a, style.ViewCluster)
+	if cv == nil {
+		return a, nil
+	}
+	broker, isController := cv.BrokerByID(brokerID)
+	if broker == nil {
+		return a, nil
+	}
+	a.setView(style.ViewBrokerDetail, views.NewBrokerDetailView(a.client, *broker, isController))
+	return a.openView(style.ViewBrokerDetail, a.viewMap[style.ViewBrokerDetail].Init())
+}
+
+// selectContext switches to the named context. If already connected to it, go
+// straight to topics with a fresh view so the loading spinner shows until
+// counts arrive.
+func (a *App) selectContext(name string) tea.Cmd {
+	a.loading = true
+	if name == a.connInfo.Context {
+		delete(a.viewMap, style.ViewContext)
+		a.setView(style.ViewTopics, views.NewTopicsView(a.client))
+		return a.switchView(style.ViewTopics)
+	}
+	return a.doSwitchContext(name)
+}
+
+// openMessageAt opens the detail view for the Messages row param indexes,
+// doing nothing when there is no such row.
+func (a *App) openMessageAt(param string) tea.Cmd {
+	v := typedView[*views.MessagesView](a, style.ViewMessages)
+	if v == nil {
+		return nil
+	}
+	idx, ok := parseIndex(param)
+	if !ok {
+		return nil
+	}
+	msg := v.GetMessage(idx)
+	if msg == nil {
+		return nil
+	}
+	return a.openMessageDetail(msg)
+}
+
+// openSearchMatchAt opens the detail view for the search match param indexes,
+// doing nothing when there is no such match.
+func (a *App) openSearchMatchAt(param string) tea.Cmd {
+	v := typedView[*views.SearchView](a, style.ViewSearch)
+	if v == nil {
+		return nil
+	}
+	idx, ok := parseIndex(param)
+	if !ok {
+		return nil
+	}
+	msg, ok := v.GetMatch(idx)
+	if !ok {
+		return nil
+	}
+	return a.openMessageDetail(&msg)
+}
+
+// openMessageDetail pushes the current view and shows msg in the detail view.
+func (a *App) openMessageDetail(msg *kafka.ConsumedMessage) tea.Cmd {
+	a.pushView(a.view)
+	a.setView(style.ViewMessageDetail, views.NewMessageDetailView(msg))
+	a.view = style.ViewMessageDetail
+	a.resizeActiveView()
+	return a.viewMap[style.ViewMessageDetail].Init()
+}
+
+// parseIndex reads a row index from an action param.
+func parseIndex(param string) (int, bool) {
+	idx := 0
+	n, err := fmt.Sscanf(param, "%d", &idx)
+	return idx, n == 1 && err == nil
 }
 
 // aclConfirmLabel returns a short human-readable label for the ACL identified
@@ -484,7 +545,7 @@ func (a *App) startIncreasePartitions(topic string) (tea.Model, tea.Cmd) {
 	if current == 0 {
 		return a, nil
 	}
-	cmd := a.openValuePrompt("increase_partitions", topic, fmt.Sprintf("%d", current), "partitions:", "", true)
+	cmd := a.openValuePrompt(actionIncreasePartitions, topic, fmt.Sprintf("%d", current), "partitions:", "", true)
 	a.resizeActiveView()
 	return a, cmd
 }
@@ -500,7 +561,7 @@ func (a *App) startChangeReplication(topic string) (tea.Model, tea.Cmd) {
 	if current == 0 {
 		return a, nil
 	}
-	cmd := a.openValuePrompt("change_replication", topic, fmt.Sprintf("%d", current), "replication:", "", true)
+	cmd := a.openValuePrompt(actionChangeReplication, topic, fmt.Sprintf("%d", current), "replication:", "", true)
 	a.resizeActiveView()
 	return a, cmd
 }
@@ -517,7 +578,8 @@ func (a *App) reconnect() (tea.Model, tea.Cmd) {
 	}
 	a.loading = true
 	a.flash = "reconnecting..."
-	return a, a.doSwitchContext(name)
+	cmd := a.doSwitchContext(name)
+	return a, cmd
 }
 
 // applySwitchContext swaps in the new client and resets all views.
@@ -553,7 +615,8 @@ func (a *App) applySwitchContext(msg switchContextMsg) (tea.Model, tea.Cmd) {
 
 	// Show loading spinner in topics view (not splash screen).
 	a.loading = true
-	return a, a.switchView(style.ViewTopics)
+	cmd := a.switchView(style.ViewTopics)
+	return a, cmd
 }
 
 // startIndexer ensures an AsyncIndexer is open for the given topic

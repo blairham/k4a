@@ -86,17 +86,16 @@ func (v *CreateTopicView) Init() tea.Cmd {
 
 // Update handles messages.
 func (v *CreateTopicView) Update(msg tea.Msg) tea.Cmd {
-	switch msg := msg.(type) {
-	case CreateTopicResultMsg:
+	if res, ok := msg.(CreateTopicResultMsg); ok {
 		v.state = createTopicStateDone
 		switch {
-		case msg.Err != nil:
-			v.err = msg.Err
-			v.result = fmt.Sprintf("Error creating topic %q: %v", msg.Topic, msg.Err)
-		case msg.Created:
-			v.result = fmt.Sprintf("Topic %q created successfully", msg.Topic)
+		case res.Err != nil:
+			v.err = res.Err
+			v.result = fmt.Sprintf("Error creating topic %q: %v", res.Topic, res.Err)
+		case res.Created:
+			v.result = fmt.Sprintf("Topic %q created successfully", res.Topic)
 		default:
-			v.result = fmt.Sprintf("Topic %q already exists", msg.Topic)
+			v.result = fmt.Sprintf("Topic %q already exists", res.Topic)
 		}
 		return nil
 	}

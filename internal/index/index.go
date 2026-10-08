@@ -73,6 +73,18 @@ type Doc struct {
 	Partition int32     `json:"partition"`
 }
 
+// Bleve field names. They are Doc's JSON names, which is how a Doc's fields
+// reach the index, so each must match its tag above.
+const (
+	fieldTimestamp = "timestamp"
+	fieldTopic     = "topic"
+	fieldKey       = "key"
+	fieldValue     = "value"
+	fieldHeaders   = "headers"
+	fieldOffset    = "offset"
+	fieldPartition = "partition"
+)
+
 // DocID returns the Bleve document ID we use for a (partition, offset)
 // pair. The ID is short, sortable, and gives us cheap exists-by-offset
 // lookups for incremental indexing.
@@ -603,13 +615,13 @@ func buildMapping() mapping.IndexMapping {
 	keywordField.IncludeInAll = false
 
 	doc := bleve.NewDocumentMapping()
-	doc.AddFieldMappingsAt("topic", keywordField)
-	doc.AddFieldMappingsAt("key", textField)
-	doc.AddFieldMappingsAt("value", textField)
-	doc.AddFieldMappingsAt("headers", textField)
-	doc.AddFieldMappingsAt("timestamp", dateField)
-	doc.AddFieldMappingsAt("partition", numField)
-	doc.AddFieldMappingsAt("offset", numField)
+	doc.AddFieldMappingsAt(fieldTopic, keywordField)
+	doc.AddFieldMappingsAt(fieldKey, textField)
+	doc.AddFieldMappingsAt(fieldValue, textField)
+	doc.AddFieldMappingsAt(fieldHeaders, textField)
+	doc.AddFieldMappingsAt(fieldTimestamp, dateField)
+	doc.AddFieldMappingsAt(fieldPartition, numField)
+	doc.AddFieldMappingsAt(fieldOffset, numField)
 
 	im := bleve.NewIndexMapping()
 	// Only an unregistered tokenizer or filter name can fail this.
@@ -766,24 +778,8 @@ func (ix *Indexer) Trim(ctx context.Context, capBytes int64) error {
 		}
 		ix.publishTrimmingLocked(touched)
 
-		batch := ix.idx.NewBatch()
-		var freed int64
-		for _, h := range hits {
-			batch.Delete(h.id)
-			freed += h.bytes
-			touched[h.partition] = struct{}{}
-			// Stop mid-chunk the moment we've freed enough to reach the low-water
-			// mark, so a large chunk against a small cap doesn't over-delete.
-			if ix.book.ByteSize-freed <= lowWater {
-				break
-			}
-		}
-		if err := ix.idx.Batch(batch); err != nil {
-			return fmt.Errorf("committing trim batch: %w", err)
-		}
-		ix.book.ByteSize -= freed
-		if ix.book.ByteSize < 0 {
-			ix.book.ByteSize = 0
+		if err := ix.deleteHitsLocked(hits, lowWater); err != nil {
+			return err
 		}
 	}
 
@@ -796,14 +792,38 @@ func (ix *Indexer) Trim(ctx context.Context, capBytes int64) error {
 	return nil
 }
 
+// deleteHitsLocked deletes hits oldest-first in one batch and lowers the
+// logical byte estimate by what they freed. Caller holds ix.mu.
+func (ix *Indexer) deleteHitsLocked(hits []trimHit, lowWater int64) error {
+	batch := ix.idx.NewBatch()
+	var freed int64
+	for _, h := range hits {
+		batch.Delete(h.id)
+		freed += h.bytes
+		// Stop mid-chunk the moment we've freed enough to reach the low-water
+		// mark, so a large chunk against a small cap doesn't over-delete.
+		if ix.book.ByteSize-freed <= lowWater {
+			break
+		}
+	}
+	if err := ix.idx.Batch(batch); err != nil {
+		return fmt.Errorf("committing trim batch: %w", err)
+	}
+	ix.book.ByteSize -= freed
+	if ix.book.ByteSize < 0 {
+		ix.book.ByteSize = 0
+	}
+	return nil
+}
+
 // oldestHitsLocked returns up to n indexed records sorted oldest-first, with
 // their DocIDs and stored payload sizes, for the trimmer to delete. Caller holds
 // ix.mu; it talks to ix.idx directly, never the locking Query wrapper (which
 // would deadlock).
 func (ix *Indexer) oldestHitsLocked(ctx context.Context, n int) ([]trimHit, error) {
 	req := bleve.NewSearchRequestOptions(bleve.NewMatchAllQuery(), n, 0, false)
-	req.SortBy([]string{"timestamp"}) // ascending → oldest first
-	req.Fields = []string{"key", "value", "headers", "partition"}
+	req.SortBy([]string{fieldTimestamp}) // ascending → oldest first
+	req.Fields = []string{fieldKey, fieldValue, fieldHeaders, fieldPartition}
 	res, err := ix.idx.SearchInContext(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("trim search: %w", err)
@@ -811,17 +831,17 @@ func (ix *Indexer) oldestHitsLocked(ctx context.Context, n int) ([]trimHit, erro
 	hits := make([]trimHit, 0, len(res.Hits))
 	for _, h := range res.Hits {
 		th := trimHit{id: h.ID}
-		if v, ok := h.Fields["partition"].(float64); ok {
+		if v, ok := h.Fields[fieldPartition].(float64); ok {
 			th.partition = int32(v)
 		}
 		var key, val, hdr string
-		if v, ok := h.Fields["key"].(string); ok {
+		if v, ok := h.Fields[fieldKey].(string); ok {
 			key = v
 		}
-		if v, ok := h.Fields["value"].(string); ok {
+		if v, ok := h.Fields[fieldValue].(string); ok {
 			val = v
 		}
-		if v, ok := h.Fields["headers"].(string); ok {
+		if v, ok := h.Fields[fieldHeaders].(string); ok {
 			hdr = v
 		}
 		th.bytes = payloadBytes(key, val, hdr)
@@ -840,10 +860,10 @@ func (ix *Indexer) refreshOldestLocked(ctx context.Context, p int32) error {
 	// Inclusive on BOTH ends: NewNumericRangeQuery's max is exclusive, so a
 	// lo==hi range would match nothing and drop the partition's markers.
 	pq := bleve.NewNumericRangeInclusiveQuery(&lo, &hi, &incl, &incl)
-	pq.SetField("partition")
+	pq.SetField(fieldPartition)
 	req := bleve.NewSearchRequestOptions(pq, 1, 0, false)
-	req.SortBy([]string{"offset"}) // ascending → oldest surviving offset
-	req.Fields = []string{"offset", "timestamp"}
+	req.SortBy([]string{fieldOffset}) // ascending → oldest surviving offset
+	req.Fields = []string{fieldOffset, fieldTimestamp}
 	res, err := ix.idx.SearchInContext(ctx, req)
 	if err != nil {
 		return fmt.Errorf("trim refresh partition %d: %w", p, err)
@@ -856,10 +876,10 @@ func (ix *Indexer) refreshOldestLocked(ctx context.Context, p int32) error {
 		return nil
 	}
 	h := res.Hits[0]
-	if v, ok := h.Fields["offset"].(float64); ok {
+	if v, ok := h.Fields[fieldOffset].(float64); ok {
 		ix.book.OldestOffsetPerPartition[p] = int64(v)
 	}
-	if v, ok := h.Fields["timestamp"].(string); ok {
+	if v, ok := h.Fields[fieldTimestamp].(string); ok {
 		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
 			ix.book.OldestTimePerPartition[p] = t.UnixMilli()
 		}

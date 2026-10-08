@@ -147,16 +147,7 @@ func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 		if m.ScanID != v.scanID {
 			return v.waitForNextEvent()
 		}
-		v.progress = m.Prog
-		switch {
-		case m.Prog.Capped:
-			v.state = searchStateCapped
-		case m.Prog.Truncated && v.state != searchStateErrored:
-			v.state = searchStateTruncated
-		}
-		if m.Prog.Done && v.state == searchStateRunning {
-			v.state = searchStateDone
-		}
+		v.applyProgress(m.Prog)
 		return v.waitForNextEvent()
 	case SearchErrMsg:
 		if m.ScanID != v.scanID {
@@ -169,22 +160,7 @@ func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 		if m.ScanID != v.scanID {
 			return nil
 		}
-		switch m.Which {
-		case searchChanMatches:
-			v.matchCh = nil
-		case searchChanProgress:
-			v.progCh = nil
-		case searchChanErrors:
-			v.errCh = nil
-		}
-		if v.matchCh != nil || v.progCh != nil || v.errCh != nil {
-			// Other channels still have data to drain — keep listening.
-			return v.waitForNextEvent()
-		}
-		if v.state == searchStateRunning {
-			v.state = searchStateDone
-		}
-		return nil
+		return v.channelClosed(m.Which)
 	case SearchTerminalMsg:
 		if m.ScanID != v.scanID {
 			return nil
@@ -193,6 +169,42 @@ func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 			v.state = searchStateDone
 		}
 		return nil
+	}
+	return nil
+}
+
+// applyProgress records a progress frame and moves the state on: capped and
+// truncated are sticky warnings, and a done frame finishes a running scan.
+func (v *SearchView) applyProgress(prog kafka.DeepSearchProgress) {
+	v.progress = prog
+	switch {
+	case prog.Capped:
+		v.state = searchStateCapped
+	case prog.Truncated && v.state != searchStateErrored:
+		v.state = searchStateTruncated
+	}
+	if prog.Done && v.state == searchStateRunning {
+		v.state = searchStateDone
+	}
+}
+
+// channelClosed forgets the closed channel and keeps listening while any of
+// the others is still open; once all are closed, a running scan is done.
+func (v *SearchView) channelClosed(which searchChannel) tea.Cmd {
+	switch which {
+	case searchChanMatches:
+		v.matchCh = nil
+	case searchChanProgress:
+		v.progCh = nil
+	case searchChanErrors:
+		v.errCh = nil
+	}
+	if v.matchCh != nil || v.progCh != nil || v.errCh != nil {
+		// Other channels still have data to drain — keep listening.
+		return v.waitForNextEvent()
+	}
+	if v.state == searchStateRunning {
+		v.state = searchStateDone
 	}
 	return nil
 }
@@ -241,8 +253,7 @@ func (v *SearchView) Topic() string { return v.topic }
 
 // HandleKey processes non-table keys for the search results view.
 func (v *SearchView) HandleKey(key string) (string, string) {
-	switch key {
-	case KeyEnter:
+	if key == KeyEnter {
 		idx := v.table.Cursor()
 		if idx >= 0 && idx < len(v.matches) {
 			return "search_message_detail", fmt.Sprintf("%d", idx)

@@ -286,10 +286,11 @@ SSM parameter resolution for broker endpoints. Env var expansion with `$VAR`.
 
 - Formatting and lint run as **pre-commit hooks**, never by hand (see the
   workspace `AGENTS.md`). golangci-lint v2 is pinned in go.mod's `tool` block
-  and in `.pre-commit-config.yaml`; move the two together. `.golangci.yml`
-  keeps five linters (goconst, gocritic, gocognit, gocyclo, funlen) off until
-  their existing findings are burned down; turning one on means fixing its
-  findings in the same change.
+  and in `.pre-commit-config.yaml`; move the two together. Every linter in
+  `.golangci.yml` is on, including goconst, gocritic, gocognit, gocyclo and
+  funlen: split a function that crosses a complexity or length threshold
+  rather than raising the threshold, and keep `//nolint` for flat dispatch
+  switches, with the reason on the directive.
 - **Formatter**: gofumpt via `go tool gofumpt`; golines at 120 columns; gci
   import groups (standard, default, `prefix(github.com/blairham/k4a)`).
 - **Struct layout**: fieldalignment-optimized (govet). Its fix reorders fields

@@ -154,14 +154,42 @@ func (c *Cache) passthrough(
 	errCh chan<- error,
 ) {
 	srcMatch, srcProg, srcErr := client.DeepSearch(ctx, topic, params)
+	forwardScan(ctx, srcMatch, srcProg, srcErr, matchCh, progCh, errCh, nil)
+}
+
+// forwarded is what forwardScan saw of an underlying scan.
+type forwarded struct {
+	lastProg kafka.DeepSearchProgress
+	scanErr  bool // the scan reported an error
+	canceled bool // ctx ended before the scan's channels closed
+}
+
+// forwardScan relays an underlying scan's three channels to the caller's until
+// all of them close or ctx ends. Matches are sent blocking; progress and errors
+// are offered without blocking. onMatch, when set, also sees every match.
+func forwardScan(
+	ctx context.Context,
+	srcMatch <-chan kafka.ConsumedMessage,
+	srcProg <-chan kafka.DeepSearchProgress,
+	srcErr <-chan error,
+	matchCh chan<- kafka.ConsumedMessage,
+	progCh chan<- kafka.DeepSearchProgress,
+	errCh chan<- error,
+	onMatch func(kafka.ConsumedMessage),
+) forwarded {
+	var res forwarded
 	for srcMatch != nil || srcProg != nil || srcErr != nil {
 		select {
 		case <-ctx.Done():
-			return
+			res.canceled = true
+			return res
 		case m, ok := <-srcMatch:
 			if !ok {
 				srcMatch = nil
 				continue
+			}
+			if onMatch != nil {
+				onMatch(m)
 			}
 			matchCh <- m
 		case p, ok := <-srcProg:
@@ -169,22 +197,27 @@ func (c *Cache) passthrough(
 				srcProg = nil
 				continue
 			}
-			select {
-			case progCh <- p:
-			default:
-			}
+			res.lastProg = p
+			offer(progCh, p)
 		case e, ok := <-srcErr:
 			if !ok {
 				srcErr = nil
 				continue
 			}
 			if e != nil {
-				select {
-				case errCh <- e:
-				default:
-				}
+				res.scanErr = true
+				offer(errCh, e)
 			}
 		}
+	}
+	return res
+}
+
+// offer sends v on ch only if ch can take it without blocking.
+func offer[T any](ch chan<- T, v T) {
+	select {
+	case ch <- v:
+	default:
 	}
 }
 
@@ -204,54 +237,21 @@ func (c *Cache) passthroughAndCache(
 	canCache := hwmErr == nil && len(hwmStart) > 0
 
 	srcMatch, srcProg, srcErr := client.DeepSearch(ctx, topic, params)
-	var (
-		matches  []kafka.ConsumedMessage
-		lastProg kafka.DeepSearchProgress
-		scanErr  bool
-	)
-
-	for srcMatch != nil || srcProg != nil || srcErr != nil {
-		select {
-		case <-ctx.Done():
-			return
-		case m, ok := <-srcMatch:
-			if !ok {
-				srcMatch = nil
-				continue
-			}
-			if canCache {
-				matches = append(matches, m)
-			}
-			matchCh <- m
-		case p, ok := <-srcProg:
-			if !ok {
-				srcProg = nil
-				continue
-			}
-			lastProg = p
-			select {
-			case progCh <- p:
-			default:
-			}
-		case e, ok := <-srcErr:
-			if !ok {
-				srcErr = nil
-				continue
-			}
-			if e != nil {
-				scanErr = true
-				select {
-				case errCh <- e:
-				default:
-				}
-			}
-		}
+	var matches []kafka.ConsumedMessage
+	var onMatch func(kafka.ConsumedMessage)
+	if canCache {
+		onMatch = func(m kafka.ConsumedMessage) { matches = append(matches, m) }
 	}
+	res := forwardScan(ctx, srcMatch, srcProg, srcErr, matchCh, progCh, errCh, onMatch)
+	if res.canceled {
+		return
+	}
+	lastProg := res.lastProg
 
 	// Never persist a result the scanner could not complete. A truncated scan
 	// still reports Done, so gating on Done alone would cache a known-partial
 	// result and re-serve it as authoritative on every later hit.
-	if !canCache || scanErr || lastProg.Incomplete() || !lastProg.Done {
+	if !canCache || res.scanErr || lastProg.Incomplete() || !lastProg.Done {
 		return
 	}
 

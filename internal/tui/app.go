@@ -383,7 +383,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		// If the user specified --context or --brokers, skip the context
 		// selector and jump straight to the topics view.
 		if a.skipContextView {
-			return a, a.switchView(style.ViewTopics)
+			cmd := a.switchView(style.ViewTopics)
+			return a, cmd
 		}
 
 		// Otherwise land on the context selection screen.
@@ -564,7 +565,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		case a.refreshMsgMatchesView(msg):
 			a.loading = false
 		}
-		return a, a.updateActiveView(msg)
+		cmd := a.updateActiveView(msg)
+		return a, cmd
 
 	case views.SearchMatchMsg, views.SearchProgressMsg, views.SearchErrMsg,
 		views.SearchChanClosedMsg, views.SearchTerminalMsg:
@@ -578,6 +580,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		return a, nil
 
 	default:
-		return a, a.updateActiveView(msg)
+		cmd := a.updateActiveView(msg)
+		return a, cmd
 	}
 }

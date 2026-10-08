@@ -126,76 +126,122 @@ func (c *Client) streamSearch(ctx context.Context, topic string, params kafka.Se
 	progCh := make(chan kafka.DeepSearchProgress, 1)
 	errCh := make(chan error, 1)
 
-	go func() {
-		defer close(matchCh)
-		defer close(progCh)
-		defer close(errCh)
-
-		start := time.Now()
-		req := indexwire.QueryParamsToRequest(topic, toQueryParams(params))
-		stream, err := c.idx.Search(ctx, req)
-		if err != nil {
-			sendErr(errCh, fmt.Errorf("shared index search: %w", err))
-			return
-		}
-
-		matched := 0
-		capped := false
-		for {
-			ev, err := stream.Recv()
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if err != nil {
-				if ctx.Err() != nil {
-					return // caller canceled — not an error worth surfacing
-				}
-				sendErr(errCh, fmt.Errorf("shared index stream: %w", err))
-				return
-			}
-			switch e := ev.GetEvent().(type) {
-			case *indexv1.SearchEvent_Match:
-				select {
-				case matchCh <- indexwire.ConsumedFromMatch(topic, e.Match):
-					matched++
-				case <-ctx.Done():
-					return
-				}
-			case *indexv1.SearchEvent_Progress:
-				if e.Progress.GetDone() {
-					if n := int(e.Progress.GetMatched()); n > matched {
-						matched = n
-					}
-					if e.Progress.GetCapped() {
-						capped = true
-					}
-				}
-			case *indexv1.SearchEvent_Coverage:
-				// Leading coverage frame — already gated in covers(); ignore.
-			}
-		}
-
-		// A daemon predating the capped field has no capped field and leaves it false, so
-		// do not trust the flag alone: receiving exactly the requested limit
-		// means the limit bound. Inferring it here keeps a truncated result
-		// from reading as complete against an un-redeployed daemon.
-		if !capped && matched > 0 && matched == int(req.GetLimit()) {
-			capped = true
-		}
-
-		select {
-		case progCh <- kafka.DeepSearchProgress{
-			Elapsed: time.Since(start),
-			Matches: matched,
-			Source:  kafka.SourceSharedIndex,
-			Capped:  capped,
-			Done:    true,
-		}:
-		default:
-		}
-	}()
+	go c.runSearch(ctx, topic, params, matchCh, progCh, errCh)
 
 	return matchCh, progCh, errCh
+}
+
+func (c *Client) runSearch(
+	ctx context.Context,
+	topic string,
+	params kafka.SearchParams,
+	matchCh chan<- kafka.ConsumedMessage,
+	progCh chan<- kafka.DeepSearchProgress,
+	errCh chan<- error,
+) {
+	defer close(matchCh)
+	defer close(progCh)
+	defer close(errCh)
+
+	start := time.Now()
+	req := indexwire.QueryParamsToRequest(topic, toQueryParams(params))
+	stream, err := c.idx.Search(ctx, req)
+	if err != nil {
+		sendErr(errCh, fmt.Errorf("shared index search: %w", err))
+		return
+	}
+
+	tally, complete, err := relayStream(ctx, stream, topic, matchCh)
+	if !complete {
+		if err != nil {
+			sendErr(errCh, err)
+		}
+		return
+	}
+
+	// A daemon predating the capped field has no capped field and leaves it false, so
+	// do not trust the flag alone: receiving exactly the requested limit
+	// means the limit bound. Inferring it here keeps a truncated result
+	// from reading as complete against an un-redeployed daemon.
+	if !tally.capped && tally.matched > 0 && tally.matched == int(req.GetLimit()) {
+		tally.capped = true
+	}
+
+	select {
+	case progCh <- kafka.DeepSearchProgress{
+		Elapsed: time.Since(start),
+		Matches: tally.matched,
+		Source:  kafka.SourceSharedIndex,
+		Capped:  tally.capped,
+		Done:    true,
+	}:
+	default:
+	}
+}
+
+// searchTally is what the daemon's stream reported: matches forwarded (or the
+// daemon's own count, if higher) and whether it hit the limit.
+type searchTally struct {
+	matched int
+	capped  bool
+}
+
+// relayStream forwards the daemon's matches to matchCh until the stream ends.
+// complete is false when it stopped early — ctx canceled, or the stream failed
+// with err, which the caller surfaces.
+func relayStream(
+	ctx context.Context,
+	stream indexv1.Index_SearchClient,
+	topic string,
+	matchCh chan<- kafka.ConsumedMessage,
+) (searchTally, bool, error) {
+	var tally searchTally
+	for {
+		ev, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return tally, true, nil
+		}
+		if err != nil {
+			return tally, false, streamFailure(ctx, err)
+		}
+		switch e := ev.GetEvent().(type) {
+		case *indexv1.SearchEvent_Match:
+			select {
+			case matchCh <- indexwire.ConsumedFromMatch(topic, e.Match):
+				tally.matched++
+			case <-ctx.Done():
+				return tally, false, nil
+			}
+		case *indexv1.SearchEvent_Progress:
+			tally.observe(e.Progress)
+		case *indexv1.SearchEvent_Coverage:
+			// Leading coverage frame — already gated in covers(); ignore.
+		}
+	}
+}
+
+// streamFailure is the error a failed stream surfaces: none when the caller
+// canceled, since that is not an error worth surfacing.
+func streamFailure(ctx context.Context, err error) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+		return fmt.Errorf("shared index stream: %w", err)
+	}
+}
+
+// observe folds in the daemon's terminal progress frame.
+func (t *searchTally) observe(p *indexv1.Progress) {
+	if !p.GetDone() {
+		return
+	}
+	if n := int(p.GetMatched()); n > t.matched {
+		t.matched = n
+	}
+	if p.GetCapped() {
+		t.capped = true
+	}
 }
 
 // follow registers topic with the daemon so the next search of it is warm.

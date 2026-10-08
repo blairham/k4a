@@ -145,82 +145,36 @@ const (
 	ViewSearch
 )
 
+// viewInfo is each view's display name and the resource tag its bottom
+// prompt shows.
+var viewInfo = map[ViewType]struct{ name, resource string }{
+	ViewTopics:        {"Topics", "topic"},
+	ViewTopicDetail:   {"Topic Detail", "partition"},
+	ViewGroups:        {"Groups", "group"},
+	ViewGroupDetail:   {"Group Detail", "offset"},
+	ViewCluster:       {"Cluster", "broker"},
+	ViewMessages:      {"Messages", "message"},
+	ViewMessageDetail: {"Message", "message"},
+	ViewProduce:       {"Produce", "produce"},
+	ViewCreateTopic:   {"Create Topic", "topic"},
+	ViewCreateACL:     {"Create ACL", "acl"},
+	ViewContext:       {"Contexts", "context"},
+	ViewACLs:          {"ACLs", "acl"},
+	ViewTopicConfig:   {"Topic Config", "config"},
+	ViewResetOffsets:  {"Reset Offsets", "offset"},
+	ViewBrokerDetail:  {"Broker Detail", "config"},
+	ViewSearch:        {"Search", "match"},
+}
+
 // ViewName returns the display name for a view.
 func ViewName(v ViewType) string {
-	switch v {
-	case ViewTopics:
-		return "Topics"
-	case ViewTopicDetail:
-		return "Topic Detail"
-	case ViewGroups:
-		return "Groups"
-	case ViewGroupDetail:
-		return "Group Detail"
-	case ViewCluster:
-		return "Cluster"
-	case ViewMessages:
-		return "Messages"
-	case ViewMessageDetail:
-		return "Message"
-	case ViewProduce:
-		return "Produce"
-	case ViewCreateTopic:
-		return "Create Topic"
-	case ViewCreateACL:
-		return "Create ACL"
-	case ViewContext:
-		return "Contexts"
-	case ViewACLs:
-		return "ACLs"
-	case ViewTopicConfig:
-		return "Topic Config"
-	case ViewResetOffsets:
-		return "Reset Offsets"
-	case ViewBrokerDetail:
-		return "Broker Detail"
-	case ViewSearch:
-		return "Search"
-	default:
-		return "Unknown"
+	if info, ok := viewInfo[v]; ok {
+		return info.name
 	}
+	return "Unknown"
 }
 
 // ViewResource returns the resource tag for the bottom prompt.
 func ViewResource(v ViewType) string {
-	switch v {
-	case ViewTopics:
-		return "topic"
-	case ViewTopicDetail:
-		return "partition"
-	case ViewGroups:
-		return "group"
-	case ViewGroupDetail:
-		return "offset"
-	case ViewCluster:
-		return "broker"
-	case ViewMessages:
-		return "message"
-	case ViewMessageDetail:
-		return "message"
-	case ViewProduce:
-		return "produce"
-	case ViewCreateTopic:
-		return "topic"
-	case ViewCreateACL:
-		return "acl"
-	case ViewContext:
-		return "context"
-	case ViewACLs:
-		return "acl"
-	case ViewTopicConfig:
-		return "config"
-	case ViewResetOffsets:
-		return "offset"
-	case ViewBrokerDetail:
-		return "config"
-	case ViewSearch:
-		return "match"
-	default:
-		return ""
-	}
+	return viewInfo[v].resource
 }
