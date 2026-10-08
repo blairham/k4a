@@ -96,34 +96,51 @@ func (c *Client) ConsumeRange(
 			return nil
 		}
 		fetches := cl.PollFetches(ctx)
-		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, fe := range errs {
-				if ctx.Err() != nil {
-					return nil
-				}
-				if IsAuthError(fe.Err) || isConnectionError(fe.Err) {
-					return fe.Err
-				}
-			}
+		if stop, err := fatalFetchError(ctx, fetches); stop {
+			return err
 		}
 		fetches.EachRecord(func(r *kgo.Record) {
-			end, ok := remaining[r.Partition]
-			if !ok {
-				return
-			}
-			if r.Offset >= end {
-				// This partition is done; remove from the tracking map
-				// so we don't keep counting overshoots.
-				delete(remaining, r.Partition)
-				return
-			}
-			onRecord(recordToConsumed(r))
-			if r.Offset+1 >= end {
-				delete(remaining, r.Partition)
-			}
+			consumeInRange(r, remaining, onRecord)
 		})
 	}
 	return nil
+}
+
+// consumeInRange hands r to onRecord if it is before its partition's end
+// offset in remaining, and drops the partition from remaining once it is done.
+func consumeInRange(r *kgo.Record, remaining map[int32]int64, onRecord func(ConsumedMessage)) {
+	end, ok := remaining[r.Partition]
+	if !ok {
+		return
+	}
+	if r.Offset >= end {
+		// This partition is done; remove from the tracking map
+		// so we don't keep counting overshoots.
+		delete(remaining, r.Partition)
+		return
+	}
+	onRecord(recordToConsumed(r))
+	if r.Offset+1 >= end {
+		delete(remaining, r.Partition)
+	}
+}
+
+// fatalFetchError reports whether a poll loop should stop: either ctx has
+// ended (stop with a nil error) or a fetch failed on auth or connectivity
+// (stop with that error). Other fetch errors are transient; keep polling.
+// ctx is only consulted when the poll carried errors.
+func fatalFetchError(ctx context.Context, fetches kgo.Fetches) (stop bool, err error) {
+	for _, fe := range fetches.Errors() {
+		select {
+		case <-ctx.Done():
+			return true, nil
+		default:
+		}
+		if IsAuthError(fe.Err) || isConnectionError(fe.Err) {
+			return true, fe.Err
+		}
+	}
+	return false, nil
 }
 
 // ConsumeBlocking reads messages from a topic and calls onMessage for each one.
@@ -163,15 +180,8 @@ func (c *Client) ConsumeBlocking(
 			return nil
 		}
 		fetches := cl.PollFetches(ctx)
-		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, fe := range errs {
-				if ctx.Err() != nil {
-					return nil
-				}
-				if IsAuthError(fe.Err) || isConnectionError(fe.Err) {
-					return fe.Err
-				}
-			}
+		if stop, err := fatalFetchError(ctx, fetches); stop {
+			return err
 		}
 		fetches.EachRecord(func(r *kgo.Record) {
 			onMessage(recordToConsumed(r))
@@ -248,16 +258,11 @@ func (c *Client) runConsume(
 			close(ready)
 			first = false
 		}
-		if errs := fetches.Errors(); len(errs) > 0 {
-			for _, fe := range errs {
-				if ctx.Err() != nil {
-					return
-				}
-				if IsAuthError(fe.Err) || isConnectionError(fe.Err) {
-					sendErr(errCh, fe.Err)
-					return
-				}
+		if stop, err := fatalFetchError(ctx, fetches); stop {
+			if err != nil {
+				sendErr(errCh, err)
 			}
+			return
 		}
 		fetches.EachRecord(func(r *kgo.Record) {
 			msg := recordToConsumed(r)

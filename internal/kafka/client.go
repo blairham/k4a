@@ -332,26 +332,7 @@ func (c *Client) FetchTopicSizes(ctx context.Context, topics []string) ([]TopicS
 		return nil, fmt.Errorf("fetching metadata: %w", err)
 	}
 
-	// leaders[topic][partition] = leader broker id. Also seeds the result set so
-	// a topic with zero on-disk bytes (freshly created) still appears.
-	leaders := make(map[string]map[int32]int32, len(tds))
-	acc := make(map[string]*TopicSize, len(tds))
-	for _, td := range tds.Sorted() {
-		if td.Err != nil {
-			continue
-		}
-		lm := make(map[int32]int32, len(td.Partitions))
-		for _, p := range td.Partitions {
-			lm[p.Partition] = p.Leader
-		}
-		leaders[td.Topic] = lm
-		acc[td.Topic] = &TopicSize{
-			Name:       td.Topic,
-			Partitions: len(td.Partitions),
-			Messages:   -1,
-			Internal:   td.IsInternal || strings.HasPrefix(td.Topic, "_"),
-		}
-	}
+	leaders, acc := seedTopicSizes(tds)
 
 	// Describe log dirs on every broker. On partial (shard) failures franz-go
 	// returns the successful shards alongside a *ShardErrors — keep what we got
@@ -371,17 +352,7 @@ func (c *Client) FetchTopicSizes(ctx context.Context, topics []string) ([]TopicS
 			return
 		}
 		d.Topics.Each(func(p kadm.DescribedLogDirPartition) {
-			if p.IsFuture {
-				return // in-flight reassignment replica; not part of the steady-state footprint
-			}
-			ts, ok := acc[p.Topic]
-			if !ok {
-				return // topic not in the requested set
-			}
-			ts.TotalBytes += p.Size
-			if lm, ok := leaders[p.Topic]; ok && lm[p.Partition] == p.Broker {
-				ts.LeaderBytes += p.Size
-			}
+			addLogDirPartition(p, leaders, acc)
 		})
 	})
 
@@ -390,6 +361,51 @@ func (c *Client) FetchTopicSizes(ctx context.Context, topics []string) ([]TopicS
 		out = append(out, *ts)
 	}
 	return out, nil
+}
+
+// seedTopicSizes builds leaders[topic][partition] = leader broker id, and seeds
+// the result set so a topic with zero on-disk bytes (freshly created) still
+// appears.
+func seedTopicSizes(tds kadm.TopicDetails) (leaders map[string]map[int32]int32, acc map[string]*TopicSize) {
+	leaders = make(map[string]map[int32]int32, len(tds))
+	acc = make(map[string]*TopicSize, len(tds))
+	for _, td := range tds.Sorted() {
+		if td.Err != nil {
+			continue
+		}
+		lm := make(map[int32]int32, len(td.Partitions))
+		for _, p := range td.Partitions {
+			lm[p.Partition] = p.Leader
+		}
+		leaders[td.Topic] = lm
+		acc[td.Topic] = &TopicSize{
+			Name:       td.Topic,
+			Partitions: len(td.Partitions),
+			Messages:   -1,
+			Internal:   td.IsInternal || strings.HasPrefix(td.Topic, "_"),
+		}
+	}
+	return leaders, acc
+}
+
+// addLogDirPartition adds one replica's on-disk size to its topic's totals,
+// and to the leader figure when the replica is on the partition's leader.
+func addLogDirPartition(
+	p kadm.DescribedLogDirPartition,
+	leaders map[string]map[int32]int32,
+	acc map[string]*TopicSize,
+) {
+	if p.IsFuture {
+		return // in-flight reassignment replica; not part of the steady-state footprint
+	}
+	ts, ok := acc[p.Topic]
+	if !ok {
+		return // topic not in the requested set
+	}
+	ts.TotalBytes += p.Size
+	if lm, ok := leaders[p.Topic]; ok && lm[p.Partition] == p.Broker {
+		ts.LeaderBytes += p.Size
+	}
 }
 
 // FetchTopicDetail returns detailed partition info for a topic including offsets.
@@ -423,43 +439,13 @@ func (c *Client) FetchTopicDetail(ctx context.Context, topic string) (*TopicDeta
 
 	rf := 0
 	for _, p := range td.Partitions.Sorted() {
-		replicas := make([]int, 0, len(p.Replicas))
-		for _, r := range p.Replicas {
-			replicas = append(replicas, int(r))
-		}
-		if len(replicas) > rf {
-			rf = len(replicas)
-		}
-		isr := make([]int, 0, len(p.ISR))
-		for _, r := range p.ISR {
-			isr = append(isr, int(r))
-		}
-
-		var first, last int64
-		if so, ok := starts.Lookup(topic, p.Partition); ok && so.Err == nil {
-			first = so.Offset
-		}
-		if eo, ok := ends.Lookup(topic, p.Partition); ok && eo.Err == nil {
-			last = eo.Offset
-		}
-		msgs := last - first
-		if msgs < 0 {
-			msgs = 0
-		}
-
-		detail.Partitions = append(detail.Partitions, PartitionInfo{
-			ID:          int(p.Partition),
-			Leader:      int(p.Leader),
-			Replicas:    replicas,
-			ISR:         isr,
-			FirstOffset: first,
-			LastOffset:  last,
-			Messages:    msgs,
-		})
-		detail.TotalISR += len(isr)
-		detail.TotalReplicas += len(replicas)
-		detail.TotalMessages += msgs
-		if len(isr) < len(replicas) {
+		pi := partitionInfo(topic, p, starts, ends)
+		rf = max(rf, len(pi.Replicas))
+		detail.Partitions = append(detail.Partitions, pi)
+		detail.TotalISR += len(pi.ISR)
+		detail.TotalReplicas += len(pi.Replicas)
+		detail.TotalMessages += pi.Messages
+		if len(pi.ISR) < len(pi.Replicas) {
 			detail.URP++
 		}
 	}
@@ -467,6 +453,36 @@ func (c *Client) FetchTopicDetail(ctx context.Context, topic string) (*TopicDeta
 
 	c.applyTopicConfig(ctx, topic, detail)
 	return detail, nil
+}
+
+// partitionInfo describes one partition. An offset whose lookup failed reads
+// as 0, and the message count is floored at 0.
+func partitionInfo(topic string, p kadm.PartitionDetail, starts, ends kadm.ListedOffsets) PartitionInfo {
+	var first, last int64
+	if so, ok := starts.Lookup(topic, p.Partition); ok && so.Err == nil {
+		first = so.Offset
+	}
+	if eo, ok := ends.Lookup(topic, p.Partition); ok && eo.Err == nil {
+		last = eo.Offset
+	}
+	return PartitionInfo{
+		ID:          int(p.Partition),
+		Leader:      int(p.Leader),
+		Replicas:    brokerInts(p.Replicas),
+		ISR:         brokerInts(p.ISR),
+		FirstOffset: first,
+		LastOffset:  last,
+		Messages:    max(last-first, 0),
+	}
+}
+
+// brokerInts widens a broker ID list to ints, never returning nil.
+func brokerInts(ids []int32) []int {
+	out := make([]int, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, int(id))
+	}
+	return out
 }
 
 // applyTopicConfig fetches cleanup.policy, retention.ms, and retention.bytes
@@ -482,24 +498,29 @@ func (c *Client) applyTopicConfig(ctx context.Context, topic string, detail *Top
 				continue
 			}
 			for _, cfg := range rc.Configs {
-				v := cfg.MaybeValue()
-				switch cfg.Key {
-				case "cleanup.policy":
-					detail.CleanupPolicy = v
-				case "retention.ms":
-					if n, perr := strconv.ParseInt(v, 10, 64); perr == nil {
-						detail.RetentionMs = n
-					}
-				case "retention.bytes":
-					if n, perr := strconv.ParseInt(v, 10, 64); perr == nil {
-						detail.RetentionBytes = n
-					}
-				}
+				detail.applyConfigEntry(cfg.Key, cfg.MaybeValue())
 			}
 		}
 	}
 	if detail.CleanupPolicy == "" {
 		detail.CleanupPolicy = "delete"
+	}
+}
+
+// applyConfigEntry records one topic config entry if it is one TopicDetail
+// shows; an unparseable retention value leaves the existing figure.
+func (d *TopicDetail) applyConfigEntry(key, v string) {
+	switch key {
+	case "cleanup.policy":
+		d.CleanupPolicy = v
+	case "retention.ms":
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			d.RetentionMs = n
+		}
+	case "retention.bytes":
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			d.RetentionBytes = n
+		}
 	}
 }
 
@@ -590,13 +611,9 @@ func (c *Client) FetchGroupDetail(ctx context.Context, groupID string) (*GroupDe
 	}
 
 	// High watermarks for every topic the group has committed offsets on.
-	topics := make(map[string]struct{})
+	topicList := make([]string, 0, len(offsets))
 	for topic := range offsets {
-		topics[topic] = struct{}{}
-	}
-	topicList := make([]string, 0, len(topics))
-	for t := range topics {
-		topicList = append(topicList, t)
+		topicList = append(topicList, topic)
 	}
 	ends, endsErr := c.admin.ListEndOffsets(ctx, topicList...)
 	if endsErr != nil {
@@ -604,6 +621,27 @@ func (c *Client) FetchGroupDetail(ctx context.Context, groupID string) (*GroupDe
 	}
 
 	detail.Offsets = make([]GroupOffsetInfo, 0)
+	eachCommitted(offsets, ends, func(topic string, partition int32, committed, high int64) {
+		lag := max(high-committed, 0)
+		detail.Offsets = append(detail.Offsets, GroupOffsetInfo{
+			Topic:           topic,
+			Partition:       int(partition),
+			CommittedOffset: committed,
+			HighWatermark:   high,
+			Lag:             lag,
+		})
+		detail.TotalLag += lag
+	})
+	return detail, nil
+}
+
+// eachCommitted calls fn for every committed offset that fetched without
+// error, with its partition's high watermark (0 when ends has none for it).
+func eachCommitted(
+	offsets kadm.OffsetResponses,
+	ends kadm.ListedOffsets,
+	fn func(topic string, partition int32, committed, high int64),
+) {
 	for topic, parts := range offsets {
 		for partition, or := range parts {
 			if or.Err != nil {
@@ -613,21 +651,9 @@ func (c *Client) FetchGroupDetail(ctx context.Context, groupID string) (*GroupDe
 			if eo, ok := ends.Lookup(topic, partition); ok && eo.Err == nil {
 				high = eo.Offset
 			}
-			lag := high - or.At
-			if lag < 0 {
-				lag = 0
-			}
-			detail.Offsets = append(detail.Offsets, GroupOffsetInfo{
-				Topic:           topic,
-				Partition:       int(partition),
-				CommittedOffset: or.At,
-				HighWatermark:   high,
-				Lag:             lag,
-			})
-			detail.TotalLag += lag
+			fn(topic, partition, or.At, high)
 		}
 	}
-	return detail, nil
 }
 
 // memberAssignmentTopics extracts assigned topics from a described group
@@ -686,20 +712,11 @@ func (c *Client) FetchGroupsEnrichment(ctx context.Context, groupIDs []string) m
 		}
 		if fr, ok := fetched[gid]; ok {
 			e.Topics = len(fr.Fetched)
-			for topic, parts := range fr.Fetched {
-				for partition, or := range parts {
-					if or.Err != nil {
-						continue
-					}
-					var high int64
-					if eo, ok := ends.Lookup(topic, partition); ok && eo.Err == nil {
-						high = eo.Offset
-					}
-					if lag := high - or.At; lag > 0 {
-						e.TotalLag += lag
-					}
+			eachCommitted(fr.Fetched, ends, func(_ string, _ int32, committed, high int64) {
+				if lag := high - committed; lag > 0 {
+					e.TotalLag += lag
 				}
-			}
+			})
 		}
 		result[gid] = e
 	}

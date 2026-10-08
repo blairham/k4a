@@ -80,18 +80,10 @@ func NewClientOpts(cfg AuthConfig, brokers string) ([]kgo.Opt, error) {
 		return append(opts, kgo.DialTLSConfig(tlsCfg), kgo.SASL(mech)), nil
 
 	case AuthMTLS:
-		if cfg.CertFile == "" || cfg.KeyFile == "" || cfg.CAFile == "" {
-			return nil, errors.New("mtls auth requires a cert file, key file and CA file")
-		}
-		tlsCfg, err := newTLSConfig(cfg)
+		tlsCfg, err := newMTLSConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
-		cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("loading client certificate: %w", err)
-		}
-		tlsCfg.Certificates = []tls.Certificate{cert}
 		return append(opts, kgo.DialTLSConfig(tlsCfg)), nil
 
 	case AuthIAM:
@@ -104,6 +96,23 @@ func NewClientOpts(cfg AuthConfig, brokers string) ([]kgo.Opt, error) {
 	default:
 		return nil, fmt.Errorf("unknown auth method %q (want plaintext, tls, scram, mtls or iam)", cfg.Method)
 	}
+}
+
+// newMTLSConfig is newTLSConfig plus the client certificate mTLS presents.
+func newMTLSConfig(cfg AuthConfig) (*tls.Config, error) {
+	if cfg.CertFile == "" || cfg.KeyFile == "" || cfg.CAFile == "" {
+		return nil, errors.New("mtls auth requires a cert file, key file and CA file")
+	}
+	tlsCfg, err := newTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("loading client certificate: %w", err)
+	}
+	tlsCfg.Certificates = []tls.Certificate{cert}
+	return tlsCfg, nil
 }
 
 // iamMechanism signs the MSK IAM handshake with credentials resolved from

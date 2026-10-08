@@ -313,28 +313,7 @@ func (c *Client) ChangeReplicationFactor(ctx context.Context, topic string, newR
 
 	var req kadm.AlterPartitionAssignmentsReq
 	for _, p := range td.Partitions.Sorted() {
-		current := p.Replicas
-		currentSet := make(map[int32]bool, len(current))
-		for _, r := range current {
-			currentSet[r] = true
-		}
-
-		var replicas []int32
-		if newRF <= len(current) {
-			replicas = current[:newRF]
-		} else {
-			replicas = make([]int32, len(current), newRF)
-			copy(replicas, current)
-			for _, bid := range brokerIDs {
-				if len(replicas) >= newRF {
-					break
-				}
-				if !currentSet[bid] {
-					replicas = append(replicas, bid)
-				}
-			}
-		}
-		req.Assign(topic, p.Partition, replicas)
+		req.Assign(topic, p.Partition, resizeReplicas(p.Replicas, newRF, brokerIDs))
 	}
 
 	resps, err := c.admin.AlterPartitionAssignments(ctx, req)
@@ -345,6 +324,30 @@ func (c *Client) ChangeReplicationFactor(ctx context.Context, topic string, newR
 		return fmt.Errorf("alter partition reassignments: %w", err)
 	}
 	return nil
+}
+
+// resizeReplicas returns a replica list of length newRF: current truncated
+// when shrinking, or current extended with brokers it does not already use,
+// in brokerIDs order, when growing.
+func resizeReplicas(current []int32, newRF int, brokerIDs []int32) []int32 {
+	if newRF <= len(current) {
+		return current[:newRF]
+	}
+	currentSet := make(map[int32]bool, len(current))
+	for _, r := range current {
+		currentSet[r] = true
+	}
+	replicas := make([]int32, len(current), newRF)
+	copy(replicas, current)
+	for _, bid := range brokerIDs {
+		if len(replicas) >= newRF {
+			break
+		}
+		if !currentSet[bid] {
+			replicas = append(replicas, bid)
+		}
+	}
+	return replicas
 }
 
 // OffsetResetMode describes how offsets should be reset.

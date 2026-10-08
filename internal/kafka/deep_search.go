@@ -216,60 +216,31 @@ func (c *Client) runDeepSearch(
 	scanCtx, scanCancel := context.WithCancel(ctx)
 	defer scanCancel()
 
-	var (
-		scanned   atomic.Int64
-		bytesRd   atomic.Int64
-		matches   atomic.Int64
-		done      atomic.Int64
-		capped    atomic.Bool
-		truncated atomic.Bool
-	)
-	start := time.Now()
-
-	snapshot := func(terminal bool) DeepSearchProgress {
-		return DeepSearchProgress{
-			Elapsed:        time.Since(start),
-			Scanned:        scanned.Load(),
-			Total:          totalScan,
-			Bytes:          bytesRd.Load(),
-			Matches:        int(matches.Load()),
-			Partitions:     len(ranges),
-			DonePartitions: int(done.Load()),
-			Capped:         capped.Load(),
-			Truncated:      truncated.Load(),
-			Done:           terminal,
-		}
+	ds := &deepScan{
+		topic:      topic,
+		re:         params.Pattern,
+		prefilter:  extractPrefilter(params.Pattern),
+		scope:      params.effectiveScope(),
+		until:      params.Until,
+		matchCap:   params.effectiveCap(),
+		matchCh:    matchCh,
+		cancelAll:  scanCancel,
+		partitions: len(ranges),
+		total:      totalScan,
+		start:      time.Now(),
 	}
 
 	progDone := make(chan struct{})
 	go func() {
 		defer close(progDone)
-		tick := time.NewTicker(time.Second / deepSearchProgressHz)
-		defer tick.Stop()
-		for {
-			select {
-			case <-scanCtx.Done():
-				return
-			case <-tick.C:
-				emitProgress(progCh, snapshot(false))
-			}
-		}
+		ds.tickProgress(scanCtx, progCh)
 	}()
-
-	prefilter := extractPrefilter(params.Pattern)
-	scope := params.effectiveScope()
-	matchCap := params.effectiveCap()
-	until := params.Until
 
 	var wg sync.WaitGroup
 	for _, r := range ranges {
 		wg.Go(func() {
-			defer done.Add(1)
-			c.scanPartitionReverse(
-				scanCtx, topic, r, params.Pattern, prefilter, scope, until, matchCap,
-				matchCh, &scanned, &bytesRd, &matches, &capped, &truncated, scanCancel,
-				len(ranges),
-			)
+			defer ds.done.Add(1)
+			c.scanPartitionReverse(scanCtx, ds, r)
 		})
 	}
 	wg.Wait()
@@ -281,8 +252,62 @@ func (c *Client) runDeepSearch(
 	// non-terminal snapshot in the size-1 progCh buffer. Block until the
 	// consumer reads (or ctx ends), then let the deferred close fire.
 	select {
-	case progCh <- snapshot(true):
+	case progCh <- ds.snapshot(true):
 	case <-ctx.Done():
+	}
+}
+
+// deepScan is the state one deep search shares across every partition and
+// chunk it scans: the match criteria, the output channel, and the counters
+// progress is reported from.
+type deepScan struct {
+	start      time.Time
+	until      time.Time
+	re         *regexp.Regexp
+	matchCh    chan<- ConsumedMessage
+	cancelAll  context.CancelFunc
+	topic      string
+	prefilter  []byte
+	scanned    atomic.Int64
+	bytesRd    atomic.Int64
+	matches    atomic.Int64
+	done       atomic.Int64
+	total      int64
+	matchCap   int
+	partitions int
+	capped     atomic.Bool
+	truncated  atomic.Bool
+	scope      SearchScope
+}
+
+// snapshot is the scan's progress so far; terminal marks the final report.
+func (ds *deepScan) snapshot(terminal bool) DeepSearchProgress {
+	return DeepSearchProgress{
+		Elapsed:        time.Since(ds.start),
+		Scanned:        ds.scanned.Load(),
+		Total:          ds.total,
+		Bytes:          ds.bytesRd.Load(),
+		Matches:        int(ds.matches.Load()),
+		Partitions:     ds.partitions,
+		DonePartitions: int(ds.done.Load()),
+		Capped:         ds.capped.Load(),
+		Truncated:      ds.truncated.Load(),
+		Done:           terminal,
+	}
+}
+
+// tickProgress emits a non-terminal snapshot deepSearchProgressHz times a
+// second until ctx ends.
+func (ds *deepScan) tickProgress(ctx context.Context, progCh chan<- DeepSearchProgress) {
+	tick := time.NewTicker(time.Second / deepSearchProgressHz)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			emitProgress(progCh, ds.snapshot(false))
+		}
 	}
 }
 
@@ -305,13 +330,8 @@ func (c *Client) deepSearchRanges(
 	// If Since is set, replace the per-partition start with the offset of the
 	// first record at or after that timestamp — anything older is outside the
 	// search window and can be skipped wholesale.
-	if !params.Since.IsZero() {
-		sinceCtx, sinceCancel := context.WithTimeout(ctx, fetchRecentTimeout)
-		defer sinceCancel()
-		sinceOffsets, sinceErr := c.admin.ListOffsetsAfterMilli(sinceCtx, params.Since.UnixMilli(), topic)
-		if sinceErr == nil {
-			starts = sinceOffsets
-		}
+	if sinceOffsets, ok := c.offsetsAfter(ctx, topic, params.Since); ok {
+		starts = sinceOffsets
 	}
 
 	endsCtx, endsCancel := context.WithTimeout(ctx, fetchRecentTimeout)
@@ -330,14 +350,7 @@ func (c *Client) deepSearchRanges(
 	// This only trims whole offsets that are certainly outside the window; the
 	// per-record Until filter in scanRange still runs, because records are not
 	// strictly time-ordered within a partition.
-	var untilOffsets kadm.ListedOffsets
-	if !params.Until.IsZero() {
-		untilCtx, untilCancel := context.WithTimeout(ctx, fetchRecentTimeout)
-		defer untilCancel()
-		if o, uErr := c.admin.ListOffsetsAfterMilli(untilCtx, params.Until.UnixMilli(), topic); uErr == nil {
-			untilOffsets = o
-		}
-	}
+	untilOffsets, _ := c.offsetsAfter(ctx, topic, params.Until)
 
 	allow := partitionAllowSet(params.Partitions)
 
@@ -348,36 +361,63 @@ func (c *Client) deepSearchRanges(
 				continue
 			}
 		}
-		if eo.Err != nil {
-			continue
+		if r, ok := scanRangeFor(topic, partition, eo, starts, untilOffsets); ok {
+			ranges = append(ranges, r)
 		}
-		so, ok := starts.Lookup(topic, partition)
-		if !ok || so.Err != nil {
-			continue
-		}
-		// ListOffsetsAfterMilli returns -1 for partitions with no record past
-		// the timestamp; skip those (nothing to scan in window).
-		if so.Offset < 0 {
-			continue
-		}
-		last := eo.Offset
-		if untilOffsets != nil {
-			// A -1 here means no record exists at or after Until, so
-			// everything through the high watermark is in window.
-			if uo, uok := untilOffsets.Lookup(topic, partition); uok && uo.Err == nil && uo.Offset >= 0 {
-				last = min(last, uo.Offset)
-			}
-		}
-		if last <= so.Offset {
-			continue
-		}
-		ranges = append(ranges, partitionRange{
-			id:    partition,
-			first: so.Offset,
-			last:  last,
-		})
 	}
 	return ranges, nil
+}
+
+// offsetsAfter lists, per partition, the first offset at or after t. ok is
+// false when t is zero or the lookup failed; callers then keep their default
+// bound.
+func (c *Client) offsetsAfter(ctx context.Context, topic string, t time.Time) (kadm.ListedOffsets, bool) {
+	if t.IsZero() {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, fetchRecentTimeout)
+	defer cancel()
+	o, err := c.admin.ListOffsetsAfterMilli(ctx, t.UnixMilli(), topic)
+	if err != nil {
+		return nil, false
+	}
+	return o, true
+}
+
+// scanRangeFor is the offset range to scan in one partition: from its start
+// (or first record since the window opened) to its high watermark, pulled
+// back to untilOffsets when that bound is known. ok is false when there is
+// nothing to scan.
+func scanRangeFor(
+	topic string,
+	partition int32,
+	eo kadm.ListedOffset,
+	starts, untilOffsets kadm.ListedOffsets,
+) (partitionRange, bool) {
+	if eo.Err != nil {
+		return partitionRange{}, false
+	}
+	so, ok := starts.Lookup(topic, partition)
+	if !ok || so.Err != nil {
+		return partitionRange{}, false
+	}
+	// ListOffsetsAfterMilli returns -1 for partitions with no record past
+	// the timestamp; skip those (nothing to scan in window).
+	if so.Offset < 0 {
+		return partitionRange{}, false
+	}
+	last := eo.Offset
+	if untilOffsets != nil {
+		// A -1 here means no record exists at or after Until, so
+		// everything through the high watermark is in window.
+		if uo, uok := untilOffsets.Lookup(topic, partition); uok && uo.Err == nil && uo.Offset >= 0 {
+			last = min(last, uo.Offset)
+		}
+	}
+	if last <= so.Offset {
+		return partitionRange{}, false
+	}
+	return partitionRange{id: partition, first: so.Offset, last: last}, true
 }
 
 // partitionAllowSet returns a lookup set for the configured partition filter,
@@ -434,27 +474,13 @@ func planReverseChunks(first, last int64) []chunkSpan {
 // the call is a silent no-op. A client constructed at some other offset would
 // therefore scan its first span from the wrong position, emitting that region
 // twice and never reading the span it was asked for.
-func (c *Client) scanPartitionReverse(
-	ctx context.Context,
-	topic string,
-	r partitionRange,
-	re *regexp.Regexp,
-	prefilter []byte,
-	scope SearchScope,
-	until time.Time,
-	matchCap int,
-	matchCh chan<- ConsumedMessage,
-	scanned, bytesRd, matches *atomic.Int64,
-	capped, truncated *atomic.Bool,
-	cancelAll context.CancelFunc,
-	partitions int,
-) {
+func (c *Client) scanPartitionReverse(ctx context.Context, ds *deepScan, r partitionRange) {
 	spans := planReverseChunks(r.first, r.last)
 	if len(spans) == 0 {
 		return
 	}
 
-	workers := min(subWorkerCount(r.last-r.first, partitions), len(spans))
+	workers := min(subWorkerCount(r.last-r.first, ds.partitions), len(spans))
 
 	spanCh := make(chan chunkSpan, len(spans))
 	for _, s := range spans {
@@ -465,47 +491,50 @@ func (c *Client) scanPartitionReverse(
 	var wg sync.WaitGroup
 	for range workers {
 		wg.Go(func() {
-			var cl *kgo.Client
-			defer func() {
-				if cl != nil {
-					cl.Close()
-				}
-			}()
-
-			for span := range spanCh {
-				if ctx.Err() != nil {
-					return
-				}
-
-				if cl == nil {
-					// First span for this worker: position via the
-					// constructor, the only positioning that is honored
-					// before the partition has ever been polled.
-					var err error
-					if cl, err = c.newScanClient(topic, r.id, span.start); err != nil {
-						truncated.Store(true)
-						return
-					}
-				} else {
-					cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
-						topic: {r.id: {Offset: span.start, Epoch: -1}},
-					})
-				}
-
-				switch scanRange(
-					ctx, cl, span.start, span.end, re, prefilter, scope, until, matchCap,
-					matchCh, scanned, bytesRd, matches, capped, cancelAll,
-				) {
-				case scanComplete:
-				case scanShort:
-					truncated.Store(true)
-				case scanAbort:
-					return
-				}
-			}
+			c.scanSpans(ctx, ds, r.id, spanCh)
 		})
 	}
 	wg.Wait()
+}
+
+// scanSpans is one sub-worker: it scans spans off spanCh until the queue is
+// empty or the scan aborts, on a client it builds at its first span.
+func (c *Client) scanSpans(ctx context.Context, ds *deepScan, partition int32, spanCh <-chan chunkSpan) {
+	var cl *kgo.Client
+	defer func() {
+		if cl != nil {
+			cl.Close()
+		}
+	}()
+
+	for span := range spanCh {
+		if ctx.Err() != nil {
+			return
+		}
+
+		if cl == nil {
+			// First span for this worker: position via the
+			// constructor, the only positioning that is honored
+			// before the partition has ever been polled.
+			var err error
+			if cl, err = c.newScanClient(ds.topic, partition, span.start); err != nil {
+				ds.truncated.Store(true)
+				return
+			}
+		} else {
+			cl.SetOffsets(map[string]map[int32]kgo.EpochOffset{
+				ds.topic: {partition: {Offset: span.start, Epoch: -1}},
+			})
+		}
+
+		switch ds.scanRange(ctx, cl, span.start, span.end) {
+		case scanComplete:
+		case scanShort:
+			ds.truncated.Store(true)
+		case scanAbort:
+			return
+		}
+	}
 }
 
 // newScanClient builds a fresh kgo.Client tuned for bulk scanning a single
@@ -575,6 +604,9 @@ const (
 	scanShort
 	// scanAbort means the whole scan is over: ctx done or the match cap hit.
 	scanAbort
+	// scanContinue is scanRecord's "keep reading"; a chunk scan never ends
+	// with it.
+	scanContinue
 )
 
 // scanRange reads messages in [start, end) from cl, emitting matches.
@@ -593,23 +625,9 @@ const (
 // from too far back re-walks records it already emitted and, if those counted
 // toward `consumed`, would burn the chunk's budget on the wrong offsets. That
 // is precisely how the chunked-scan bug produced duplicates and a short read at once.
-func scanRange(
-	ctx context.Context,
-	cl *kgo.Client,
-	start, end int64,
-	re *regexp.Regexp,
-	prefilter []byte,
-	scope SearchScope,
-	until time.Time,
-	matchCap int,
-	matchCh chan<- ConsumedMessage,
-	scanned, bytesRd, matches *atomic.Int64,
-	capped *atomic.Bool,
-	cancelAll context.CancelFunc,
-) scanOutcome {
+func (ds *deepScan) scanRange(ctx context.Context, cl *kgo.Client, start, end int64) scanOutcome {
 	expected := end - start
 	var consumed int64
-	hasUntil := !until.IsZero()
 
 	for consumed < expected {
 		if ctx.Err() != nil {
@@ -631,57 +649,60 @@ func scanRange(
 			return scanShort
 		}
 
-		var stop, abort bool
+		outcome := scanContinue
 		fetches.EachRecord(func(r *kgo.Record) {
-			if stop || abort {
-				return
-			}
-			if r.Offset >= end {
-				stop = true
-				return
-			}
-			if r.Offset < start {
-				// Outside this chunk — belongs to an older span. Do not
-				// count it against `expected` and do not emit it.
-				return
-			}
-			consumed++
-			scanned.Add(1)
-			bytesRd.Add(int64(len(r.Key) + len(r.Value)))
-
-			// Time upper bound: skip records past Until without ending the
-			// chunk (records aren't strictly time-ordered within a partition
-			// the way offsets are, so we keep scanning).
-			if hasUntil && r.Timestamp.After(until) {
-				return
-			}
-
-			if !recordMatches(r, re, prefilter, scope) {
-				return
-			}
-
-			n := matches.Add(1)
-			if int(n) > matchCap {
-				capped.Store(true)
-				cancelAll()
-				abort = true
-				return
-			}
-
-			select {
-			case matchCh <- recordToConsumed(r):
-			case <-ctx.Done():
-				abort = true
+			if outcome == scanContinue {
+				outcome = ds.scanRecord(ctx, r, start, end, &consumed)
 			}
 		})
-		if abort {
-			return scanAbort
-		}
-		if stop {
-			return scanComplete
+		if outcome != scanContinue {
+			return outcome
 		}
 	}
 	return scanComplete
+}
+
+// scanRecord handles one polled record of the chunk [start, end), counting it
+// in consumed when it is in range. It returns scanContinue to keep reading,
+// scanComplete when the record is past the chunk, or scanAbort when the match
+// cap is hit or ctx ends while emitting.
+func (ds *deepScan) scanRecord(ctx context.Context, r *kgo.Record, start, end int64, consumed *int64) scanOutcome {
+	if r.Offset >= end {
+		return scanComplete
+	}
+	if r.Offset < start {
+		// Outside this chunk — belongs to an older span. Do not
+		// count it against `expected` and do not emit it.
+		return scanContinue
+	}
+	*consumed++
+	ds.scanned.Add(1)
+	ds.bytesRd.Add(int64(len(r.Key) + len(r.Value)))
+
+	// Time upper bound: skip records past Until without ending the
+	// chunk (records aren't strictly time-ordered within a partition
+	// the way offsets are, so we keep scanning).
+	if !ds.until.IsZero() && r.Timestamp.After(ds.until) {
+		return scanContinue
+	}
+
+	if !recordMatches(r, ds.re, ds.prefilter, ds.scope) {
+		return scanContinue
+	}
+
+	n := ds.matches.Add(1)
+	if int(n) > ds.matchCap {
+		ds.capped.Store(true)
+		ds.cancelAll()
+		return scanAbort
+	}
+
+	select {
+	case ds.matchCh <- recordToConsumed(r):
+		return scanContinue
+	case <-ctx.Done():
+		return scanAbort
+	}
 }
 
 // recordMatches reports whether r matches re in the configured scope.
