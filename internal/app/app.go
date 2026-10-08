@@ -25,8 +25,27 @@ func Run() int {
 
 	c := cli.NewCLI("k4a", info.Version)
 	c.Args = os.Args[1:]
+	c.Commands = commands(info)
 
-	c.Commands = map[string]cli.CommandFactory{
+	// Default to "ui" when the first arg is not a known subcommand.
+	if len(os.Args) > 1 {
+		if _, ok := c.Commands[os.Args[1]]; !ok && os.Args[1] != "--help" && os.Args[1] != "-h" {
+			c.Args = append([]string{"ui"}, os.Args[1:]...)
+		}
+	} else {
+		c.Args = append([]string{"ui"}, c.Args...)
+	}
+
+	exitStatus, err := c.Run()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	}
+	return exitStatus
+}
+
+// commands is the subcommand table.
+func commands(info version.Info) map[string]cli.CommandFactory {
+	return map[string]cli.CommandFactory{
 		"ui": func() (cli.Command, error) {
 			return &command.UICommand{Version: info.Version}, nil
 		},
@@ -92,19 +111,4 @@ func Run() int {
 			return &command.MCPCommand{Version: info.Version}, nil
 		},
 	}
-
-	// Default to "ui" when the first arg is not a known subcommand.
-	if len(os.Args) > 1 {
-		if _, ok := c.Commands[os.Args[1]]; !ok && os.Args[1] != "--help" && os.Args[1] != "-h" {
-			c.Args = append([]string{"ui"}, os.Args[1:]...)
-		}
-	} else {
-		c.Args = append([]string{"ui"}, c.Args...)
-	}
-
-	exitStatus, err := c.Run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-	}
-	return exitStatus
 }

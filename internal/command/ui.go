@@ -151,21 +151,7 @@ func (c *UICommand) Run(args []string) int {
 		}
 	}
 
-	// Load config for in-TUI context switching.
-	cfgPath := flags.ConfigFile
-	if cfgPath == "" {
-		cfgPath = config.DefaultConfigPath()
-	}
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		cfg = &config.Config{}
-	}
-	if flags.Logoless {
-		cfg.UI.Logoless = true
-	}
-	if flags.Readonly {
-		cfg.UI.Readonly = true
-	}
+	cfg, cfgPath := loadUIConfig(&flags)
 	app := tui.NewApp(client, connInfo, cfg, cfgPath, c.Version)
 	if pickContext {
 		app.SetAwaitingContext()
@@ -190,6 +176,26 @@ func (c *UICommand) Run(args []string) int {
 	}
 
 	return 0
+}
+
+// loadUIConfig loads the config for in-TUI context switching, falling back to
+// an empty one, and applies the UI flags over it.
+func loadUIConfig(flags *UIFlags) (cfg *config.Config, cfgPath string) {
+	cfgPath = flags.ConfigFile
+	if cfgPath == "" {
+		cfgPath = config.DefaultConfigPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		cfg = &config.Config{}
+	}
+	if flags.Logoless {
+		cfg.UI.Logoless = true
+	}
+	if flags.Readonly {
+		cfg.UI.Readonly = true
+	}
+	return cfg, cfgPath
 }
 
 func (c *UICommand) upgradeAndRestart(ctxName string) int {

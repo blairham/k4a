@@ -13,6 +13,8 @@ import (
 
 	"github.com/charmbracelet/log"
 	goflags "github.com/jessevdk/go-flags"
+
+	"github.com/blairham/k4a/internal/kafka"
 )
 
 // alterConfigTimeout bounds the whole command. Each topic costs one
@@ -137,23 +139,10 @@ func (c *AlterConfigCmd) Run(args []string) int {
 	failed := false
 	for _, topic := range topics {
 		for _, op := range ops {
-			var opErr error
-			if op.Delete {
-				opErr = client.DeleteTopicConfigOverride(ctx, topic, op.Key)
-			} else {
-				opErr = client.AlterTopicConfig(ctx, topic, op.Key, op.Value)
-			}
-			if opErr != nil {
-				// Keep going: one rejected key must not silently strand the
-				// remaining topics in a half-applied state with no report.
-				log.Error("altering config failed", "topic", topic, "key", op.Key, "err", opErr)
+			// Keep going on failure: one rejected key must not silently strand
+			// the remaining topics in a half-applied state with no report.
+			if !applyConfigOp(ctx, client, topic, op) {
 				failed = true
-				continue
-			}
-			if op.Delete {
-				fmt.Printf("%s: removed override %s (now inherited)\n", topic, op.Key)
-			} else {
-				fmt.Printf("%s: set %s=%s\n", topic, op.Key, op.Value)
 			}
 		}
 	}
@@ -162,6 +151,27 @@ func (c *AlterConfigCmd) Run(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// applyConfigOp applies one operation to one topic and reports the outcome,
+// returning false if the broker rejected it.
+func applyConfigOp(ctx context.Context, client *kafka.Client, topic string, op configOp) bool {
+	var err error
+	if op.Delete {
+		err = client.DeleteTopicConfigOverride(ctx, topic, op.Key)
+	} else {
+		err = client.AlterTopicConfig(ctx, topic, op.Key, op.Value)
+	}
+	if err != nil {
+		log.Error("altering config failed", "topic", topic, "key", op.Key, "err", err)
+		return false
+	}
+	if op.Delete {
+		fmt.Printf("%s: removed override %s (now inherited)\n", topic, op.Key)
+	} else {
+		fmt.Printf("%s: set %s=%s\n", topic, op.Key, op.Value)
+	}
+	return true
 }
 
 // parseConfigOps turns the repeatable --delete and --set flags into an ordered
