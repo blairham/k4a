@@ -983,6 +983,23 @@ func TestMessagesViewHandleKeySearch(t *testing.T) {
 	}
 }
 
+// TestMessagesViewHandleKeyPurge pins ctrl+d to the purge action the hint
+// bar advertises. It used to fall through to navigation and do nothing.
+func TestMessagesViewHandleKeyPurge(t *testing.T) {
+	t.Parallel()
+
+	v := NewMessagesView(nil, testTopicTail)
+	v.Resize(80, 20)
+
+	action, param := v.HandleKey("ctrl+d")
+	if action != "confirm_purge_topic" {
+		t.Errorf("ctrl+d: action=%q, want confirm_purge_topic", action)
+	}
+	if param != testTopicTail {
+		t.Errorf("ctrl+d: param=%q, want %q (topic)", param, testTopicTail)
+	}
+}
+
 func TestMessagesViewConsumerError(t *testing.T) {
 	t.Parallel()
 
