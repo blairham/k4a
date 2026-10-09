@@ -3,10 +3,11 @@ name: CI
 # Everything that gates a merge. Pre-commit, Detect changed files, Build and
 # test and Fuzz are blairham/.github's go-ci.yml, and the Dockerfile check is
 # its go-image.yml; their checks report as `CI / <job>` and
-# `Image / Build image`. The Helm chart job is this repository's own: it
-# `needs: ci` and gates its steps on `needs.ci.outputs.code == 'true'`
-# (never a job-level `if:` or a `paths:` filter: a required check that never
-# runs is pending forever).
+# `Image / Build image`. The Helm chart job is this repository's own. Both
+# `needs: changes` (go-changes.yml, so they need not wait for all of go-ci)
+# and gate their steps on `needs.changes.outputs.code == 'true'` (never a
+# job-level `if:` or a `paths:` filter: a required check that never runs is
+# pending forever).
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
@@ -28,33 +29,37 @@ concurrency:
 jobs:
   ci:
     name: CI
-    uses: blairham/.github/.github/workflows/go-ci.yml@99060d62d0693570a360127ab698307d276630da # v0.0.0
+    uses: blairham/.github/.github/workflows/go-ci.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
     with:
       # All three binaries, and the generated gRPC code current. The tests
       # include every fuzz target's seed corpus; no Kafka needed.
       build-command: make build && make check-proto && go vet ./...
 
+  changes:
+    name: Changes
+    uses: blairham/.github/.github/workflows/go-changes.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
+
   # Build only; a v* tag publishes (release.yml). Both images, one after the
   # other: the second shares the build stage, so it is mostly cache.
   image:
     name: Image
-    needs: ci
-    uses: blairham/.github/.github/workflows/go-image.yml@99060d62d0693570a360127ab698307d276630da # v0.0.0
+    needs: changes
+    uses: blairham/.github/.github/workflows/go-image.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
     with:
-      run: ${{ needs.ci.outputs.code == 'true' }}
+      run: ${{ needs.changes.outputs.code == 'true' }}
       targets: '["index", "mcp"]'
 
   # Lints both charts and renders them, including that k4a-index still refuses
   # to render without an allowlist.
   charts:
     name: Helm chart
-    needs: ci
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.ci.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true'
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        if: needs.ci.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true'
       - name: Lint and render
-        if: needs.ci.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true'
         run: make helm-lint
