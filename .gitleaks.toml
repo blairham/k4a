@@ -1,4 +1,10 @@
-# gitleaks configuration: the default rules, nothing allowlisted. Add an
-# entry here only with the reason it is not a secret.
+# gitleaks configuration for k4a: the default rules, nothing
+# allowlisted.
+#
+# Rendered from blairham/.github baseline/gitleaks.toml.tmpl by `make sync`.
+# An allowlist entry is an override (overrides/k4a.yml) and carries the
+# reason it is not a secret. Allowlist exact values, never a broad pattern: a
+# wildcard silences the rule that exists to catch a genuine key.
+
 [extend]
 useDefault = true

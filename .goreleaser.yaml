@@ -193,9 +193,10 @@ brews:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-# The notes are the tag's CHANGELOG.md section, passed by goreleaser.yml with
-# --release-notes, which replaces the generated commit list. Do not set
-# `changelog.disable`: it skips the stage that reads --release-notes too.
+# The notes are the tag's CHANGELOG.md section, passed by release.yml
+# (go-release.yml) with --release-notes, which replaces the generated commit
+# list. Do not set `changelog.disable`: it skips the stage that reads
+# --release-notes too.
 
 release:
   draft: false

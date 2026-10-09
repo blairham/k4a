@@ -1,4 +1,8 @@
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+#
+# Rendered from blairham/.github baseline/dependabot.yml.tmpl by `make sync`.
+# Groups are derived from go.mod: a group appears when the module requires
+# something it covers. The docker ecosystem appears when there is a Dockerfile.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -9,22 +13,26 @@ updates:
     groups:
       # aws-sdk-go-v2 releases its modules together; one PR, not six.
       aws-sdk:
-        patterns: ["github.com/aws/aws-sdk-go-v2*"]
+        patterns:
+          - "github.com/aws/aws-sdk-go-v2*"
       # kgo, kadm and kmsg are versioned separately but released together.
       franz-go:
-        patterns: ["github.com/twmb/franz-go*"]
-      # bubbletea, bubbles, lipgloss and huh move as one major line, and
-      # tuikit builds on them.
+        patterns:
+          - "github.com/twmb/franz-go*"
+      # The Charm stack (bubbletea, bubbles, lipgloss) and tuikit, which builds
+      # on it, move as one line.
       charm:
         patterns:
           - "charm.land/*"
           - "github.com/charmbracelet/*"
           - "github.com/blairham/tuikit"
-      # The generated code in internal/indexwire/indexv1 is tied to both.
+      # Generated gRPC code is tied to both modules.
       grpc:
         patterns:
           - "google.golang.org/grpc"
           - "google.golang.org/protobuf"
+  # Bumps the SHA pins and their `# vX.Y.Z` comments together, including the
+  # pin on blairham/.github's reusable workflows.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -35,7 +43,7 @@ updates:
       interval: monthly
     ignore:
       # A Go minor bump moves go.mod and .tool-versions by hand, not as a lone
-      # Dockerfile bump. The mirror path makes the name docker/library/golang.
+      # Dockerfile bump. Digest and patch updates still come through.
       - dependency-name: docker/library/golang
         update-types:
           - version-update:semver-major

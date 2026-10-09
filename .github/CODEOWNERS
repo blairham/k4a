@@ -1,6 +1,3 @@
-# Every change needs the maintainer's review. cmd/k4a-index/ holds the
-# allowlist that decides which topics a shared, unauthenticated daemon will
-# persist and serve; internal/kafka/auth.go is where credentials meet TLS.
-*                          @blairham
-/cmd/k4a-index/            @blairham
-/internal/kafka/auth.go    @blairham
+# Every change needs the maintainer's review.
+# Rendered from blairham/.github baseline/CODEOWNERS.tmpl by `make sync`.
+*  @blairham

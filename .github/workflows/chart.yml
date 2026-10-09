@@ -1,15 +1,16 @@
 name: Publish charts
 
-# Publishes charts/k4a-index and charts/k4a-mcp to oci://ghcr.io/blairham/charts,
+# Publishes charts/k4a-index and charts/k4a-mcp to oci://ghcr.io/blairham/charts
+# and signs each by digest, keyless, through blairham/.github's go-chart.yml,
 # so a consumer can `helm install`/`helm template` a pinned version without
-# cloning the repository. The images are published by goreleaser.yml; these
-# are the charts that install them.
+# cloning the repository. The images are published by release.yml; these are
+# the charts that install them. go-chart.yml refuses a chart whose `version`
+# or `appVersion` does not match the tag.
 #
-# A separate workflow, not a step in goreleaser.yml, so a tag that predates it
+# A separate workflow, not a step in release.yml, so a tag that predates it
 # (or a push that failed) can be published by hand without re-running a
 # release whose GitHub release and images already exist:
 #   gh workflow run chart.yml -f tag=v0.0.0
-
 on:
   push:
     tags:
@@ -26,70 +27,12 @@ permissions:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    name: Charts
     permissions:
       contents: read
       packages: write # the charts on ghcr.io
       id-token: write # keyless cosign
-    strategy:
-      fail-fast: false
-      matrix:
-        chart: [k4a-index, k4a-mcp]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-
-      # Both fields, not just appVersion: the chart is pushed under `version`,
-      # and an unset image.tag falls back to `appVersion`. Either one lagging
-      # the tag publishes a chart that installs the wrong binary or overwrites
-      # the wrong version.
-      - name: Confirm the chart names this version
-        env:
-          TAG: ${{ inputs.tag || github.ref_name }}
-          CHART: ${{ matrix.chart }}
-        run: |
-          set -euo pipefail
-          chart="charts/$CHART/Chart.yaml"
-          version="$(sed -n 's/^version: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$chart")"
-          app="$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$chart")"
-          if [ "$version" != "${TAG#v}" ] || [ "$app" != "${TAG#v}" ]; then
-            echo "::error::$chart version=$version appVersion=$app, but the tag is $TAG"
-            exit 1
-          fi
-
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Package and push
-        id: push
-        env:
-          TAG: ${{ inputs.tag || github.ref_name }}
-          CHART: ${{ matrix.chart }}
-          GH_ACTOR: ${{ github.actor }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io --username "$GH_ACTOR" --password-stdin
-          helm package "charts/$CHART" --destination "$RUNNER_TEMP/chart"
-          out="$(helm push "$RUNNER_TEMP/chart/$CHART-${TAG#v}.tgz" oci://ghcr.io/blairham/charts 2>&1)"
-          echo "$out"
-          digest="$(printf '%s\n' "$out" | sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\)$/\1/p')"
-          if [ -z "$digest" ]; then
-            echo "::error::helm push printed no digest"
-            exit 1
-          fi
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      # Signed by digest, keyless, like the images (see SECURITY.md).
-      - name: Sign the chart
-        env:
-          CHART: ${{ matrix.chart }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-          GH_ACTOR: ${{ github.actor }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$GH_TOKEN" | cosign login ghcr.io --username "$GH_ACTOR" --password-stdin
-          cosign sign --yes "ghcr.io/blairham/charts/$CHART@${DIGEST}"
+    uses: blairham/.github/.github/workflows/go-chart.yml@99060d62d0693570a360127ab698307d276630da # v0.0.0
+    with:
+      tag: ${{ inputs.tag }}
+      charts: '["k4a-index", "k4a-mcp"]'

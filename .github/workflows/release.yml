@@ -1,0 +1,52 @@
+name: Release
+
+# A v* tag is the release. blairham/.github's go-release.yml runs GoReleaser,
+# which publishes the k4a archives and Homebrew formula, pushes
+# ghcr.io/blairham/k4a-index and ghcr.io/blairham/k4a-mcp (amd64 and arm64),
+# signs checksums.txt with keyless cosign, and attests build provenance for
+# the archives and both images. The notes are the tag's CHANGELOG.md section,
+# and it refuses a tag either chart's appVersion does not name. The signing
+# identity is go-release.yml itself; SECURITY.md shows how to verify it. The
+# charts are published by chart.yml.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.0.1). Must already exist. Leave empty for a dry run."
+        required: false
+        type: string
+      dry-run:
+        description: "Build with GoReleaser --snapshot; publish, sign and attest nothing."
+        required: false
+        type: boolean
+        default: false
+
+# Read-only by default; the release job asks for exactly what it writes.
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Release
+    permissions:
+      contents: write # the GitHub release and its assets
+      packages: write # the images on ghcr.io
+      id-token: write # keyless cosign and provenance signing
+      attestations: write # store the provenance in the repository's attestations
+    uses: blairham/.github/.github/workflows/go-release.yml@99060d62d0693570a360127ab698307d276630da # v0.0.0
+    with:
+      tag: ${{ inputs.tag }}
+      snapshot: ${{ inputs.dry-run == true }}
+      images: '["ghcr.io/blairham/k4a-index", "ghcr.io/blairham/k4a-mcp"]'
+      charts: '["charts/k4a-index", "charts/k4a-mcp"]'
+    secrets:
+      # A fine-grained token with contents:write on blairham/homebrew-tap only.
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+      MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+      MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+      MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}

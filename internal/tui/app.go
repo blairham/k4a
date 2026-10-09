@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blair Hamilton
 // SPDX-License-Identifier: Apache-2.0
 
+// Package tui is k4a's interactive terminal UI: the bubbletea App, its view
+// stack, key and command dispatch, and the background refreshes that feed
+// the views.
 package tui
 
 import (

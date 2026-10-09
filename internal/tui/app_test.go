@@ -1779,6 +1779,7 @@ func TestRefreshMsgHasErrorAllTypes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := refreshMsgHasError(tt.msg)
 			if got != tt.want {
 				t.Errorf("refreshMsgHasError(%T) = %v, want %v", tt.msg, got, tt.want)
