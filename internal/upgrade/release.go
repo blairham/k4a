@@ -57,11 +57,13 @@ type client struct {
 	token   string // sent to the API only; may be empty
 }
 
-func newClient() *client {
+// newClient asks `gh` for a token under ctx, so a canceled upgrade does not
+// wait out the token lookup.
+func newClient(ctx context.Context) *client {
 	return &client{
 		http:    &http.Client{Timeout: 5 * time.Minute},
 		apiBase: "https://api.github.com",
-		token:   resolveGitHubToken(),
+		token:   resolveGitHubToken(ctx),
 	}
 }
 

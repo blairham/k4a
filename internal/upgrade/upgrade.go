@@ -78,7 +78,7 @@ func Run(ctx context.Context, currentVersion string, w io.Writer) (string, error
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-	return run(ctx, newClient(), currentVersion, exe, runtime.GOOS, runtime.GOARCH, w)
+	return run(ctx, newClient(ctx), currentVersion, exe, runtime.GOOS, runtime.GOARCH, w)
 }
 
 func run(ctx context.Context, c *client, currentVersion, exe, goos, goarch string, w io.Writer) (string, error) {
@@ -139,7 +139,7 @@ func run(ctx context.Context, c *client, currentVersion, exe, goos, goarch strin
 // Check reports whether an update is available without installing it.
 // Returns the latest version and whether it is newer than currentVersion.
 func Check(ctx context.Context, currentVersion string) (string, bool, error) {
-	return check(ctx, newClient(), currentVersion)
+	return check(ctx, newClient(ctx), currentVersion)
 }
 
 func check(ctx context.Context, c *client, currentVersion string) (string, bool, error) {
@@ -178,8 +178,8 @@ func cleanVersion(current string) (clean string, dev bool) {
 	return clean, false
 }
 
-func resolveGitHubToken() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+func resolveGitHubToken(ctx context.Context) string {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	if out, err := exec.CommandContext(ctx, "gh", "auth", "token").Output(); err == nil {
