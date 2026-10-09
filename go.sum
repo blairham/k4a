@@ -126,8 +126,8 @@ github.com/bits-and-blooms/bitset v1.24.6 h1:qcrftZUVBIwfs+m+nhoCBAPT+ZPZZjti8Sb
 github.com/bits-and-blooms/bitset v1.24.6/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/bkielbasa/cyclop v1.2.3 h1:faIVMIGDIANuGPWH031CZJTi2ymOQBULs9H21HSMa5w=
 github.com/bkielbasa/cyclop v1.2.3/go.mod h1:kHTwA9Q0uZqOADdupvcFJQtp/ksSnytRMe8ztxG8Fuo=
-github.com/blairham/tuikit v0.0.23 h1:TKDEbdIa8IaNDxs9RtfBSJXuR1JONN0TJknrTplNevw=
-github.com/blairham/tuikit v0.0.23/go.mod h1:IFkrgO1h3dmbbMxOhFigo0/zAc73As1iCMBI0mLksMk=
+github.com/blairham/tuikit v0.0.24 h1:SLwbhu43N2fEeZD4f+IQgMlXqWeb5F793wbIrtWvK4o=
+github.com/blairham/tuikit v0.0.24/go.mod h1:IFkrgO1h3dmbbMxOhFigo0/zAc73As1iCMBI0mLksMk=
 github.com/blevesearch/bleve/v2 v2.6.1 h1:47vLskRTqxvQEtxVPYHjf5KpOgzD2msslXFjvUQCgWQ=
 github.com/blevesearch/bleve/v2 v2.6.1/go.mod h1:Dvvx6ZoEBTOj6RSzfk0lEz0wce/qhe2yOUubXeuzd2c=
 github.com/blevesearch/bleve_index_api v1.4.1 h1:CYIyecFlI+/RYjzUm+NmDjYbSvk870Bb7f+Vl4b12q8=
