@@ -6,4 +6,4 @@
 # this file is rejected, and every module's `go` directive must equal this pin.
 # Move this pin and go.mod's `go` directive together. Go tools (golangci-lint,
 # gofumpt) are pinned in go.mod's `tool` block and run with `go tool`.
-golang 1.26.8
+golang 1.26.9

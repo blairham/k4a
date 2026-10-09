@@ -1,6 +1,11 @@
 # golangci-lint v2 configuration for k4a.
 # See: https://golangci-lint.run/usage/configuration/
 #
+# Rendered from blairham/.github baseline/golangci.yml.tmpl by `make sync`.
+# Edit the baseline (or, with a reason, the override file
+# overrides/k4a.yml), not this file: the weekly drift check
+# reports any difference.
+#
 # golangci-lint is pinned twice and the two must move together: go.mod's `tool`
 # block (`go tool golangci-lint`) and the hook `rev` in .pre-commit-config.yaml.
 
@@ -27,29 +32,29 @@ linters:
   enable:
     # Core linters (enabled by default)
     - errcheck # Check for unchecked errors
-    - govet # Go vet analysis
+    - govet # Suspicious constructs; the analyzers are in settings
     - ineffassign # Detect ineffectual assignments
-    - staticcheck # Static analysis (includes stylecheck, gosimple)
+    - staticcheck # The staticcheck rule set
     - unused # Check for unused constants, variables, functions and types
 
     # Code quality and style
-    - misspell # Finds commonly misspelled English words
     - whitespace # Detection of leading and trailing whitespace
     - unconvert # Remove unnecessary type conversions
     - unparam # Reports unused function parameters
-    - revive # Fast, configurable linter for Go
     - gocritic # Diagnostic, performance and style checks
     - goconst # Repeated strings that should be constants
+    - misspell # Commonly misspelled English words (US locale)
+    - revive # Configurable style linter (see settings for the rule set)
 
     # Bug detection
     - bodyclose # Check whether HTTP response body is closed
     - contextcheck # Check if function use a non-inherited context
-    - nilerr # Check for simultaneous return of nil error and invalid value
     - rowserrcheck # Check whether Err of rows is checked
     - sqlclosecheck # Check that sql.Rows and sql.Stmt are closed
     - errname # Checks sentinel errors are prefixed with Err
     - errorlint # Find code that will cause problems with error wrapping
     - forcetypeassert # Finds forced type assertions
+    - nilerr # Finds a nil return after a non-nil error check
     - nilnil # Checks for simultaneous return of nil error and nil value
     - noctx # Finds HTTP requests without context.Context
     - predeclared # Find code that shadows predeclared identifiers
@@ -95,15 +100,6 @@ linters:
           - nestif
           - goconst # test fixtures legitimately repeat literals (JSON, expected values)
           - noctx # httptest.NewRequest et al. are test-only, not real HTTP calls
-
-      # Path-scoped exceptions still awaiting a fix.
-      - path: internal/upgrade/upgrade.go
-        linters: [contextcheck]
-      - path: internal/tui/actions.go
-        linters: [revive]
-        text: "package-comments"
-      - path: internal/tui/app_test.go
-        linters: [tparallel]
 
       # Allow init() in main packages
       - path: cmd/

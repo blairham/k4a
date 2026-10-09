@@ -319,29 +319,41 @@ SSM parameter resolution for broker endpoints. Env var expansion with `$VAR`.
 
 ## CI/CD
 
-- `.github/workflows/ci.yml` — the required checks: **Pre-commit** (the same
-  pinned hooks as the local commit gate, via `blairham/go-pre-commit`),
-  **Detect changed files** (skips the code jobs for prose-only PRs without
-  leaving a check pending), **Build and test** (`make build`,
-  `make check-proto`, `go vet`, `go test -race`), **Build image** (both
-  Dockerfile targets, no push) and **Helm chart** (`make helm-lint`, which
-  also proves `charts/k4a-index` still refuses to render without an
-  allowlist). `codeql.yml` (security-extended) and `scorecard.yml` run
-  alongside. Every action is pinned by commit SHA with a `# vX.Y.Z` comment;
-  Dependabot moves the pins, the Go modules (aws-sdk, franz-go, Charm and
-  gRPC as groups) and the Dockerfile bases.
-- A **`v*` tag is what publishes**: `goreleaser.yml` runs GoReleaser, which
-  publishes `k4a` archives for Linux, macOS and Windows (amd64, arm64), a
-  cosign-signed `checksums.txt`, SLSA provenance for the archives, the
-  `k4a` formula in `blairham/homebrew-tap`, and the multi-arch images
-  `ghcr.io/blairham/k4a-index` and `ghcr.io/blairham/k4a-mcp`, each signed
-  and attested. The notes are the tag's `CHANGELOG.md` section. The release
-  refuses to publish when the CHANGELOG has no section for the tag or either
-  chart's `appVersion` does not match it. The first tag is `v0.0.0`.
-- The same tag runs `chart.yml`, which pushes `k4a-index` and `k4a-mcp` to
-  `oci://ghcr.io/blairham/charts/...` and signs each by digest; it refuses
-  unless both `version` and `appVersion` in each `Chart.yaml` match the tag.
-  Rerun it alone with `gh workflow run chart.yml -f tag=<tag>`. Read
+- **Shared baseline.** CI, release and the synced config files come from
+  [blairham/.github](https://github.com/blairham/.github), pinned by commit
+  SHA. `.golangci.yml`, `.editorconfig`, `.pre-commit-config.yaml`,
+  `.yamllint.yml`, `.gitleaks.toml`, `.github/dependabot.yml`,
+  `.github/CODEOWNERS`, `scorecard.yml` and `codeql.yml` are rendered there
+  by `make sync REPO=k4a DIR=<checkout>`: change them in blairham/.github,
+  not here, or the weekly drift check reports it. k4a has no overrides; a
+  lint finding is fixed in the code, not excluded.
+- `.github/workflows/ci.yml` — the required checks: **CI / Pre-commit**,
+  **CI / Detect changed files** (skips the code jobs for prose-only PRs
+  without leaving a check pending) and **CI / Build and test
+  (ubuntu-latest)** (`make build`, `make check-proto`, `go vet`,
+  `go test -race`), all from `go-ci.yml`, which also fuzzes on main and
+  weekly; **Image / Build image** (`go-image.yml`: both Dockerfile targets,
+  no push); and this repository's own **Helm chart** (`make helm-lint`,
+  which also proves `charts/k4a-index` still refuses to render without an
+  allowlist). `codeql.yml` (security-extended, required as **Analyze**) and
+  `scorecard.yml` run alongside. Every action is pinned by commit SHA with a
+  `# vX.Y.Z` comment; Dependabot moves the pins, the Go modules (aws-sdk,
+  franz-go, Charm and gRPC as groups) and the Dockerfile bases.
+- A **`v*` tag is what publishes**: `release.yml` calls `go-release.yml`,
+  which runs GoReleaser to publish `k4a` archives for Linux, macOS and
+  Windows (amd64, arm64), a cosign-signed `checksums.txt`, SLSA provenance
+  for the archives, the `k4a` formula in `blairham/homebrew-tap`, and the
+  multi-arch images `ghcr.io/blairham/k4a-index` and
+  `ghcr.io/blairham/k4a-mcp`, each signed and attested. The notes are the
+  tag's `CHANGELOG.md` section. The release refuses to publish when the
+  CHANGELOG has no section for the tag or either chart's `appVersion` does
+  not match it. `gh workflow run release.yml -f dry-run=true` builds it all
+  as a snapshot and publishes nothing.
+- The same tag runs `chart.yml` (`go-chart.yml`), which pushes `k4a-index`
+  and `k4a-mcp` to `oci://ghcr.io/blairham/charts/...` and signs each by
+  digest; it refuses unless both `version` and `appVersion` in each
+  `Chart.yaml` match the tag. Rerun it alone with
+  `gh workflow run chart.yml -f tag=<tag>`. Read
   `.claude/commands/release-tag.md` before cutting a tag.
 - The go-vulncheck commit hook fails a commit whose module graph reaches a
   known vulnerability; there is no `osv-scanner.toml` ignore list. Before

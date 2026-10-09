@@ -1,4 +1,5 @@
 # EditorConfig is awesome: https://editorconfig.org
+# Rendered from blairham/.github baseline/editorconfig.tmpl by `make sync`.
 root = true
 
 # Universal defaults — 2-space indent, LF, UTF-8, trim trailing whitespace

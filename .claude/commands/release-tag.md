@@ -4,8 +4,8 @@ argument-hint: "<version, e.g. v0.0.0>"
 allowed-tools: Bash(make:*), Bash(go test:*), Bash(go vet:*), Bash(go build:*), Read, Edit, Glob, Grep
 ---
 
-Cut a k4a release. Pushing a `v*` tag runs `.github/workflows/goreleaser.yml`,
-which publishes the `k4a` archives, the `k4a` formula in
+Cut a k4a release. Pushing a `v*` tag runs `.github/workflows/release.yml`
+(blairham/.github's `go-release.yml`), which publishes the `k4a` archives, the `k4a` formula in
 `blairham/homebrew-tap`, the multi-arch images `ghcr.io/blairham/k4a-index`
 and `ghcr.io/blairham/k4a-mcp`, a cosign-signed `checksums.txt`, signed
 images and SLSA provenance, with the tag's CHANGELOG section as the notes. It

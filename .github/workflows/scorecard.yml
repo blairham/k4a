@@ -4,6 +4,10 @@ name: Scorecard
 # protection, pinned dependencies, SAST, signed releases — and publishes the
 # result for the README badge.
 #
+# Rendered from blairham/.github baseline/scorecard.yml.tmpl by `make sync`.
+# Not a reusable workflow: publish_results only accepts a workflow that runs
+# in the repository it grades.
+#
 # ⚠ publish_results imposes restrictions on this workflow: no workflow- or
 # job-level `env:` or `defaults:`, no containers or services, and only the
 # actions used below. Anything else and the results are not published.
@@ -14,7 +18,7 @@ on:
   push:
     branches: [main]
   # A rename can make GitHub drop push events for a while, leaving the badge
-  # with no result under the new name until the weekly cron.
+  # with no result until the weekly cron; this re-runs it by hand.
   workflow_dispatch:
 
 permissions: read-all

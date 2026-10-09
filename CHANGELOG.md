@@ -14,6 +14,18 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   installs the release itself, so the build no longer links
   `golang.org/x/crypto/openpgp` (GO-2026-5932) and the go-vulncheck commit
   hook is back on (#17).
+- Releases, the images and the charts are now built, signed and attested by
+  the shared workflows in [blairham/.github](https://github.com/blairham/.github)
+  (`go-release.yml`, `go-chart.yml`), so the keyless signing identity is
+  that workflow rather than this repository's own; SECURITY.md has the new
+  verify commands and how to verify 0.0.1 and earlier.
+- `k4a upgrade` looks up a `gh` token under the upgrade's own context, so
+  canceling an upgrade no longer waits out the token lookup.
+
+### Security
+
+- Built with Go 1.26.9 (GO-2026-6603 to 6617 in `net/http` and
+  `crypto/tls`).
 
 ## [0.0.1] - 2026-10-08
 

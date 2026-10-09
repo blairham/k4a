@@ -1,5 +1,7 @@
 # yamllint configuration.
 #
+# Rendered from blairham/.github baseline/yamllint.yml.tmpl by `make sync`.
+#
 # Block sequences are indented under their parent key, the Kubernetes/Helm
 # convention. Prettier dedents them, so keep YAML out of format-on-save.
 extends: default
