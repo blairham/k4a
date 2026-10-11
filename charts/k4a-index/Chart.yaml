@@ -2,8 +2,8 @@ apiVersion: v2
 name: k4a-index
 description: Shared always-on Kafka index daemon (the k4a remote index)
 type: application
-version: 0.0.1
-appVersion: "0.0.1"
+version: 0.0.2
+appVersion: "0.0.2"
 keywords:
   - kafka
   - index

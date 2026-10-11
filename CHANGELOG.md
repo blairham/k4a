@@ -8,6 +8,13 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-10-09
+
+### Fixed
+
+- `ctrl-d` on the messages view now opens the purge prompt its hint bar
+  advertises; it used to fall through to navigation and do nothing (#24).
+
 ### Changed
 
 - `k4a upgrade` no longer depends on go-selfupdate: it finds, verifies and

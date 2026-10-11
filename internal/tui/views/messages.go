@@ -253,6 +253,11 @@ func (v *MessagesView) HandleKey(key string) (string, string) {
 	case "o":
 		// Switch to topic overview.
 		return "topic_detail", v.topic
+	case keyCtrlD:
+		// The hint bar offers Purge here as it does on topic detail; the
+		// app routes the action to the retention prompt (and refuses it
+		// in readonly mode), so the view only names it.
+		return "confirm_purge_topic", v.topic
 	case "p", "P", "a":
 		v.handlePartitionKey(key)
 	default:
