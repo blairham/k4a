@@ -132,6 +132,7 @@ var viewBindings = map[style.ViewType][]binding{
 	},
 	style.ViewACLs: {
 		{keyA, "Create", true},
+		{keyE, "Edit", true},
 		{keyCtrlD, descDelete, true},
 	},
 	style.ViewSearch: {

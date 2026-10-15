@@ -693,6 +693,24 @@ func aclPatternString(p kadm.ACLPattern) string {
 	}
 }
 
+// ReplaceACL swaps the binding old for next. Kafka has no in-place ACL
+// update, so it creates next and then deletes old: in that order a failure
+// part-way leaves both bindings rather than neither, and never a moment in
+// which the principal has lost access it is keeping. Replacing a binding
+// with itself is refused, since the delete would remove the only copy.
+func (c *Client) ReplaceACL(ctx context.Context, old ACLEntry, next CreateACLConfig) error {
+	if ACLEntry(next) == old {
+		return errors.New("the edited ACL is identical to the existing one")
+	}
+	if err := c.CreateACL(ctx, next); err != nil {
+		return fmt.Errorf("creating the replacement (the old ACL is unchanged): %w", err)
+	}
+	if err := c.DeleteACL(ctx, old); err != nil {
+		return fmt.Errorf("created the replacement but the old ACL is still in place: %w", err)
+	}
+	return nil
+}
+
 // DeleteACL deletes a single ACL binding identified by exact match on all fields.
 func (c *Client) DeleteACL(ctx context.Context, entry ACLEntry) error {
 	resourceType, err := parseResourceType(entry.ResourceType)
