@@ -110,6 +110,14 @@ matters for the auth surface:
 3. Config-file context fields.
 
 This is the kubectl-style flag-overrides-env-overrides-config pattern.
+Every connection flag takes part (`overlayAuth` in
+`internal/command/flags.go`, shared by the TUI and the headless
+commands): an empty value means "not set" and keeps the context's.
+`--region` therefore has no flag default — `us-east-1` is filled in only
+for a `--brokers` connection with no context behind it — so an explicit
+`--region us-east-1` still overrides a context in another region.
+`-k` can only turn verification off; it cannot re-enable it for a
+context with `insecure: true`.
 Env exists primarily for IAM profile/region (which often flow from the
 shell) and for SCRAM creds (which we'd rather not ask users to put on
 the command line).
