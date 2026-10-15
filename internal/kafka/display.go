@@ -6,6 +6,8 @@ package kafka
 import (
 	"encoding/hex"
 	"unicode/utf8"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 // bytesToDisplay converts raw record bytes into a string safe to render in the
@@ -42,6 +44,44 @@ func hasControlBytes(b []byte) bool {
 		}
 	}
 	return false
+}
+
+// The record headers Confluent Platform 8 serializers write a key's or value's
+// schema ID into when it is not prefixed to the payload.
+const (
+	KeySchemaIDHeader   = "__key_schema_id"
+	ValueSchemaIDHeader = "__value_schema_id"
+)
+
+// schemaIDHeaders returns copies of the last key and value schema-ID header
+// values, the ones Confluent's deserializer reads. A last header with a null
+// value means none, as it does there: the payload prefix applies.
+func schemaIDHeaders(hs []kgo.RecordHeader) (key, value []byte) {
+	for _, h := range hs {
+		switch h.Key {
+		case KeySchemaIDHeader:
+			key = cloneOrNil(h.Value)
+		case ValueSchemaIDHeader:
+			value = cloneOrNil(h.Value)
+		}
+	}
+	return key, value
+}
+
+func cloneOrNil(b []byte) []byte {
+	if b == nil {
+		return nil
+	}
+	return append([]byte{}, b...)
+}
+
+// rawCopy is framedCopy, except that a payload whose schema ID travels in a
+// header is kept whatever its first byte: it carries no prefix.
+func rawCopy(b, schemaID []byte) []byte {
+	if schemaID != nil {
+		return append([]byte{}, b...)
+	}
+	return framedCopy(b)
 }
 
 // framedCopy returns a copy of b when it could carry the Confluent

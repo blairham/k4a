@@ -741,10 +741,16 @@ type ConsumedMessage struct {
 	Topic   string
 	Headers []MessageHeader
 	// RawKey and RawValue keep the record bytes only when they could be
-	// schema-registry framed (a leading zero byte), for a display-side
-	// decoder; never serialized, so caches and indexes are unchanged.
-	RawKey        []byte   `json:"-"`
-	RawValue      []byte   `json:"-"`
+	// schema-registry framed (a leading zero byte, or a schema-ID header),
+	// for a display-side decoder; never serialized, so caches and indexes
+	// are unchanged.
+	RawKey   []byte `json:"-"`
+	RawValue []byte `json:"-"`
+	// KeySchemaID and ValueSchemaID are the raw values of the last
+	// KeySchemaIDHeader / ValueSchemaIDHeader, the Confluent Platform 8
+	// serializers' alternative to the payload prefix; nil when absent.
+	KeySchemaID   []byte   `json:"-"`
+	ValueSchemaID []byte   `json:"-"`
 	KeyDecoding   Decoding `json:"-"`
 	ValueDecoding Decoding `json:"-"`
 	Partition     int

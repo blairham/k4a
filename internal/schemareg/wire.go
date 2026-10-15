@@ -76,3 +76,41 @@ func ParseMessageIndexes(b []byte) (indexes []int, rest []byte, err error) {
 // maxIndexValue is far beyond any real schema's message count but small
 // enough to fit an int on every platform.
 const maxIndexValue = 1 << 20
+
+// magicByteGUID opens a schema reference that names the schema by its
+// 16-byte GUID rather than its numeric ID (Confluent Platform 8).
+const (
+	magicByteGUID  = 1
+	guidHeaderSize = 17
+)
+
+// schemaRef names a registry schema by numeric ID or, from Confluent
+// Platform 8, by GUID. Exactly one is set.
+type schemaRef struct {
+	guid string
+	id   int
+}
+
+// cacheKey is the Registry's cache key for the reference.
+func (s schemaRef) cacheKey() string {
+	if s.guid != "" {
+		return "guid:" + s.guid
+	}
+	return fmt.Sprintf("id:%d", s.id)
+}
+
+// ParseSchemaIDHeader reads the value of a __key_schema_id / __value_schema_id
+// record header: magic byte 1 and a 16-byte GUID (what Confluent's
+// HeaderSchemaIdSerializer writes), or magic byte 0 and a 4-byte ID; for
+// Protobuf the message-index path follows, returned as rest. ok is false for
+// anything else, so the caller can fall back to the payload prefix.
+func ParseSchemaIDHeader(b []byte) (id int, guid string, rest []byte, ok bool) {
+	if len(b) >= guidHeaderSize && b[0] == magicByteGUID {
+		g := b[1:guidHeaderSize]
+		return 0, fmt.Sprintf("%x-%x-%x-%x-%x", g[0:4], g[4:6], g[6:8], g[8:10], g[10:16]), b[guidHeaderSize:], true
+	}
+	if id, rest, ok := ParseHeader(b); ok {
+		return id, "", rest, true
+	}
+	return 0, "", nil, false
+}

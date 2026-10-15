@@ -36,6 +36,30 @@ with a NUL. Plain text and JSON never start with 0, so the check costs nothing
 for topics that do not use a registry: `ErrNotFramed` comes back without any
 network call.
 
+### Schema ID in a record header (Confluent Platform 8)
+
+A Confluent Platform 8 serializer configured with `HeaderSchemaIdSerializer`
+leaves the payload unprefixed and writes the schema reference to a record
+header, `__key_schema_id` or `__value_schema_id`:
+
+```
+byte 0       1 (a GUID follows), or 0 (a 4-byte ID follows, as above)
+bytes 1-16   the schema GUID, big-endian (UUID most then least significant bits)
+[Protobuf]   the message-index path, as above; nothing written means [0]
+```
+
+The names and layout are Confluent's own (`SchemaId`, `DualSchemaIdDeserializer`
+in confluentinc/schema-registry). `recordToConsumed` keeps the **last** such
+header (a null value meaning none), and the record's bytes whatever they start
+with, since there is no prefix to recognize them by. Precedence follows
+Confluent's deserializer: a parseable header wins over the payload prefix; one
+that does not parse falls back to the prefix, and only when the payload is not
+framed either does the field get a reason ("neither a GUID nor an ID"). A GUID
+is fetched with `GET /schemas/guids/{guid}` and cached beside numeric IDs; its
+numeric ID (for the subject/version label) comes from the response or
+`/schemas/guids/{guid}/ids`, preferring the default context, and failing that
+the card shows `guid ...` alone. `ParseSchemaIDHeader` is in `FuzzParseWire`.
+
 `ParseMessageIndexes` caps the path at 64 entries and each index at 2^20, so a
 hostile count cannot allocate before the bytes behind it are checked. Both
 parsers take bytes straight off a broker; `FuzzParseWire` checks they never
@@ -74,16 +98,15 @@ decoder), and decoding untrusted record bytes is exactly the path they sit on.
 | Format | Library | Notes |
 |---|---|---|
 | Avro | `linkedin/goavro/v2` | goavro cannot load named types from elsewhere, so a schema with references compiles as the union `[ref..., main]` (references depth first) and a payload decodes as that union by prefixing the main branch's index. Values render in Avro's JSON encoding (a union as `{"type": value}`), decimals as exact decimal strings and non-finite floats as strings. goavro preallocates an array block from its declared count, so its ceiling is lowered from 2^31 items to 2^20: one hostile record could otherwise allocate 32 GiB. |
-| Protobuf | `bufbuild/protocompile` + `google.golang.org/protobuf` | The registry returns `.proto` source; references become files named by their import path, compiled with protoc's standard imports and stubs of Confluent's built-in `confluent/meta.proto` and `confluent/type/decimal.proto` (its serializers never register those). The message-index path picks the message; `dynamicpb` decodes it and `protojson` renders it, compacted because protojson randomizes whitespace. |
+| Protobuf | `bufbuild/protocompile` + `google.golang.org/protobuf` | The registry returns `.proto` source; references become files named by their import path, compiled with protoc's standard imports, stubs of Confluent's built-in `confluent/meta.proto` and `confluent/type/decimal.proto`, and the sixteen `google/type/*.proto` files Confluent also treats as built in (`ProtobufSchema`), copied unmodified from googleapis at `886464f` so field numbers match real producers; its serializers never register any of them. A `google.protobuf.Any` is expanded when the schema's files (or the well-known `google.protobuf.*` types) define its type URL, recursively; one that names a type outside them, or whose bytes do not parse as it, renders as `{"@type": url, "value": base64}` instead of failing the record. The message-index path picks the message; `dynamicpb` decodes it and `protojson` renders it, compacted because protojson randomizes whitespace. |
 | JSON Schema | none | The payload is already JSON; it is compacted and checked to be JSON. The schema constrains producers and adds nothing to how the value reads, so it is not applied. |
 
 Reference chains are capped at 32 levels and each subject version is fetched
 once per compile, so a cycle cannot recurse forever.
 
-Not supported yet: Confluent Platform 8's schema GUID carried in a record
-header instead of the payload prefix, `google/type/*` imports (which
-Confluent also treats as built in), and `google.protobuf.Any` fields that
-name types outside the schema.
+Not supported: a GUID in the payload prefix (magic byte 1), which
+Confluent's serializers do not write; resolving an `Any` type URL through the
+registry rather than the schema's own imports.
 
 ## Configuration
 
@@ -102,7 +125,8 @@ unreadable CA) flashes an error and costs decoding, not the switch.
 ## Display
 
 `kafka.ConsumedMessage` keeps a copy of the key and value bytes only when they
-could be framed (at least five bytes, leading zero): a record's slices pin its
+could be framed (at least five bytes, leading zero, or a schema-ID header,
+whose value it keeps too as `KeySchemaID` / `ValueSchemaID`): a record's slices pin its
 whole fetch buffer, and nothing else needs them. The copies, and the
 `KeyDecoding` / `ValueDecoding` that record what the decoder did, are tagged
 `json:"-"`, so the search cache's on-disk shape does not change.
