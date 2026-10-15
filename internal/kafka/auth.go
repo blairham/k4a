@@ -180,10 +180,22 @@ func saslMechanism(cfg AuthConfig) (sasl.Mechanism, error) {
 	}
 }
 
+// errMTLSInsecure is returned for mtls with Insecure set. Presenting a client
+// certificate to a broker that was never verified authenticates you to
+// whoever answers, and mtls already requires the CA bundle that fixes the
+// verification failure, so the flag is refused rather than silently dropped.
+var errMTLSInsecure = errors.New(
+	"mtls auth does not honor --insecure (insecure: true on a context): " +
+		"it would present the client certificate to an unverified broker; fix the CA bundle given to --ca instead",
+)
+
 // newMTLSConfig is newTLSConfig plus the client certificate mTLS presents.
 func newMTLSConfig(cfg AuthConfig) (*tls.Config, error) {
 	if cfg.CertFile == "" || cfg.KeyFile == "" || cfg.CAFile == "" {
 		return nil, errors.New("mtls auth requires a cert file, key file and CA file")
+	}
+	if cfg.Insecure {
+		return nil, errMTLSInsecure
 	}
 	tlsCfg, err := newTLSConfig(cfg)
 	if err != nil {
