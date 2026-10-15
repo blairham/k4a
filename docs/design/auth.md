@@ -115,9 +115,10 @@ rather than `tls: false` because a re-saved context cannot tell `false` from
 "not set". Like `--insecure`, the flag can only turn TLS off over a context.
 
 Before connecting, the headless commands print a warning to stderr and the
-TUI prints it before taking the screen (`kafka.CleartextWarning`).
-`k4a-index` takes these methods from a config context today; its own
-`--no-tls` / `--oauth-*` flags and the warning log are tracked in #51. The wording is per mechanism: PLAIN sends the
+TUI prints it before taking the screen, and `k4a-index` logs it at warn
+(`kafka.CleartextWarning`). The daemon takes the same `--no-tls` and
+`--oauth-*` flags and `KAFKA_OAUTH_*` env, which its Helm chart renders from
+`kafka.noTLS` and `kafka.oauth`. The wording is per mechanism: PLAIN sends the
 password itself, OAUTHBEARER sends a replayable token, and SCRAM sends
 neither but exposes the exchange to offline guessing. In every case the
 traffic is unencrypted.
