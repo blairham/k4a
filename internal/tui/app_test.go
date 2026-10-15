@@ -3228,12 +3228,12 @@ func TestShortcutsAdvertiseOnlyWorkingActions(t *testing.T) {
 		}
 	}
 
-	for _, vt := range []style.ViewType{style.ViewGroupDetail, style.ViewCluster, style.ViewSearch} {
+	for _, vt := range []style.ViewType{style.ViewGroupDetail, style.ViewCluster} {
 		if advertises(vt, descFilter) {
 			t.Errorf("%s advertises Filter, but its SetFilter is a no-op", style.ViewName(vt))
 		}
 	}
-	for _, vt := range []style.ViewType{style.ViewGroups, style.ViewACLs, style.ViewTopicConfig} {
+	for _, vt := range []style.ViewType{style.ViewGroups, style.ViewACLs, style.ViewTopicConfig, style.ViewSearch} {
 		if !advertises(vt, descFilter) {
 			t.Errorf("%s stopped advertising Filter", style.ViewName(vt))
 		}

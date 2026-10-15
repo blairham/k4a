@@ -473,7 +473,10 @@ Matches from a whole-topic search (`s` in Messages, or `:search`), streamed as t
 | Key | Action |
 |-----|--------|
 | `enter` | View the matched message |
-| `e` | Export the matches so far to a JSONL file |
+| `s` | Edit the query and search again, in place |
+| `R` | Run the same search again (picks up records that arrived since) |
+| `/` | Filter the matches shown, by key or value; the scan is unchanged |
+| `e` | Export the matches so far (as filtered) to a JSONL file |
 
 ### Context Selector
 
@@ -535,7 +538,7 @@ Filter any list view with `/`:
 - `!/pattern` — negated filter (exclude matches)
 - Invalid regex falls back to literal match
 
-Available in Topics, Groups, Messages, ACLs, Topic Config, and Broker Detail views.
+Available in Topics, Groups, Messages, ACLs, Topic Config, Broker Detail and Search Results views.
 
 ## CLI Flags
 

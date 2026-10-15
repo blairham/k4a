@@ -136,8 +136,10 @@ var viewBindings = map[style.ViewType][]binding{
 	},
 	style.ViewSearch: {
 		{keyEnter, "View", true},
+		{keyS, "Edit Query", true},
+		{keyR, "Re-run", true},
 		{keyE, descExport, true},
-		{keyEsc, descBack, true},
+		{keyEsc, descBack, false},
 	},
 	style.ViewProduce:      formBindings,
 	style.ViewCreateTopic:  formBindings,
@@ -184,6 +186,7 @@ var filterViews = map[style.ViewType]bool{
 	style.ViewMessages:     true,
 	style.ViewACLs:         true,
 	style.ViewBrokerDetail: true,
+	style.ViewSearch:       true,
 }
 
 // tabKeys are the view-switch hotkeys, valid everywhere but in a form.
