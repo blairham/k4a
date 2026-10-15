@@ -50,12 +50,14 @@ func ValidateCreateTopic(cfg CreateTopicConfig) error {
 }
 
 func createTopicSizes(cfg CreateTopicConfig) (int32, int16, error) {
+	// Plain range comparisons on every path to the conversion, so the bound
+	// is visible to CodeQL's narrowing check; 0 is the one hole in -1..max.
 	p, rf := cfg.NumPartitions, cfg.ReplicationFactor
-	if p != -1 && (p < 1 || p > math.MaxInt32) {
+	if p < -1 || p == 0 || p > math.MaxInt32 {
 		return 0, 0, fmt.Errorf("partitions must be between 1 and %d (or -1 for the broker default), got %d",
 			math.MaxInt32, p)
 	}
-	if rf != -1 && (rf < 1 || rf > math.MaxInt16) {
+	if rf < -1 || rf == 0 || rf > math.MaxInt16 {
 		return 0, 0, fmt.Errorf("replication factor must be between 1 and %d (or -1 for the broker default), got %d",
 			math.MaxInt16, rf)
 	}
