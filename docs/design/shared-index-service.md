@@ -516,7 +516,11 @@ the rare failover's N× backfill is even a problem.
   demand-driven registration, a static pre-follow list (`config.prefollow` /
   `K4A_INDEX_TOPIC`) warms and pins hot topics before the first search;
   pinned topics are exempt from LRU/cap eviction. The bulk of the follow-set is
-  still demand-driven + allowlist-gated.
+  still demand-driven + allowlist-gated. A tail that ends on its own (topic
+  missing, metadata error, fatal fetch error) leaves the follow-set — its
+  worker stopped, its directory kept warm — so Coverage reports
+  `following=false`; the next Search or Follow re-registers it, pinned again
+  if it was pre-followed.
 
 ## Why this shape (vs alternatives)
 
