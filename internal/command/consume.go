@@ -5,6 +5,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -18,10 +19,12 @@ import (
 // ConsumeFlags defines flags for the consume command.
 type ConsumeFlags struct {
 	Topic string `short:"t" long:"topic"    env:"KAFKA_TOPIC" required:"true" description:"Topic to consume from"`
-	Group string `short:"g" long:"group"    env:"KAFKA_GROUP"                 description:"Consumer group ID"                                          default:"k4a"`
+	Group string `short:"g" long:"group"    env:"KAFKA_GROUP"                 description:"Consumer group ID"                                              default:"k4a"`
 	ConnectionFlags
 	Verbose bool `short:"v" long:"verbose"                                    description:"Show keys and partition/offset metadata"`
-	NoGroup bool `          long:"no-group"                                   description:"Consume without a consumer group (partition 0, from start)"`
+	NoGroup bool `          long:"no-group"                                   description:"Consume without a consumer group (every partition, from start)"`
+	// -1 is kafka.AllPartitions; int32 so go-flags rejects an out-of-range ID.
+	Partition int32 `long:"partition" default:"-1" description:"With --no-group, read only this partition"`
 }
 
 // ConsumeCommand implements the "consume" CLI command.
@@ -44,7 +47,8 @@ Options:
   -b, --brokers=BROKERS   Bootstrap servers, comma-separated
   -t, --topic=TOPIC       Topic to consume from (required)
   -g, --group=GROUP       Consumer group ID (default: k4a)
-      --no-group          Consume without a consumer group (partition 0, from start)
+      --no-group          Consume without a consumer group (every partition, from start)
+      --partition=N       With --no-group, read only partition N
   -a, --auth=METHOD       Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
       --username=USER     SASL/SCRAM username
       --password=PASS     SASL/SCRAM password # pragma: allowlist secret
@@ -90,6 +94,11 @@ func (c *ConsumeCommand) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	if err := validateConsumePartition(flags); err != nil {
+		log.Error("invalid flags", "err", err)
+		return 1
+	}
+
 	client, err := flags.BuildClient()
 	if err != nil {
 		log.Error(err.Error())
@@ -101,17 +110,21 @@ func (c *ConsumeCommand) Run(args []string) int {
 	defer cancel()
 
 	group := flags.Group
-	if flags.NoGroup {
+	switch {
+	case flags.NoGroup && flags.Partition == kafka.AllPartitions:
 		group = ""
-		fmt.Printf("Consuming from %s (no group, partition 0)...\n", flags.Topic)
-	} else {
+		fmt.Printf("Consuming from %s (no group, all partitions)...\n", flags.Topic)
+	case flags.NoGroup:
+		group = ""
+		fmt.Printf("Consuming from %s (no group, partition %d)...\n", flags.Topic, flags.Partition)
+	default:
 		fmt.Printf("Consuming from %s (group: %s)...\n", flags.Topic, flags.Group)
 	}
 	fmt.Println("Press Ctrl+C to stop.")
 	fmt.Println()
 
 	count := 0
-	err = client.ConsumeBlocking(ctx, flags.Topic, group, func(msg kafka.ConsumedMessage) {
+	err = client.ConsumeBlocking(ctx, flags.Topic, group, flags.Partition, func(msg kafka.ConsumedMessage) {
 		count++
 		if flags.Verbose {
 			fmt.Printf("[%d] partition=%d offset=%d key=%s\n%s\n\n",
@@ -127,4 +140,16 @@ func (c *ConsumeCommand) Run(args []string) int {
 
 	fmt.Printf("\nConsumed %d messages.\n", count)
 	return 0
+}
+
+// validateConsumePartition refuses a --partition that cannot be honored: a
+// group assigns its own partitions, and IDs below -1 do not exist.
+func validateConsumePartition(flags ConsumeFlags) error {
+	if flags.Partition < kafka.AllPartitions {
+		return fmt.Errorf("--partition must be a partition ID (0 or more), got %d", flags.Partition)
+	}
+	if flags.Partition != kafka.AllPartitions && !flags.NoGroup {
+		return errors.New("--partition needs --no-group: a consumer group assigns its own partitions")
+	}
+	return nil
 }
