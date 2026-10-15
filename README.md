@@ -399,7 +399,11 @@ Broker configuration entries with source, read-only, and sensitive flags.
 
 | Key | Action |
 |-----|--------|
+| `enter` | Edit the selected config on this broker (a per-broker dynamic override); asks for confirmation. An empty value removes the broker's override |
 | `d` | Toggle showing default configs |
+
+The broker decides which configs are dynamically updatable and refuses the
+rest; sensitive configs cannot be edited here.
 
 ### ACLs (`4`)
 

@@ -201,7 +201,10 @@ before overwriting.
 ### Broker Detail / Topic Config
 
 - `d` — toggle showing default configurations
-- `enter` — edit config value (topic config only)
+- `enter` — edit config value. In Broker Detail it sets a per-broker dynamic
+  override (`kafka.Client.AlterBrokerConfig`, IncrementalAlterConfigs) after a
+  y/n confirmation; an empty value removes the override. Sensitive entries are
+  not editable
 
 ### Context View
 
