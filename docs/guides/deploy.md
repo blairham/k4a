@@ -152,6 +152,8 @@ these via env vars, so in-cluster the env column is what you actually edit.
 | `--allow` | `K4A_INDEX_ALLOW` | *(none — **required**)* | Glob allowlist of topics the daemon may follow. Default-deny; an empty list is a startup error. Keep it in step with the daemon's Kafka read grant. |
 | `-t`, `--topic` | `K4A_INDEX_TOPIC` | *(empty)* | Topics to pre-follow (warm + pinned) at startup. Repeatable / comma-separated. Each must match `--allow`. |
 | `--max-followed` | `K4A_INDEX_MAX_FOLLOWED` | `256` | Hard cap on concurrently-followed topics; at the cap a new follow evicts the coldest. |
+| `--backfill-window` | `K4A_INDEX_BACKFILL_WINDOW` | `24h` | History a newly followed topic indexes before its live tail. `0` keeps the old start (the most recent ~100 records). |
+| `--backfill-max-records` | `K4A_INDEX_BACKFILL_MAX_RECORDS` | `1000000` | Cap on that history across the topic's partitions (split evenly); also how far behind a restarted index may be and still resume. `0` = no cap. |
 | `--evict-after` | `K4A_INDEX_EVICT_AFTER` | `168h` | Drop a topic not searched within this idle window (LRU). Pinned topics are exempt. |
 | `--topic-max-bytes` | `K4A_INDEX_TOPIC_MAX_BYTES` | `1GiB` | Per-topic index byte cap; oldest records are trimmed inline once exceeded. `0` disables. |
 | `--max-total-bytes` | `K4A_INDEX_MAX_TOTAL_BYTES` | `0` | Disk budget for the whole index root, measured on disk. Over budget the daemon deletes orphaned index dirs, then evicts the coldest non-pinned topics. Set it below the volume's size limit. `0` disables. |
@@ -186,7 +188,9 @@ The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 `K4A_INDEX_TOPIC`, `K4A_INDEX_MAX_FOLLOWED`, `K4A_INDEX_EVICT_AFTER`,
 `K4A_INDEX_TOPIC_MAX_BYTES`, `K4A_INDEX_MAX_TOTAL_BYTES`, the three
 `K4A_INDEX_DRAIN_STALL_*` values (`config.drainStall.*`),
-`K4A_INDEX_MAX_SEARCH_LIMIT` (`config.maxSearchLimit`), the listener's
+`K4A_INDEX_MAX_SEARCH_LIMIT` (`config.maxSearchLimit`),
+`K4A_INDEX_BACKFILL_WINDOW` / `K4A_INDEX_BACKFILL_MAX_RECORDS`
+(`config.backfill.window` / `.maxRecords`), the listener's
 `K4A_INDEX_TLS_*` and `K4A_INDEX_TOKEN_FILE` (`listener.*`, below),
 `K4A_INDEX_LISTEN` (from `service.port`), `K4A_INDEX_DATA_DIR`
 (`/data`), `K4A_INDEX_LOG_LEVEL` (`logLevel`), and the Kafka credential and
@@ -328,8 +332,12 @@ NetworkPolicy is on. There is still no pprof endpoint.
 ## Operating notes
 
 - **Restarting is cheap.** Storage is an `emptyDir` on purpose: the index
-  is fully reconstructable from the broker, so losing it costs about a
-  minute of re-warm and nothing else. Never reach for a PVC here.
+  is fully reconstructable from the broker, so losing it costs a re-warm
+  (a backfill of `--backfill-window` per topic) and nothing else. Never
+  reach for a PVC here. A container restart within the pod keeps the
+  volume: the daemon re-follows its saved follow-set
+  (`/data/k4a-index-followset.json`) and each index catches up from where
+  it stopped.
 - **Silence is the failure mode, not restarts.** The drain-stall watchdog
   exists because a wedged drain serves *nothing*, silently, for as long as
   nobody notices. If the daemon exits with a goroutine dump on stderr, that

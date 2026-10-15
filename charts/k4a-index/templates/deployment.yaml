@@ -122,6 +122,10 @@ spec:
               value: {{ .Values.config.topicMaxBytes | quote }}
             - name: K4A_INDEX_EVICT_AFTER
               value: {{ .Values.config.evictAfter | quote }}
+            - name: K4A_INDEX_BACKFILL_WINDOW
+              value: {{ .Values.config.backfill.window | quote }}
+            - name: K4A_INDEX_BACKFILL_MAX_RECORDS
+              value: {{ .Values.config.backfill.maxRecords | int64 | quote }}
             # Whole-index-root disk budget: reclaims orphaned dirs and evicts
             # the coldest topics before the volume fills and the kubelet
             # evicts the pod.
