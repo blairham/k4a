@@ -1846,11 +1846,11 @@ func TestRenderShortcutsAllViews(t *testing.T) {
 		app.height = 40
 		app.view = vt
 		lines := app.renderShortcuts()
-		// 4 view-switch hotkeys in column 1; each case has 4
-		// per-view actions plus 2 always-on (<r>, <:q>) in column 2.
-		// chrome.ShortcutGrid pads to max — so 6 rows.
-		if len(lines) != 6 {
-			t.Errorf("renderShortcuts() for view %d returned %d lines, want 6", vt, len(lines))
+		// 4 view-switch hotkeys in column 1, so at least 4 rows; the
+		// action column (per-view actions, <r> where it works, <:q>) is
+		// capped at the 6-row top section, which chrome reserves anyway.
+		if len(lines) < 4 || len(lines) > 6 {
+			t.Errorf("renderShortcuts() for view %d returned %d lines, want 4-6", vt, len(lines))
 		}
 	}
 }
@@ -3180,4 +3180,57 @@ func TestSearchCommandUsesActiveViewTopic(t *testing.T) {
 			t.Error("expected a flash explaining search needs a topic")
 		}
 	})
+}
+
+// TestShortcutsAdvertiseOnlyWorkingActions: a hint bar must not offer
+// Refresh on a view whose Refresh does nothing, nor Filter on a view whose
+// SetFilter does nothing.
+func TestShortcutsAdvertiseOnlyWorkingActions(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // the produce form looks for ~/.k4a/schemas
+
+	advertises := func(vt style.ViewType, desc string) bool {
+		for _, s := range actionShortcuts(vt) {
+			if s.Desc == desc {
+				return true
+			}
+		}
+		return false
+	}
+
+	all := map[style.ViewType]views.View{
+		style.ViewTopics:        views.NewTopicsView(nil),
+		style.ViewTopicDetail:   views.NewTopicDetailView(nil, "t"),
+		style.ViewTopicConfig:   views.NewTopicConfigView(nil, "t"),
+		style.ViewGroups:        views.NewGroupsView(nil),
+		style.ViewGroupDetail:   views.NewGroupDetailView(nil, "g"),
+		style.ViewCluster:       views.NewClusterView(nil),
+		style.ViewBrokerDetail:  views.NewBrokerDetailView(nil, kafka.BrokerInfo{}, false),
+		style.ViewMessages:      views.NewMessagesView(nil, "t"),
+		style.ViewMessageDetail: views.NewMessageDetailView(&kafka.ConsumedMessage{}),
+		style.ViewContext:       views.NewContextView(&config.Config{}, ""),
+		style.ViewACLs:          views.NewACLsView(nil),
+		style.ViewSearch:        views.NewSearchView(nil, "t", "q"),
+		style.ViewProduce:       views.NewProduceView(nil, "t"),
+		style.ViewCreateTopic:   views.NewCreateTopicView(nil),
+		style.ViewCreateACL:     views.NewCreateACLView(nil),
+		style.ViewResetOffsets:  views.NewResetOffsetsView(nil, "g"),
+	}
+	for vt, v := range all {
+		// Refresh returns the fetch as a Cmd without running it, so a nil
+		// client is fine: nil means there is nothing to refresh.
+		if got, want := advertises(vt, "Refresh"), v.Refresh() != nil; got != want {
+			t.Errorf("%s: advertises Refresh = %v, but Refresh does something = %v", style.ViewName(vt), got, want)
+		}
+	}
+
+	for _, vt := range []style.ViewType{style.ViewGroupDetail, style.ViewCluster, style.ViewSearch} {
+		if advertises(vt, descFilter) {
+			t.Errorf("%s advertises Filter, but its SetFilter is a no-op", style.ViewName(vt))
+		}
+	}
+	for _, vt := range []style.ViewType{style.ViewGroups, style.ViewACLs, style.ViewTopicConfig} {
+		if !advertises(vt, descFilter) {
+			t.Errorf("%s stopped advertising Filter", style.ViewName(vt))
+		}
+	}
 }
