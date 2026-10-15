@@ -165,6 +165,18 @@ repo root; see [`.mcp.json.example`](../../.mcp.json.example) in this repo:
 }
 ```
 
+If `k4a-mcp` asks for a bearer token (its `--token-file`), pass it as a
+header; keep the token in the environment rather than in a checked-in file:
+
+```bash
+claude mcp add --transport http --scope user \
+  k4a-index https://k4a-mcp.example.com/mcp \
+  --header "Authorization: Bearer $K4A_MCP_TOKEN"
+```
+
+In `.mcp.json`, `"headers": {"Authorization": "Bearer ${K4A_MCP_TOKEN}"}`
+expands the variable when Claude Code starts.
+
 Verify it's connected:
 
 ```bash

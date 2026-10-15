@@ -322,8 +322,11 @@ shelling out to a local scan. This ships as a **separate deployment**,
   scan any more than the local index can.
 
 Auth is deliberately *not* oauth2-proxy (remote MCP clients do
-OAuth2/bearer, not cookie-SSO); v1 is network-gated, with MCP OAuth or a
-bearer token a later add if needed.
+OAuth2/bearer, not cookie-SSO). The listener takes the same opt-in TLS,
+mTLS and shared bearer token as the gRPC port (#54, `internal/endpointauth`),
+which Claude Code sends as a header; MCP's own OAuth flow, and per-caller
+authorization, remain later work. Its hop to `k4a-index` presents that
+daemon's credentials (`--index-tls`, `--index-token-file`, …).
 
 ## Security — the shared-index surface
 
