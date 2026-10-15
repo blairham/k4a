@@ -189,22 +189,30 @@ func (e *Entry) IsValidAgainst(current map[int32]int64, until time.Time) bool {
 
 // Cache is the in-memory + on-disk query-result cache.
 type Cache struct {
-	root   *state.Root
-	lru    *list.List
-	byHash map[string]*list.Element
-	mu     sync.Mutex
-	maxMem int
+	root         *state.Root
+	lru          *list.List
+	byHash       map[string]*list.Element
+	mu           sync.Mutex
+	maxMem       int
+	maxDiskBytes int64
+	maxAge       time.Duration
 }
 
 // New constructs a Cache rooted at the given state.Root. Disk reads
-// happen lazily on Get-miss; nothing is loaded eagerly at startup.
+// happen lazily on Get-miss; nothing is loaded eagerly at startup. The
+// disk directory is pruned to its bounds here and after every write, so a
+// process that only ever reads still retires what earlier ones left.
 func New(root *state.Root) *Cache {
-	return &Cache{
-		root:   root,
-		lru:    list.New(),
-		byHash: make(map[string]*list.Element),
-		maxMem: MaxInMemoryEntries,
+	c := &Cache{
+		root:         root,
+		lru:          list.New(),
+		byHash:       make(map[string]*list.Element),
+		maxMem:       MaxInMemoryEntries,
+		maxDiskBytes: DefaultMaxDiskBytes,
+		maxAge:       DefaultMaxAge,
 	}
+	c.prune()
+	return c
 }
 
 // Get returns the entry for k from memory, falling back to disk. Returns
@@ -230,12 +238,14 @@ func (c *Cache) Get(k Key) (*Entry, bool) {
 }
 
 // Put stores entry in the cache (memory + disk), evicting the oldest
-// in-memory entry if we're at capacity. Disk writes happen
-// best-effort — failures are logged and the in-memory cache continues
-// to serve.
+// in-memory entry if we're at capacity. Every Put writes through to disk
+// and then prunes the directory to its size and age bounds. Disk writes
+// happen best-effort — on failure the in-memory cache continues to serve.
 func (c *Cache) Put(entry *Entry) {
 	c.put(entry)
-	c.writeToDisk(entry)
+	if c.writeToDisk(entry) {
+		c.prune()
+	}
 }
 
 func (c *Cache) put(entry *Entry) {
@@ -293,19 +303,24 @@ func (c *Cache) diskPath(hash string) string {
 	return filepath.Join(c.dirPath(), hash+".json")
 }
 
-func (c *Cache) writeToDisk(entry *Entry) {
+// writeToDisk persists entry and reports whether it wrote anything.
+func (c *Cache) writeToDisk(entry *Entry) bool {
 	if c.root == nil {
-		return
+		return false
 	}
-	if err := os.MkdirAll(c.dirPath(), 0o700); err != nil {
-		return
-	}
-
 	entry.SchemaVersion = schemaVersion
 
 	body, err := json.Marshal(entry)
 	if err != nil {
-		return
+		return false
+	}
+	// An entry bigger than the whole cap would only evict everything else
+	// and then itself; keep it in memory and leave the disk alone.
+	if c.maxDiskBytes > 0 && int64(len(body)) > c.maxDiskBytes {
+		return false
+	}
+	if os.MkdirAll(c.dirPath(), 0o700) != nil {
+		return false
 	}
 
 	hash := entry.Key.Hash()
@@ -313,27 +328,36 @@ func (c *Cache) writeToDisk(entry *Entry) {
 
 	tmp, err := os.CreateTemp(c.dirPath(), hash+".tmp-*")
 	if err != nil {
-		return
+		return false
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) //nolint:errcheck // cleanup after Rename
 
 	if _, err := tmp.Write(body); err != nil {
 		tmp.Close() //nolint:errcheck // already failing
-		return
+		return false
 	}
 	_ = tmp.Chmod(0o600) //nolint:errcheck // best-effort
 	if err := tmp.Close(); err != nil {
-		return
+		return false
 	}
-	_ = os.Rename(tmpName, path) //nolint:errcheck // best-effort
+	return os.Rename(tmpName, path) == nil
 }
 
 func (c *Cache) loadFromDisk(hash string) (*Entry, bool) {
 	if c.root == nil {
 		return nil, false
 	}
-	raw, err := os.ReadFile(c.diskPath(hash)) //nolint:gosec // path is constructed from hash within state dir
+	path := c.diskPath(hash)
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, false
+	}
+	if c.expired(info.ModTime()) {
+		_ = os.Remove(path) //nolint:errcheck // past its age bound; drop
+		return nil, false
+	}
+	raw, err := os.ReadFile(path) //nolint:gosec // path is constructed from hash within state dir
 	if err != nil {
 		return nil, false
 	}
@@ -346,6 +370,10 @@ func (c *Cache) loadFromDisk(hash string) (*Entry, bool) {
 		_ = os.Remove(c.diskPath(hash)) //nolint:errcheck // old format; drop
 		return nil, false
 	}
+	// A disk hit counts as use: bump the mtime so size eviction (oldest
+	// mtime first) and the age bound both treat the entry as recent.
+	now := time.Now()
+	_ = os.Chtimes(path, now, now) //nolint:errcheck // best-effort
 	return &entry, true
 }
 
