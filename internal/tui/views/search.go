@@ -93,7 +93,9 @@ type SearchView struct {
 	runSearch SearchFunc
 	topic     string
 	query     string
+	filter    string
 	matches   []kafka.ConsumedMessage
+	visible   []int // indexes into matches that pass filter, in table order
 	table     table.Model
 	progress  kafka.DeepSearchProgress
 	state     searchState
@@ -141,7 +143,10 @@ func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 			return v.waitForNextEvent()
 		}
 		v.matches = append(v.matches, m.Msg)
-		v.appendRow(m.Msg)
+		if f := parseFilter(v.filter); f.Empty() || f.MatchesAny(m.Msg.Key, m.Msg.Value) {
+			v.visible = append(v.visible, len(v.matches)-1)
+			v.appendRow(m.Msg)
+		}
 		return v.waitForNextEvent()
 	case SearchProgressMsg:
 		if m.ScanID != v.scanID {
@@ -243,7 +248,7 @@ func (v *SearchView) headerVisible() bool {
 }
 
 // Count returns the visible match count.
-func (v *SearchView) Count() int { return len(v.matches) }
+func (v *SearchView) Count() int { return len(v.visible) }
 
 // Query returns the original search query string the user typed.
 func (v *SearchView) Query() string { return v.query }
@@ -251,18 +256,58 @@ func (v *SearchView) Query() string { return v.query }
 // Topic returns the topic being searched.
 func (v *SearchView) Topic() string { return v.topic }
 
+// Keys the search results view binds beyond enter and export.
+const (
+	KeyRerunSearch = "R"
+	KeyEditSearch  = "s"
+)
+
+// Actions the search results view asks the App to run.
+const (
+	ActionRerunSearch = "search_rerun"
+	ActionEditSearch  = "search_edit"
+)
+
 // HandleKey processes non-table keys for the search results view.
 func (v *SearchView) HandleKey(key string) (string, string) {
 	switch key {
 	case KeyEnter:
 		idx := v.table.Cursor()
-		if idx >= 0 && idx < len(v.matches) {
+		if idx >= 0 && idx < len(v.visible) {
 			return "search_message_detail", fmt.Sprintf("%d", idx)
 		}
 	case KeyExport:
 		return ActionExport, v.topic
+	case KeyRerunSearch:
+		return ActionRerunSearch, v.topic
+	case KeyEditSearch:
+		return ActionEditSearch, v.topic
 	}
 	return "", ""
+}
+
+// SetQuery replaces the query the next Rerun searches for.
+func (v *SearchView) SetQuery(q string) { v.query = q }
+
+// Rerun cancels the scan in flight, if any, and starts the query again from
+// an empty result set. Messages from the old scan are dropped by scanID.
+func (v *SearchView) Rerun() tea.Cmd {
+	v.Stop()
+	v.matches, v.visible = nil, nil
+	v.progress = kafka.DeepSearchProgress{}
+	v.scanErr = nil
+	setTableRows(&v.table, nil)
+	v.table.GotoTop()
+	return v.start()
+}
+
+// VisibleMatches returns the matches that pass the filter, in table order.
+func (v *SearchView) VisibleMatches() []kafka.ConsumedMessage {
+	out := make([]kafka.ConsumedMessage, 0, len(v.visible))
+	for _, i := range v.visible {
+		out = append(out, v.matches[i])
+	}
+	return out
 }
 
 // Matches returns a copy of the matches so far, in the order shown.
@@ -281,13 +326,27 @@ func (v *SearchView) GetMatch(idx int) (kafka.ConsumedMessage, bool) {
 // Loading is false — progress is rendered via the header.
 func (v *SearchView) Loading() bool { return false }
 
-// SetFilter narrows the rendered results in-memory.
-func (v *SearchView) SetFilter(_ string) {}
+// SetFilter narrows the rendered results to matches whose key or value
+// passes filter; the scan itself is unchanged and keeps streaming.
+func (v *SearchView) SetFilter(filter string) {
+	v.filter = filter
+	v.visible = v.visible[:0]
+	rows := make([]table.Row, 0, len(v.matches))
+	f := parseFilter(filter)
+	for i, m := range v.matches {
+		if !f.Empty() && !f.MatchesAny(m.Key, m.Value) {
+			continue
+		}
+		v.visible = append(v.visible, i)
+		rows = append(rows, matchRow(m))
+	}
+	setTableRows(&v.table, rows)
+}
 
 // Refresh is a no-op for search results. The App ticks every active view's
 // Refresh on a poll interval to keep live data current; for a one-shot
-// scan that would mean restarting the search on every tick. Users re-run a
-// search by re-entering the search bar (`s` in Messages, or :search).
+// scan that would mean restarting the search on every tick. R re-runs it on
+// demand (Rerun), and s edits the query first.
 func (v *SearchView) Refresh() tea.Cmd { return nil }
 
 // Stop cancels any in-flight scan.
@@ -340,14 +399,11 @@ func (v *SearchView) renderHeaderBox() string {
 
 // SelectedMessage returns the currently highlighted match, if any.
 func (v *SearchView) SelectedMessage() (kafka.ConsumedMessage, bool) {
-	if len(v.matches) == 0 {
-		return kafka.ConsumedMessage{}, false
-	}
 	idx := v.table.Cursor()
-	if idx < 0 || idx >= len(v.matches) {
+	if idx < 0 || idx >= len(v.visible) {
 		return kafka.ConsumedMessage{}, false
 	}
-	return v.matches[idx], true
+	return v.matches[v.visible[idx]], true
 }
 
 func (v *SearchView) progressFragments() string {
@@ -459,16 +515,20 @@ func (v *SearchView) waitForNextEvent() tea.Cmd {
 // existing rows. With thousands of matches streaming in, a full rebuild per
 // match dominates render time and causes input lag.
 func (v *SearchView) appendRow(m kafka.ConsumedMessage) {
+	setTableRows(&v.table, append(v.table.Rows(), matchRow(m)))
+}
+
+// matchRow is one match as a results-table row.
+func matchRow(m kafka.ConsumedMessage) table.Row {
 	value := strings.ReplaceAll(m.Value, "\n", " ")
 	value = strings.ReplaceAll(value, "\t", " ")
-	row := table.Row{
+	return table.Row{
 		fmt.Sprintf("%d", m.Offset),
 		fmt.Sprintf("%d", m.Partition),
 		m.Time.Format("1/2/2006, 15:04:05.000"),
 		m.Key,
 		value,
 	}
-	setTableRows(&v.table, append(v.table.Rows(), row))
 }
 
 // compileSearchQuery interprets the bar input. It's tried as a regex first;

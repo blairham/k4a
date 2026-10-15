@@ -126,8 +126,8 @@ type exportSnapshot struct {
 	raw   bool
 }
 
-// promptExport snapshots the active view's messages (Messages as filtered,
-// or Search's matches) and asks where to write them. The suggested path is
+// promptExport snapshots the active view's messages (Messages' or Search's,
+// as filtered) and asks where to write them. The suggested path is
 // relative, so it lands in the working directory, never under ~/.k4a.
 func (a *App) promptExport(topic string) (tea.Model, tea.Cmd) {
 	snap := exportSnapshot{topic: topic}
@@ -136,7 +136,7 @@ func (a *App) promptExport(topic string) (tea.Model, tea.Cmd) {
 	case *views.MessagesView:
 		snap.msgs, snap.raw = v.VisibleMessages(), v.Raw()
 	case *views.SearchView:
-		snap.msgs, kind = v.Matches(), "matches"
+		snap.msgs, kind = v.VisibleMatches(), "matches"
 	}
 	if len(snap.msgs) == 0 {
 		a.errFlash = "nothing to export"
