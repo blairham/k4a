@@ -78,13 +78,14 @@ contexts:
 ui:
   logoless: true    # hide ASCII logo from header
   readonly: false   # true disables every mutating operation
+  clipboard: auto   # auto | osc52 | native (how copy reaches the clipboard)
 index:
   enabled: false    # true opts in to the local rolling index (off by default)
 ```
 
 The two top-level preference blocks are also writable from the CLI —
 `k4a config set ui.readonly true`, `k4a config set index.enabled true` (also
-`ui.logoless`); `k4a config show` / `get <key>` / `path` read them back.
+`ui.logoless`, `ui.clipboard`); `k4a config show` / `get <key>` / `path` read them back.
 Context management stays in `k4a contexts` / `k4a use-context`.
 
 ### Auth methods
@@ -526,8 +527,11 @@ After a seek the view reads forward from that point and keeps the first
 `t` then `live` returns to the live tail. `k4a consume --offset/--since`
 is the same seek headless.
 
-Copy uses OSC 52, so the terminal sets the clipboard and it works over SSH
-and in tmux; both copy and export take what is on screen, decoded or raw.
+Copy uses the native clipboard tool on a local session (`pbcopy`, or
+`wl-copy` / `xclip` / `xsel` on Linux, whichever is installed) and OSC 52
+over SSH, where the terminal sets the clipboard on your machine; a tool
+that fails falls back to OSC 52. `ui.clipboard: osc52` or `native` forces
+one. Both copy and export take what is on screen, decoded or raw.
 An export suggests a file in the working directory and asks before
 overwriting one.
 
@@ -557,6 +561,7 @@ Matches from a whole-topic search (`s` in Messages, or `:search`), streamed as t
 | `s` | Edit the query and search again, in place |
 | `R` | Run the same search again (picks up records that arrived since) |
 | `/` | Filter the matches shown, by key or value; the scan is unchanged |
+| `c` / `K` / `C` | Copy the selected match's value / key / whole record as JSON to the clipboard |
 | `e` | Export the matches so far (as filtered) to a JSONL file |
 
 ### Context Selector

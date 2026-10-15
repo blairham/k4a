@@ -147,6 +147,7 @@ var viewBindings = map[style.ViewType][]binding{
 		{keyS, "Edit Query", true},
 		{keyR, "Re-run", true},
 		{keyE, descExport, true},
+		copyBindings[0], copyBindings[1], copyBindings[2],
 		{keyEsc, descBack, false},
 	},
 	style.ViewProduce:      formBindings,

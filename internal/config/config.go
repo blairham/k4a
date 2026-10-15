@@ -39,8 +39,11 @@ func DefaultConfigPath() string {
 
 // UI holds display preferences (mirrors k9s ui section).
 type UI struct {
-	Logoless bool `yaml:"logoless,omitempty"`
-	Readonly bool `yaml:"readonly,omitempty"`
+	// Clipboard picks how copy reaches the clipboard: auto (a native tool
+	// on a local session, else OSC 52), osc52, or native.
+	Clipboard string `yaml:"clipboard,omitempty"`
+	Logoless  bool   `yaml:"logoless,omitempty"`
+	Readonly  bool   `yaml:"readonly,omitempty"`
 }
 
 // Index holds the local-index (Tier 3) preferences. Off by default —

@@ -64,9 +64,13 @@ including deleting topics, consumer groups, ACLs and records.
   values are only displayed (or saved, copied or exported, when you ask);
   the search cache and the local and shared indexes keep the bytes as
   consumed.
-- **Copy and export** are explicit: a copy hands the text to your terminal
-  as an OSC 52 escape (the terminal, not k4a, writes the clipboard), and the
-  confirmation names what was copied and its size, never its content. An
+- **Copy and export** are explicit: on a local session a copy pipes the
+  text to the platform clipboard tool (`pbcopy`, `wl-copy`, `xclip` or
+  `xsel`, found on `PATH`, as stdin, never on the command line); over SSH,
+  or with `ui.clipboard: osc52`, it hands the text to your terminal as an
+  OSC 52 escape (the terminal, not k4a, writes the clipboard). The
+  confirmation names what was copied, its size and the tool, never its
+  content. An
   export writes JSONL, `0600`, to the path you type (relative to the working
   directory by default), refuses a path inside `~/.k4a`, and asks before it
   replaces a file.

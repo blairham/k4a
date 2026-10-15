@@ -148,6 +148,7 @@ type App struct {
 	filterStack      []string
 	viewStack        []style.ViewType
 	loader           loading.Model
+	clip             *clipboard
 	chrome           chrome.Chrome
 	height           int
 	width            int
@@ -258,6 +259,7 @@ func NewApp(client *kafka.Client, info ConnInfo, cfg *config.Config, cfgPath, ve
 		loading:      true,
 		logoless:     logoless,
 		readonly:     cfg != nil && cfg.UI.Readonly,
+		clip:         newClipboard(clipboardMode(cfg)),
 		splashActive: true,
 	}
 }
