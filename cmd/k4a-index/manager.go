@@ -71,7 +71,14 @@ type manager struct {
 	sweepEvery    time.Duration
 	maxTotalBytes int64
 	worker        workerOptions
-	mu            sync.Mutex
+	// wg tracks every goroutine that can still open or hold an index: on-demand
+	// registrations and each worker's tail. stopAll waits on it, so nothing it
+	// started outlives shutdown holding a writer lock.
+	wg sync.WaitGroup
+	mu sync.Mutex
+	// closing is set by stopAll; after it no registration is accepted, and one
+	// already in flight retires its worker instead of joining the set.
+	closing bool
 }
 
 // managerConfig carries the tunables; zero values fall back to the defaults
@@ -161,6 +168,10 @@ func (m *manager) ensureFollowed(topic string) bool {
 		return false
 	}
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return false
+	}
 	e, followed := m.set[topic]
 	_, inflight := m.registering[topic]
 	if followed || inflight {
@@ -176,10 +187,14 @@ func (m *manager) ensureFollowed(topic string) bool {
 	}
 	m.registering[topic] = struct{}{}
 	_, pinned := m.pins[topic]
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	log.Info("follow: registering topic on demand", "topic", topic, "pinned", pinned)
-	go m.register(topic, pinned)
+	go func() {
+		defer m.wg.Done()
+		m.register(topic, pinned)
+	}()
 	return true
 }
 
@@ -191,6 +206,10 @@ func (m *manager) ensureFollowed(topic string) bool {
 func (m *manager) preFollow(topics []string) {
 	for _, t := range topics {
 		m.mu.Lock()
+		if m.closing {
+			m.mu.Unlock()
+			return
+		}
 		m.pins[t] = struct{}{}
 		if _, ok := m.set[t]; ok {
 			m.mu.Unlock()
@@ -217,6 +236,20 @@ func (m *manager) register(topic string, pinned bool) {
 		return
 	}
 
+	m.mu.Lock()
+	if m.closing {
+		// Shutdown began while the index was opening: release it rather than
+		// start a tail nothing will ever stop.
+		delete(m.registering, topic)
+		m.mu.Unlock()
+		if stopErr := w.stop(); stopErr != nil {
+			log.Error("follow: releasing index opened during shutdown", "topic", topic, "err", stopErr)
+		}
+		return
+	}
+	m.wg.Add(1) // the tail goroutine below
+	m.mu.Unlock()
+
 	ctx, cancel := context.WithCancel(m.baseCtx)
 	entry := &followEntry{worker: w, cancel: cancel, done: make(chan struct{}), pinned: pinned}
 	entry.touch()
@@ -225,6 +258,7 @@ func (m *manager) register(topic string, pinned bool) {
 	// is always backed by a live goroutine — an eviction that races registration
 	// can safely cancel()+<-done without deadlocking on an unstarted worker.
 	go func() {
+		defer m.wg.Done()
 		w.run(ctx)
 		close(entry.done)
 		if ctx.Err() == nil {
@@ -235,10 +269,11 @@ func (m *manager) register(topic string, pinned bool) {
 	// Make room under the cap before inserting. evictColdestLocked removes the
 	// victim from the map while holding the lock; we stop it (slow) after.
 	m.mu.Lock()
-	if _, ok := m.set[topic]; ok {
-		// Lost a race — another register() beat us. Discard THIS worker without
-		// deleting the on-disk index: the winner owns the same dir, so only
-		// release our handle (cancel the tail, wait for it, drop the writer lock).
+	if _, ok := m.set[topic]; ok || m.closing {
+		// Lost a race — another register() beat us, or shutdown began. Discard
+		// THIS worker without deleting the on-disk index: the winner owns the
+		// same dir, so only release our handle (cancel the tail, wait for it,
+		// drop the writer lock).
 		delete(m.registering, topic)
 		m.mu.Unlock()
 		entry.cancel()
@@ -332,6 +367,7 @@ func (m *manager) evictColdestLocked() (string, *followEntry) {
 	}
 	if cold != nil {
 		delete(m.set, coldTopic)
+		m.registering[coldTopic] = struct{}{} // until teardown finishes; see teardown
 	}
 	return coldTopic, cold
 }
@@ -508,6 +544,7 @@ func (m *manager) evictIdle() {
 		}
 		if e.lastQuery.Load() < cutoff {
 			delete(m.set, t)
+			m.registering[t] = struct{}{} // until teardown finishes; see teardown
 			victims = append(victims, victim{topic: t, entry: e})
 		}
 	}
@@ -542,12 +579,27 @@ func (m *manager) reapIdleOrphans() {
 // cancel the tail and wait for run() to return (no more Submit), stop the async
 // indexer (drain + flush + release the writer lock), THEN remove the dir — so
 // the lock is released before we delete the directory that held it.
+//
+// The evicting caller marked the topic in-flight in the same critical section
+// that removed it from the set, and the mark is cleared only here, after the
+// directory is gone. Without it a Search or Follow arriving between stop and
+// RemoveAll would open the directory again and have it deleted from under the
+// new worker; with it, that request is told the topic is warming and the next
+// one re-registers cleanly.
 func (m *manager) teardown(topic string, e *followEntry) {
+	defer func() {
+		m.mu.Lock()
+		delete(m.registering, topic)
+		m.mu.Unlock()
+	}()
 	dir := e.worker.async.Inner().Dir()
 	e.cancel()
 	<-e.done
 	if err := e.worker.stop(); err != nil {
 		log.Error("follow: stopping evicted worker", "topic", topic, "err", err)
+	}
+	if beforeTeardownRemove != nil {
+		beforeTeardownRemove(topic)
 	}
 	if !index.IsTopicDir(m.root, m.cluster, dir) {
 		log.Error("follow: refusing to delete an index dir outside the cluster directory",
@@ -559,10 +611,19 @@ func (m *manager) teardown(topic string, e *followEntry) {
 	}
 }
 
+// beforeTeardownRemove, when set by a test, runs in teardown after the worker
+// is stopped and before its directory is deleted — the window a concurrent
+// re-registration of the same topic must not be able to use.
+var beforeTeardownRemove func(topic string)
+
 // stopAll tears down every followed worker — used on daemon shutdown so each
-// index is flushed and its writer lock released cleanly.
+// index is flushed and its writer lock released cleanly. It refuses further
+// registrations, and returns only once every registration still in flight and
+// every tail goroutine has finished, so no worker started before shutdown can
+// be left running with its writer lock held.
 func (m *manager) stopAll() {
 	m.mu.Lock()
+	m.closing = true
 	entries := make(map[string]*followEntry, len(m.set))
 	maps.Copy(entries, m.set)
 	m.set = make(map[string]*followEntry)
@@ -575,6 +636,7 @@ func (m *manager) stopAll() {
 			log.Error("follow: stopping worker on shutdown", "topic", t, "err", err)
 		}
 	}
+	m.wg.Wait()
 }
 
 // size returns the current followed-topic count.
