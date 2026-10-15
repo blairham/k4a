@@ -221,7 +221,7 @@ func (a *App) handleGlobalKey(key string) (tea.Cmd, bool) {
 // down to the active view, and Esc fires this with "" to clear.
 func (a *App) onFilterChange(value string) {
 	a.filter = value
-	_ = a.setActiveFilter(value)
+	a.setActiveFilter(value)
 }
 
 // dispatchCommand is the CommandBar dispatch. It parses the typed
@@ -253,8 +253,7 @@ func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 		if a.readonly {
 			return "readonly mode", nil
 		}
-		_, c := a.promptDeleteOffset()
-		return "", c
+		return a.promptDeleteOffset()
 	case "reconnect":
 		_, c := a.reconnect()
 		return "", c
