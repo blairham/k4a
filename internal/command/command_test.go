@@ -531,3 +531,24 @@ func TestAlterReplicationCmdRunNoConnection(t *testing.T) {
 		t.Error("expected non-zero exit for missing connection")
 	}
 }
+
+func TestValidateConsumePartition(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		flags   ConsumeFlags
+		wantErr bool
+	}{
+		{"group, all partitions", ConsumeFlags{Partition: -1}, false},
+		{"no group, all partitions", ConsumeFlags{NoGroup: true, Partition: -1}, false},
+		{"no group, one partition", ConsumeFlags{NoGroup: true, Partition: 3}, false},
+		{"group with a partition", ConsumeFlags{Partition: 3}, true},
+		{"negative partition", ConsumeFlags{NoGroup: true, Partition: -2}, true},
+	}
+	for _, tc := range cases {
+		if err := validateConsumePartition(tc.flags); (err != nil) != tc.wantErr {
+			t.Errorf("%s: err=%v, wantErr=%v", tc.name, err, tc.wantErr)
+		}
+	}
+}

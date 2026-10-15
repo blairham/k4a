@@ -5,6 +5,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -143,16 +144,24 @@ func fatalFetchError(ctx context.Context, fetches kgo.Fetches) (stop bool, err e
 	return false, nil
 }
 
+// AllPartitions asks ConsumeBlocking for every partition of the topic.
+const AllPartitions int32 = -1
+
 // ConsumeBlocking reads messages from a topic and calls onMessage for each one.
-// It blocks until the context is canceled. When groupID is empty, it reads
-// from partition 0 starting at the earliest offset. When groupID is set, it
-// joins the group and consumes its assigned partitions.
+// It blocks until the context is canceled. When groupID is set, it joins the
+// group and consumes its assigned partitions, and partition must be
+// AllPartitions. When groupID is empty, it reads from the earliest offset of
+// every partition, or of only the given one.
 func (c *Client) ConsumeBlocking(
 	ctx context.Context,
 	topic string,
 	groupID string,
+	partition int32,
 	onMessage func(ConsumedMessage),
 ) error {
+	if groupID != "" && partition != AllPartitions {
+		return errors.New("a consumer group decides its own partitions; drop the group to read one partition")
+	}
 	opts, err := NewClientOpts(c.authCfg, c.brokers)
 	if err != nil {
 		return err
@@ -163,9 +172,17 @@ func (c *Client) ConsumeBlocking(
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(groupID),
 		)
+	} else if partition == AllPartitions {
+		// A direct (groupless) topic consumer covers every partition,
+		// including any added while it runs.
+		opts = append(
+			opts,
+			kgo.ConsumeTopics(topic),
+			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		)
 	} else {
 		opts = append(opts, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-			topic: {0: kgo.NewOffset().AtStart()},
+			topic: {partition: kgo.NewOffset().AtStart()},
 		}))
 	}
 
