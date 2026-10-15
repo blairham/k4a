@@ -161,6 +161,30 @@ func (c *Client) ConsumeBlocking(
 	partition int32,
 	onMessage func(ConsumedMessage),
 ) error {
+	return c.consumeBlocking(ctx, topic, groupID, partition, Seek{}, onMessage)
+}
+
+// ConsumeBlockingFrom is ConsumeBlocking without a group, starting every
+// partition (or only the given one) at seek. A seek needs no group: a
+// group's start is its committed offset, which a seek would override.
+func (c *Client) ConsumeBlockingFrom(
+	ctx context.Context,
+	topic string,
+	partition int32,
+	seek Seek,
+	onMessage func(ConsumedMessage),
+) error {
+	return c.consumeBlocking(ctx, topic, "", partition, seek, onMessage)
+}
+
+func (c *Client) consumeBlocking(
+	ctx context.Context,
+	topic string,
+	groupID string,
+	partition int32,
+	seek Seek,
+	onMessage func(ConsumedMessage),
+) error {
 	if groupID != "" && partition != AllPartitions {
 		return errors.New("a consumer group decides its own partitions; drop the group to read one partition")
 	}
@@ -168,23 +192,27 @@ func (c *Client) ConsumeBlocking(
 	if err != nil {
 		return err
 	}
-	if groupID != "" {
+	start := seek.kgoOffset()
+	switch {
+	case groupID != "":
 		opts = append(
 			opts,
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(groupID),
 		)
-	} else if partition == AllPartitions {
+	case partition == AllPartitions:
 		// A direct (groupless) topic consumer covers every partition,
-		// including any added while it runs.
+		// including any added while it runs. A seek past a partition's
+		// retained log falls back to its start rather than failing.
 		opts = append(
 			opts,
 			kgo.ConsumeTopics(topic),
+			kgo.ConsumeStartOffset(start),
 			kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
 		)
-	} else {
+	default:
 		opts = append(opts, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{
-			topic: {partition: kgo.NewOffset().AtStart()},
+			topic: {partition: start},
 		}))
 	}
 
