@@ -82,8 +82,10 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 		// not this request's stream ctx — the follow must OUTLIVE the search that
 		// triggered it (warm-on-first-search), so the request ctx must not thread in.
 		if s.mgr.ensureFollowed(topic) { //nolint:contextcheck // see comment above
+			searchesTotal.WithLabelValues(searchWarming).Inc()
 			log.Info("search: topic not followed — now warming, client scans this time", "topic", topic)
 		} else {
+			searchesTotal.WithLabelValues(searchDenied).Inc()
 			log.Warn("search: topic not allowlisted → client will scan (never followed)", "topic", topic)
 		}
 		if err := sendCoverage(stream, &indexv1.Coverage{Following: false}); err != nil {
@@ -94,6 +96,7 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 
 	params, err := indexwire.RequestToQueryParams(req)
 	if err != nil {
+		searchesTotal.WithLabelValues(searchError).Inc()
 		log.Error("search: bad request", "topic", topic, "err", err)
 		return status.Errorf(codes.InvalidArgument, "invalid search request: %v", err)
 	}
@@ -121,6 +124,7 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 
 	res, err := w.query(stream.Context(), params)
 	if err != nil {
+		searchesTotal.WithLabelValues(searchError).Inc()
 		log.Error("search: query failed", "topic", topic, "err", err)
 		return status.Errorf(codes.Internal, "query: %v", err)
 	}
@@ -130,6 +134,8 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 			return err
 		}
 	}
+	searchesTotal.WithLabelValues(searchServed).Inc()
+	searchDuration.Observe(time.Since(start).Seconds())
 	log.Info(
 		"search done",
 		"topic", topic,
