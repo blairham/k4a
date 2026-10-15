@@ -462,6 +462,21 @@ Browse and manage Kafka ACL bindings.
 | `e` | Edit the selected binding: the create form, pre-filled; asks for confirmation, then creates the new binding and deletes the old one |
 | `ctrl+d` | Delete selected ACL |
 
+### Client Quotas (`:quotas`)
+
+Client quotas (`DescribeClientQuotas`): one row per entity and quota key, for
+example `user=alice,client-id=billing  producer_byte_rate  1048576`. An
+entity is one or more of `user`, `client-id` and `ip`; `<default>` names a
+type's default (`user=<default>`).
+
+| Key | Action |
+|-----|--------|
+| `enter` | Edit the selected quota's value (empty removes it) |
+| `a` | Add a quota: `ENTITY KEY=VALUE`, e.g. `user=alice producer_byte_rate=1048576` |
+| `ctrl+d` | Remove the selected quota |
+
+Every change asks for confirmation first, and `ui.readonly` blocks all three.
+
 ### Messages
 
 Live message tail from a topic (newest first).
@@ -556,6 +571,7 @@ Enter command mode with `:`. Supports tab autocomplete.
 | `:groups` `:group` | Switch to Groups view |
 | `:cluster` `:brokers` | Switch to Cluster view |
 | `:acls` | Switch to ACLs view |
+| `:quotas` | Switch to Client Quotas view |
 | `:context` `:ctx` | Open context selector |
 | `:produce [TOPIC]` | Produce messages |
 | `:create-topic` `:ct` | Create topic |
@@ -574,7 +590,7 @@ Filter any list view with `/`:
 - `!/pattern` — negated filter (exclude matches)
 - Invalid regex falls back to literal match
 
-Available in Topics, Groups, Messages, ACLs, Topic Config, Broker Detail and Search Results views.
+Available in Topics, Groups, Messages, ACLs, Client Quotas, Topic Config, Broker Detail and Search Results views.
 
 ## CLI Flags
 

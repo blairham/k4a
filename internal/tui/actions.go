@@ -125,6 +125,9 @@ var writeActions = map[string]bool{
 	actionCreateTopic:        true,
 	actionCreateACL:          true,
 	views.ActionEditACL:      true,
+	views.ActionAddQuota:     true,
+	views.ActionEditQuota:    true,
+	views.ActionDeleteQuota:  true,
 	"reset_offsets":          true,
 	"edit_topic_config":      true,
 	actionEditBrokerConfig:   true,
@@ -172,6 +175,12 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		return a.openView(style.ViewCreateACL, a.viewMap[style.ViewCreateACL].Init())
 	case views.ActionEditACL:
 		return a.openACLEdit(param)
+	case views.ActionAddQuota:
+		return a.promptAddQuota()
+	case views.ActionEditQuota:
+		return a.promptEditQuota(param)
+	case views.ActionDeleteQuota:
+		return a.promptDeleteQuota(param)
 	case "topic_config":
 		a.setView(style.ViewTopicConfig, views.NewTopicConfigView(a.client, param))
 		return a.openView(style.ViewTopicConfig, a.viewMap[style.ViewTopicConfig].Init())

@@ -503,6 +503,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		}
 		return a, nil
 
+	case quotaChangedMsg:
+		cmd := a.applyQuotaResult(msg)
+		return a, cmd
+
 	case views.EditACLSubmitMsg:
 		a.confirmACLEdit(msg)
 		return a, nil
@@ -555,7 +559,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		views.GroupDetailRefreshMsg,
 		views.ProduceProgressMsg, views.ProduceDoneMsg,
 		views.CreateTopicResultMsg, views.CreateACLResultMsg,
-		views.ContextRefreshMsg, views.ACLsRefreshMsg,
+		views.ContextRefreshMsg, views.ACLsRefreshMsg, views.QuotasRefreshMsg,
 		views.TopicConfigRefreshMsg,
 		views.ResetOffsetsTopicsMsg, views.ResetOffsetsResultMsg,
 		views.BrokerDetailRefreshMsg,
