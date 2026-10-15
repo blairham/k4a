@@ -122,8 +122,12 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return a.handleHelpKey(key)
 	}
 
-	if cmd, handled := a.handleGlobalKey(key); handled {
-		return a, cmd
+	// A form being filled in owns every key but esc: the global shortcuts
+	// are printable characters, and a topic named events-1 must be typeable.
+	if !a.formEditing() || key == "esc" {
+		if cmd, handled := a.handleGlobalKey(key); handled {
+			return a, cmd
+		}
 	}
 
 	// Check view-specific actions first (enter, m, i, etc.).
@@ -135,6 +139,12 @@ func (a *App) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Delegate remaining keys (j/k/g/G/pgup/pgdown) to the bubbles table.
 	cmd := a.updateActiveTable(msg)
 	return a, cmd
+}
+
+// formEditing reports whether the active view is a form still taking input.
+func (a *App) formEditing() bool {
+	fv, ok := a.activeView().(views.FormView)
+	return ok && fv.Editing()
 }
 
 // dispatchToBar routes the key to whichever bar is active. Each widget
