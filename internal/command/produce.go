@@ -104,6 +104,7 @@ func (c *ProduceCommand) Run(args []string) int {
 		log.Error(err.Error())
 		return 1
 	}
+	defer client.Close()
 
 	topic, messages, msgErr := buildMessages(flags)
 	if msgErr != nil {
