@@ -96,6 +96,27 @@ func CleartextWarning(cfg AuthConfig) string {
 	}
 }
 
+// InferAuthMethod picks the method a --brokers connection without --auth means
+// from what was supplied. Defaulting to scram made a bare `k4a -b
+// localhost:9092` fail with "scram auth requires a username and password";
+// a local broker is the common case for no credentials at all. Credentials
+// still mean scram, which keeps `-b host --username u --password p` working
+// as before, OAuth settings mean oauthbearer, and a client certificate means
+// mtls rather than being ignored. The CLI, the TUI and k4a-index all call it,
+// so a bare --brokers means the same thing on every surface.
+func InferAuthMethod(auth AuthConfig) AuthMethod {
+	switch {
+	case auth.Username != "" || auth.Password != "":
+		return AuthSCRAM
+	case auth.OAuth.IsSet():
+		return AuthOAuthBearer
+	case auth.CertFile != "" || auth.KeyFile != "":
+		return AuthMTLS
+	default:
+		return AuthPlaintext
+	}
+}
+
 // NewClientOpts returns the franz-go client options needed to connect to the
 // given broker list with the configured auth method.
 func NewClientOpts(cfg AuthConfig, brokers string) ([]kgo.Opt, error) {

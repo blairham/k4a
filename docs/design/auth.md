@@ -184,7 +184,8 @@ commands): an empty value means "not set" and keeps the context's.
 for a `--brokers` connection with no context behind it — so an explicit
 `--region us-east-1` still overrides a context in another region.
 A `--brokers` connection without `--auth` infers the method
-(`inferAuthMethod`): credentials mean `scram`, any OAuth setting means
+(`kafka.InferAuthMethod`, used by the CLI, the TUI and `k4a-index` alike):
+credentials mean `scram`, any OAuth setting means
 `oauthbearer`, a client cert or key means `mtls`, and nothing means
 `plaintext`. `--no-tls` never implies a method. It used to be `scram` regardless, so
 `k4a -b localhost:9092` failed asking for a password.

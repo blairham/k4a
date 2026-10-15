@@ -515,9 +515,10 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 		NoTLS:    f.NoTLS,
 	}
 	if f.Brokers != "" {
-		// A direct connection has no context to inherit defaults from.
+		// A direct connection has no context to inherit defaults from, so the
+		// method is inferred exactly as the CLI infers it (#97).
 		if flagAuth.Method == "" {
-			flagAuth.Method = kafka.AuthSCRAM
+			flagAuth.Method = kafka.InferAuthMethod(flagAuth)
 		}
 		if flagAuth.Region == "" {
 			flagAuth.Region = awscreds.DefaultRegion
