@@ -269,7 +269,7 @@ func dialRemoteIndex(cfg *config.Config, ctxName string) *remoteindex.Client {
 	if err != nil || cctx.IndexEndpoint == "" {
 		return nil
 	}
-	client, err := remoteindex.Dial(cctx.IndexEndpoint, cctx.IndexInsecure)
+	client, err := remoteindex.Dial(cctx.IndexEndpoint, remoteindex.ContextOptions(cctx))
 	if err != nil {
 		return nil
 	}
