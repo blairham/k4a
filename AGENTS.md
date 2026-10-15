@@ -71,9 +71,15 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 ### Subcommands (`internal/app/app.go`)
 
 `ui` (default), `produce`, `consume`, `verify`, `create-topic`, `create-acl`,
-`delete-topic`, `describe-topic`, `topic-size`, `list-acls`, `alter-config`,
+`delete-topic`, `describe-topic`, `topic-size`, `list-topics`, `list-acls`,
+`list-groups`, `describe-group`, `describe-broker-config`, `alter-config`,
 `alter-replication`, `contexts`, `use-context`, `version`, `upgrade`, `state`,
 `index`, `config`, `search`, `mcp`.
+
+Headless commands are flat `verb-noun` names (no `groups list` subcommand
+tree), and the ones that print records take `--format text|json`
+(`FormatFlag`, `internal/command/cli_common.go`); the older `describe-topic`
+and `topic-size` keep their `--json`.
 
 An unrecognized first argument is treated as flags for `ui`, so `k4a --context
 staging` still opens the TUI.
