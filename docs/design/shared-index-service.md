@@ -161,9 +161,11 @@ Owns the set of topics currently being followed. Responsibilities:
 - **Registration.** On a `Search` for an unknown topic, check the
   allow/deny policy (below); if allowed, add it to the follow-set and
   start a tail worker + a bounded backfill. Registration is idempotent.
-- **Persistence.** The follow-set (topic names + last-queried timestamps)
-  is written to the daemon's storage so a restart re-follows the same
-  set. This is metadata only — the *index* itself is disposable.
+- **No persistence (yet).** The follow-set lives in memory only: a restart
+  starts from the pinned `--topic` pre-follow set and re-learns the rest
+  from the searches it serves. Persisting it (leaning a compacted Kafka
+  topic) is an open question, below; it would be metadata only — the
+  *index* itself is disposable either way.
 - **LRU eviction.** A topic not searched within `evictAfter` (default
   **7 days**) is dropped. A Search, or a Follow of a topic already followed
   (the client scanned because coverage fell short), counts as use; a
@@ -174,8 +176,10 @@ Owns the set of topics currently being followed. Responsibilities:
   set; eviction is what bounds it.
 - **Caps.** A hard ceiling on concurrently-followed topics
   (`maxFollowed`, default **256**) bounds consumer connections and disk.
-  At the cap, registration evicts the coldest topic first, or refuses
-  (and the client stays on scan) if all are hot.
+  At the cap, registration evicts the coldest non-pinned topic first. It
+  never refuses: when every followed topic is pinned there is nothing to
+  evict, and the set grows past the cap (pinned topics are an operator's
+  explicit choice, so the cap bounds only what searches add).
 
 ### 2. The tail workers (`cmd/k4a-index`, new)
 
@@ -375,15 +379,16 @@ Open questions.
 
 **Storage: `emptyDir`, not a PVC.** The index is a pure optimization that
 rebuilds from the broker, so index loss is a non-event — on restart the
-daemon re-follows the persisted follow-set and re-backfills, with a
-transient scan-fallback window while it warms. This deliberately sidesteps
+daemon re-follows its pinned `--topic` set and re-learns the rest from the
+next searches, with a transient scan-fallback window while it warms. This deliberately sidesteps
 PVC lifecycle pain: for a service whose local state is authoritative,
 emptyDir loss is a correctness incident; here it is by-design disposable.
-The one durable bit — the follow-set metadata — is tiny and lives *outside*
-the pod (leaning a compacted Kafka topic so it both persists and converges
-across replicas; see Open questions), so a pod restart re-follows the set
-even on empty local storage. Worst case, even that is lost: the daemon
-forgets what to follow and re-learns on the next search.
+Nothing about the follow-set is durable today. The plan is for that metadata
+to live *outside* the pod (leaning a compacted Kafka topic so it both
+persists and converges across replicas; see Open questions), so a pod
+restart would re-follow the whole set even on empty local storage. Until
+then, and in the worst case after it, the daemon forgets what it was
+following and re-learns on the next search.
 
 **Sizing the volume — on-disk is ~3x the cap** (measured).
 `config.topicMaxBytes` bounds *stored* bytes, which is what the trimmer can

@@ -219,8 +219,8 @@ func iamMechanism(cfg AuthConfig) sasl.Mechanism {
 	})
 }
 
-// newTLSConfig returns a TLS config trusting the system roots, plus cfg.CAFile
-// when set.
+// newTLSConfig returns a TLS config trusting the system roots, or only
+// cfg.CAFile when set.
 func newTLSConfig(cfg AuthConfig) (*tls.Config, error) {
 	tlsCfg := &tls.Config{
 		MinVersion:         tls.VersionTLS12,

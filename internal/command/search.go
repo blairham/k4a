@@ -41,7 +41,7 @@ type SearchFlags struct {
 }
 
 // SearchCommand implements the "search" CLI subcommand. It mirrors the
-// in-TUI Ctrl+F search bar with flags for non-interactive use.
+// in-TUI search bar (`s` in Messages, or :search) with flags for non-interactive use.
 type SearchCommand struct{}
 
 // Help returns the detailed help text.
@@ -54,7 +54,7 @@ func (c *SearchCommand) Help() string {
   anywhere inside the raw key/value/headers — whether the answer comes
   from an index or a broker scan. All tuning happens via flags.
 
-  Identical to the in-TUI Ctrl+F search, just non-interactive — useful
+  Identical to the TUI search (s in Messages, or :search), just non-interactive — useful
   for scripts, CI, "did this message ever happen" one-liners.
 
 Config:
@@ -75,6 +75,14 @@ Connection:
       --no-tls                    Run a SASL method without TLS (credentials in cleartext)
       --oauth-token=TOKEN         OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
                                   with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
+
+Shared index (optional):
+      --index-endpoint=HOST:PORT  Shared k4a-index daemon; overrides the context
+      --index-insecure            Dial it over plaintext gRPC (no token or TLS files)
+      --index-ca=FILE             CA that verifies the daemon's certificate
+      --index-cert=FILE           Client certificate, for a daemon that requires mTLS
+      --index-key=FILE            Client private key for --index-cert
+      --index-token-file=FILE     Bearer token file (or K4A_INDEX_TOKEN for a context's daemon)
 
 Search:
   -t, --topic=TOPIC               Topic to search (required)

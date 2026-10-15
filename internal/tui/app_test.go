@@ -1846,11 +1846,16 @@ func TestRenderShortcutsAllViews(t *testing.T) {
 		app.height = 40
 		app.view = vt
 		lines := app.renderShortcuts()
-		// 4 view-switch hotkeys in column 1, so at least 4 rows; the
-		// action column (per-view actions, <r> where it works, <:q>) is
-		// capped at the 6-row top section, which chrome reserves anyway.
-		if len(lines) < 4 || len(lines) > 6 {
-			t.Errorf("renderShortcuts() for view %d returned %d lines, want 4-6", vt, len(lines))
+		// 4 view-switch hotkeys in column 1, so at least 4 rows (a form,
+		// which takes those keys as input, shows only its 3 actions); the
+		// action column is capped at the 6-row top section, which chrome
+		// reserves anyway.
+		minRows := 4
+		if formViews[vt] {
+			minRows = 3
+		}
+		if len(lines) < minRows || len(lines) > 6 {
+			t.Errorf("renderShortcuts() for view %d returned %d lines, want %d-6", vt, len(lines), minRows)
 		}
 	}
 }
