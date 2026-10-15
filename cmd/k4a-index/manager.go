@@ -79,6 +79,10 @@ type manager struct {
 	// closing is set by stopAll; after it no registration is accepted, and one
 	// already in flight retires its worker instead of joining the set.
 	closing bool
+	// saved is the follow-set membership last persisted (followset.go);
+	// saveMu serializes writes of it.
+	saved  map[string]int64
+	saveMu sync.Mutex
 }
 
 // managerConfig carries the tunables; zero values fall back to the defaults
@@ -227,7 +231,7 @@ func (m *manager) preFollow(topics []string) {
 // startup pre-warm). On open failure it clears the in-flight marker so a later
 // search retries cleanly.
 func (m *manager) register(topic string, pinned bool) {
-	w, err := newTopicWorker(m.root, m.cluster, topic, m.src, m.worker)
+	w, err := newTopicWorker(m.baseCtx, m.root, m.cluster, topic, m.src, m.worker)
 	if err != nil {
 		log.Error("follow: opening index failed — topic stays unfollowed", "topic", topic, "err", err)
 		m.mu.Lock()
@@ -308,6 +312,7 @@ func (m *manager) register(topic string, pinned bool) {
 		m.teardown(victimTopic, victim)
 	}
 
+	m.saveFollowSet()
 	log.Info("follow: now following", "topic", topic, "pinned", pinned, "followed_total", m.size())
 }
 
@@ -395,6 +400,7 @@ func (m *manager) sweep() {
 			m.evictIdle()
 		case <-disk.C:
 			m.enforceDiskBudget()
+			m.saveFollowSet()
 		}
 	}
 }
@@ -613,6 +619,7 @@ func (m *manager) teardown(topic string, e *followEntry) {
 	if err := os.RemoveAll(dir); err != nil {
 		log.Error("follow: deleting evicted index dir", "topic", topic, "dir", dir, "err", err)
 	}
+	m.saveFollowSet()
 }
 
 // beforeTeardownRemove, when set by a test, runs in teardown after the worker
@@ -626,6 +633,8 @@ var beforeTeardownRemove func(topic string)
 // every tail goroutine has finished, so no worker started before shutdown can
 // be left running with its writer lock held.
 func (m *manager) stopAll() {
+	// Persist before the set is emptied, so the next container re-follows it.
+	m.saveFollowSetNow(m.lastUse())
 	m.mu.Lock()
 	m.closing = true
 	entries := make(map[string]*followEntry, len(m.set))
