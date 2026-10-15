@@ -106,8 +106,8 @@ func TestInferAuthMethod_SASLAndOAuth(t *testing.T) {
 		// --no-tls alone carries no credentials, so it implies no method.
 		{kafka.AuthPlaintext, kafka.AuthConfig{NoTLS: true}},
 	} {
-		if got := inferAuthMethod(tc.auth); got != tc.want {
-			t.Errorf("inferAuthMethod(%+v) = %s, want %s", tc.auth, got, tc.want)
+		if got := kafka.InferAuthMethod(tc.auth); got != tc.want {
+			t.Errorf("InferAuthMethod(%+v) = %s, want %s", tc.auth, got, tc.want)
 		}
 	}
 }
