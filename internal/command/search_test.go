@@ -112,6 +112,10 @@ func TestParsePartitionsFlag(t *testing.T) {
 		{"0,,1", []int32{0, 1}, false},
 		{"a", nil, true},
 		{"-1", nil, true},
+		{"2147483647", []int32{2147483647}, false},
+		// Used to wrap to partition 0 through Atoi + int32().
+		{"4294967296", nil, true},
+		{"2147483648", nil, true},
 	}
 	for _, tc := range cases {
 		got, err := parsePartitionsFlag(tc.in)

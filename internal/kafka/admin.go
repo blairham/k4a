@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -25,13 +26,11 @@ type CreateTopicConfig struct {
 // CreateTopic creates a Kafka topic using the admin API. Returns true if the
 // topic was created, false if it already existed.
 func (c *Client) CreateTopic(ctx context.Context, cfg CreateTopicConfig) (bool, error) {
-	_, err := c.admin.CreateTopic(
-		ctx,
-		int32(cfg.NumPartitions),     //nolint:gosec // partition count fits in int32
-		int16(cfg.ReplicationFactor), //nolint:gosec // replication factor fits in int16
-		nil,
-		cfg.Topic,
-	)
+	partitions, rf, err := createTopicSizes(cfg)
+	if err != nil {
+		return false, err
+	}
+	_, err = c.admin.CreateTopic(ctx, partitions, rf, nil, cfg.Topic)
 	if err != nil {
 		if errors.Is(err, kerr.TopicAlreadyExists) {
 			return false, nil
@@ -39,6 +38,37 @@ func (c *Client) CreateTopic(ctx context.Context, cfg CreateTopicConfig) (bool, 
 		return false, fmt.Errorf("creating topic %q: %w", cfg.Topic, err)
 	}
 	return true, nil
+}
+
+// ValidateCreateTopic reports whether cfg's partition count and replication
+// factor fit the wire types. Kafka sends them as int32 and int16; converting
+// an out-of-range int wraps silently (RF 65537 becomes 1), so callers check
+// before connecting. -1 asks the broker for its default.
+func ValidateCreateTopic(cfg CreateTopicConfig) error {
+	_, _, err := createTopicSizes(cfg)
+	return err
+}
+
+func createTopicSizes(cfg CreateTopicConfig) (int32, int16, error) {
+	p, rf := cfg.NumPartitions, cfg.ReplicationFactor
+	if p != -1 && (p < 1 || p > math.MaxInt32) {
+		return 0, 0, fmt.Errorf("partitions must be between 1 and %d (or -1 for the broker default), got %d",
+			math.MaxInt32, p)
+	}
+	if rf != -1 && (rf < 1 || rf > math.MaxInt16) {
+		return 0, 0, fmt.Errorf("replication factor must be between 1 and %d (or -1 for the broker default), got %d",
+			math.MaxInt16, rf)
+	}
+	return int32(p), int16(rf), nil
+}
+
+// ValidateReplicationFactor reports whether rf is a usable target for
+// ChangeReplicationFactor: at least one replica and within Kafka's int16.
+func ValidateReplicationFactor(rf int) error {
+	if rf < 1 || rf > math.MaxInt16 {
+		return fmt.Errorf("replication factor must be between 1 and %d, got %d", math.MaxInt16, rf)
+	}
+	return nil
 }
 
 // DeleteTopic deletes a Kafka topic using the admin API. Returns true if the
@@ -284,6 +314,9 @@ func (c *Client) AlterTopicConfig(ctx context.Context, topic, key, value string)
 // a topic so that each partition has exactly newRF replicas. The new replicas
 // are distributed evenly across the cluster's brokers.
 func (c *Client) ChangeReplicationFactor(ctx context.Context, topic string, newRF int) error {
+	if err := ValidateReplicationFactor(newRF); err != nil {
+		return err
+	}
 	tds, err := c.admin.ListTopicsWithInternal(ctx, topic)
 	if err != nil {
 		return fmt.Errorf("fetching metadata: %w", err)
