@@ -217,6 +217,11 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		return a, cmd
 	case "save_message":
 		return a.promptSaveMessage(param)
+	case views.ActionCopy:
+		cmd := a.copyMessage(param)
+		return a, cmd
+	case views.ActionExport:
+		return a.promptExport(param)
 	}
 	return a, nil
 }
@@ -280,11 +285,7 @@ func (a *App) openMessageAt(param string) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	msg := v.GetMessage(idx)
-	if msg == nil {
-		return nil
-	}
-	return a.openMessageDetail(msg)
+	return a.openMessageDetail(v.VisibleMessages(), idx)
 }
 
 // openSearchMatchAt opens the detail view for the search match param indexes,
@@ -298,17 +299,20 @@ func (a *App) openSearchMatchAt(param string) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	msg, ok := v.GetMatch(idx)
-	if !ok {
-		return nil
-	}
-	return a.openMessageDetail(&msg)
+	return a.openMessageDetail(v.Matches(), idx)
 }
 
-// openMessageDetail pushes the current view and shows msg in the detail view.
-func (a *App) openMessageDetail(msg *kafka.ConsumedMessage) tea.Cmd {
+// openMessageDetail pushes the current view and shows list[idx] in the
+// detail view, which can step through the rest of list with n and N. It does
+// nothing when there is no such row.
+func (a *App) openMessageDetail(list []kafka.ConsumedMessage, idx int) tea.Cmd {
+	if idx < 0 || idx >= len(list) {
+		return nil
+	}
+	detail := views.NewMessageDetailView(&list[idx])
+	detail.SetSiblings(list, idx)
 	a.pushView(a.view)
-	a.setView(style.ViewMessageDetail, a.newMessageDetailView(views.NewMessageDetailView(msg)))
+	a.setView(style.ViewMessageDetail, a.newMessageDetailView(detail))
 	a.view = style.ViewMessageDetail
 	a.resizeActiveView()
 	return a.viewMap[style.ViewMessageDetail].Init()

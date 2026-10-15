@@ -34,6 +34,8 @@ const (
 	keyD     = "<d>"
 	keyO     = "<o>"
 	keyA     = "<a>"
+	keyE     = "<e>"
+	keyC     = "<c>"
 
 	descBack     = "Back"
 	descFilter   = "Filter"
@@ -43,7 +45,16 @@ const (
 	descOverview = "Overview"
 	descDefaults = "Defaults"
 	descPurge    = "Purge"
+	descExport   = "Export"
 )
+
+// copyBindings copy the selected or displayed message's value, key, or the
+// whole record as JSON, as shown (decoded or raw).
+var copyBindings = []binding{
+	{keyC, "Copy Value", false},
+	{"<K>", "Copy Key", false},
+	{"<C>", "Copy JSON", false},
+}
 
 // viewBindings is each view's own keys. A key here must be handled by the
 // view (TestBindingsAreHandled), and a key the view handles must be here
@@ -101,10 +112,16 @@ var viewBindings = map[style.ViewType][]binding{
 		{keyA, "All Partitions", false},
 		{"<h>", "Scroll Left", false},
 		{"<l>", "Scroll Right", false},
+		{keyE, descExport, false},
+		copyBindings[0], copyBindings[1], copyBindings[2],
 		{keyEsc, descBack, false},
 	},
 	style.ViewMessageDetail: {
 		{keyS, "Save", true},
+		{keyC, "Copy Value", true},
+		copyBindings[1], copyBindings[2],
+		{"<n>", "Next", true},
+		{"<N>", "Previous", false},
 		{keyCtrlF, "PgDn", true},
 		{keyCtrlB, "PgUp", true},
 		{keyEsc, descBack, true},
@@ -119,6 +136,7 @@ var viewBindings = map[style.ViewType][]binding{
 	},
 	style.ViewSearch: {
 		{keyEnter, "View", true},
+		{keyE, descExport, true},
 		{keyEsc, descBack, true},
 	},
 	style.ViewProduce:      formBindings,
