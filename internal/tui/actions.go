@@ -209,6 +209,12 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 	case "message_detail":
 		cmd := a.openMessageAt(param)
 		return a, cmd
+	case views.ActionRerunSearch:
+		cmd := a.rerunSearch()
+		return a, cmd
+	case views.ActionEditSearch:
+		cmd := a.editSearch()
+		return a, cmd
 	case "search_message_detail":
 		// Opens the detail view for a SearchView match. The search keeps
 		// running in the background — popping back returns to streaming
@@ -299,7 +305,7 @@ func (a *App) openSearchMatchAt(param string) tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return a.openMessageDetail(v.Matches(), idx)
+	return a.openMessageDetail(v.VisibleMatches(), idx)
 }
 
 // openMessageDetail pushes the current view and shows list[idx] in the

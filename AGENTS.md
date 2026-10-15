@@ -187,7 +187,11 @@ before overwriting.
 ### Search View
 
 - `enter` — view the matched message
-- `e` — export the matches so far to JSONL
+- `s` — edit the query; `R` — re-run it. Both restart the same view
+  (`SearchView.Rerun`) instead of stacking a new one
+- `/` — filter the matches locally (key/value); enter, export and
+  Message Detail's n/N follow the filtered list
+- `e` — export the matches so far (as filtered) to JSONL
 
 ### ACLs View
 
@@ -242,7 +246,7 @@ Enter with `:`, supports autocomplete:
 - `/pattern` — case-insensitive regex filter across visible columns
 - `!/pattern` or `/!pattern` — negated filter (exclude matches)
 - Invalid regex falls back to literal match
-- Available in: Topics, Groups, Messages, ACLs, TopicConfig, BrokerDetail
+- Available in: Topics, Groups, Messages, ACLs, TopicConfig, BrokerDetail, Search
 
 ## CLI Flags
 
