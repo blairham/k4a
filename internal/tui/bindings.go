@@ -75,6 +75,7 @@ var viewBindings = map[style.ViewType][]binding{
 		{keyP, "Partitions", true},
 		{keyR, "Replicas", true},
 		{keyCtrlD, descPurge, true},
+		{keyA, "Reassign", true},
 		{keyEsc, descBack, false},
 	},
 	style.ViewTopicConfig: {

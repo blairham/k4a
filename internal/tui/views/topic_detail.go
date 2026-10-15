@@ -115,8 +115,40 @@ func (v *TopicDetailView) HandleKey(key string) (string, string) {
 		return "change_replication", v.topic
 	case keyCtrlD:
 		return "confirm_purge_topic", v.topic
+	case KeyReassign:
+		if p, ok := v.SelectedPartition(); ok {
+			return ActionReassign, fmt.Sprintf("%d", p.ID)
+		}
 	}
 	return "", ""
+}
+
+// KeyReassign opens the replica editor for the selected partition, and
+// ActionReassign (param: the partition ID) is what it asks the App to do.
+const (
+	KeyReassign    = "a"
+	ActionReassign = "reassign_partition"
+)
+
+// SelectedPartition returns the partition under the cursor.
+func (v *TopicDetailView) SelectedPartition() (kafka.PartitionInfo, bool) {
+	idx := v.table.Cursor()
+	if v.detail == nil || idx < 0 || idx >= len(v.detail.Partitions) {
+		return kafka.PartitionInfo{}, false
+	}
+	return v.detail.Partitions[idx], true
+}
+
+// Partition returns the partition with the given ID.
+func (v *TopicDetailView) Partition(id int) (kafka.PartitionInfo, bool) {
+	if v.detail != nil {
+		for _, p := range v.detail.Partitions {
+			if p.ID == id {
+				return p, true
+			}
+		}
+	}
+	return kafka.PartitionInfo{}, false
 }
 
 // PartitionCount returns the current partition count, or 0 if data hasn't loaded.
@@ -175,7 +207,7 @@ func (v *TopicDetailView) renderSummary() string {
 
 	items := []card{
 		{label: "Partitions", value: fmt.Sprintf("%d", len(d.Partitions)), vStyle: valueStyle},
-		{label: "Replication", value: fmt.Sprintf("%d", d.ReplicationFactor), vStyle: valueStyle},
+		{label: "Replication", value: replicationCard(d), vStyle: valueStyle},
 		{label: "URP", value: fmt.Sprintf("%d", d.URP), vStyle: urpValueStyle(d.URP)},
 		{label: "In Sync", value: fmt.Sprintf("%d of %d", d.TotalISR, d.TotalReplicas), vStyle: valueStyle},
 		{label: "Type", value: topicType, vStyle: valueStyle},
@@ -248,15 +280,9 @@ func (v *TopicDetailView) rebuildRows() {
 	}
 	rows := make([]table.Row, 0, len(v.detail.Partitions))
 	for _, p := range v.detail.Partitions {
-		// Format replicas with leader first (leader is highlighted in the UI).
-		replicaStrs := make([]string, 0, len(p.Replicas))
-		for _, r := range p.Replicas {
-			replicaStrs = append(replicaStrs, fmt.Sprintf("%d", r))
-		}
-
 		rows = append(rows, table.Row{
 			fmt.Sprintf("%d", p.ID),
-			strings.Join(replicaStrs, ", "),
+			formatReplicas(p),
 			fmt.Sprintf("%d", p.FirstOffset),
 			fmt.Sprintf("%d", p.LastOffset),
 			formatCount(p.Messages),
@@ -277,4 +303,34 @@ func (v *TopicDetailView) refresh() tea.Cmd {
 		detail, err := v.client.FetchTopicDetail(context.Background(), topic)
 		return TopicDetailRefreshMsg{Detail: detail, Err: err}
 	}
+}
+
+// formatReplicas lists a partition's replicas, preferred leader first, and
+// while a reassignment is moving it, what is being added and removed: the
+// progress of a move shows as those two shrinking to nothing.
+func formatReplicas(p kafka.PartitionInfo) string {
+	join := func(ids []int) string {
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			out = append(out, fmt.Sprintf("%d", id))
+		}
+		return strings.Join(out, ", ")
+	}
+	s := join(p.Replicas)
+	if len(p.Adding) > 0 {
+		s += " +" + join(p.Adding)
+	}
+	if len(p.Removing) > 0 {
+		s += " -" + join(p.Removing)
+	}
+	return s
+}
+
+// replicationCard is the replication factor, plus how many partitions a
+// reassignment is still moving.
+func replicationCard(d *kafka.TopicDetail) string {
+	if d.Reassigning > 0 {
+		return fmt.Sprintf("%d (%d moving)", d.ReplicationFactor, d.Reassigning)
+	}
+	return fmt.Sprintf("%d", d.ReplicationFactor)
 }

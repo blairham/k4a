@@ -115,6 +115,8 @@ type TopicInfo struct {
 // PartitionInfo holds partition-level detail.
 type PartitionInfo struct {
 	Replicas    []int
+	Adding      []int // replicas a reassignment in progress is adding
+	Removing    []int // replicas a reassignment in progress is removing
 	ISR         []int
 	ID          int
 	Leader      int
@@ -135,6 +137,7 @@ type TopicDetail struct {
 	TotalMessages     int64
 	RetentionMs       int64
 	RetentionBytes    int64
+	Reassigning       int // partitions with a reassignment in progress
 	Internal          bool
 }
 
@@ -451,6 +454,7 @@ func (c *Client) FetchTopicDetail(ctx context.Context, topic string) (*TopicDeta
 	}
 	detail.ReplicationFactor = rf
 
+	c.applyReassignments(ctx, detail)
 	c.applyTopicConfig(ctx, topic, detail)
 	return detail, nil
 }

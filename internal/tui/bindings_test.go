@@ -97,7 +97,14 @@ func bindingFixtures(t *testing.T) map[style.ViewType]func() views.View {
 			}})
 			return sized(v)
 		},
-		style.ViewTopicDetail: func() views.View { return sized(views.NewTopicDetailView(nil, "orders")) },
+		style.ViewTopicDetail: func() views.View {
+			v := views.NewTopicDetailView(nil, "orders")
+			v.Update(views.TopicDetailRefreshMsg{Detail: &kafka.TopicDetail{ //nolint:errcheck
+				Name: "orders", ReplicationFactor: 1,
+				Partitions: []kafka.PartitionInfo{{ID: 0, Leader: 1, Replicas: []int{1}, ISR: []int{1}}},
+			}})
+			return sized(v)
+		},
 		style.ViewTopicConfig: func() views.View {
 			v := views.NewTopicConfigView(nil, "orders")
 			v.Update(views.TopicConfigRefreshMsg{Configs: configs}) //nolint:errcheck
