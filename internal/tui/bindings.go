@@ -85,6 +85,7 @@ var viewBindings = map[style.ViewType][]binding{
 		{keyEsc, descBack, false},
 	},
 	style.ViewBrokerDetail: {
+		{keyEnter, "Edit", true},
 		{keyD, descDefaults, true},
 		{keyEsc, descBack, true},
 	},
