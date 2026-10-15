@@ -278,7 +278,9 @@ The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,
 `index.enabled`.
 
-SSM parameter resolution for broker endpoints. Env var expansion with `$VAR`.
+SSM parameter resolution for broker endpoints. Env var expansion: `brokers`
+expands `$VAR` anywhere; credentials, cert paths and other string flags only
+when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 
 **AWS profiles are resolved in-process** — a context's `profile:` (or `-p`) goes to `internal/awscreds`, which loads it through the AWS SDK's shared config, so an SSO session or a `credential_process` (granted, aws-vault, …) works without wrapping `k4a` in `assume --exec` or `aws-vault exec`; an ambient session still works as the default chain. The SSM broker lookup in `internal/config` reports an expired session with the command that renews it (`awscreds.LoginHint`); the MSK IAM signer in `internal/kafka/auth.go` loads credentials lazily on the first handshake, so a lapsed session surfaces as a connection error. See `docs/design/auth.md`.
 
