@@ -4,7 +4,10 @@
 package schemareg
 
 import (
+	"bytes"
+	"encoding/hex"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/sr"
@@ -13,14 +16,17 @@ import (
 // FuzzParseWire feeds arbitrary record bytes (which come straight off a
 // broker) to the wire-format parser. It must never panic, never return a
 // body that is not a suffix of its input, and agree with franz-go's own
-// Confluent header decoder whenever that one accepts the input.
+// Confluent header decoder whenever that one accepts the input. The same bytes
+// also go to the schema-ID header parser, whose input is a record header.
 func FuzzParseWire(f *testing.F) {
+	f.Add(append([]byte{1}, make([]byte, 17)...))
 	f.Add([]byte{0, 0, 0, 0, 1, 0})
 	f.Add([]byte{0, 0, 0, 0, 1, 2, 2, 'x'})
 	f.Add([]byte{0, 0, 0, 0, 1, 4, 2, 0, 'x'})
 	f.Add([]byte{0, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f})
 	f.Add([]byte(`{"plain":"json"}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
+		checkSchemaIDHeader(t, b)
 		id, body, ok := ParseHeader(b)
 		if !ok {
 			return
@@ -49,4 +55,21 @@ func FuzzParseWire(f *testing.F) {
 			t.Fatalf("indexes %v, franz-go says %v", idx, srIdx)
 		}
 	})
+}
+
+func checkSchemaIDHeader(t *testing.T, b []byte) {
+	t.Helper()
+	id, guid, rest, ok := ParseSchemaIDHeader(b)
+	if !ok {
+		return
+	}
+	if (id > 0) == (guid != "") || len(rest) > len(b) || !bytes.HasSuffix(b, rest) {
+		t.Fatalf("id %d guid %q rest %d of %d", id, guid, len(rest), len(b))
+	}
+	if guid != "" {
+		raw, err := hex.DecodeString(strings.ReplaceAll(guid, "-", ""))
+		if err != nil || len(guid) != 36 || !bytes.Equal(raw, b[1:guidHeaderSize]) {
+			t.Fatalf("guid %q from %x", guid, b[:guidHeaderSize])
+		}
+	}
 }

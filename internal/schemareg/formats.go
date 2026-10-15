@@ -216,12 +216,26 @@ func protoAccessor(srcs map[string]string) func(string) (io.ReadCloser, error) {
 	}
 }
 
-func decodeProtobuf(fd protoreflect.FileDescriptor, body []byte) (string, error) {
-	indexes, msg, err := ParseMessageIndexes(body)
+// decodeProtobuf decodes body as the message the index path picks. protoIdx
+// holds that path when a schema-ID header carried it; nil means it prefixes
+// body, as in the classic wire format.
+func decodeProtobuf(ps *protoSchema, protoIdx, body []byte) (string, error) {
+	var indexes []int
+	var err error
+	msg := body
+	if protoIdx == nil {
+		indexes, msg, err = ParseMessageIndexes(body)
+	} else {
+		var rest []byte
+		indexes, rest, err = ParseMessageIndexes(protoIdx)
+		if err == nil && len(rest) > 0 {
+			err = fmt.Errorf("%d unexpected bytes after the message-index path in the schema ID header", len(rest))
+		}
+	}
 	if err != nil {
 		return "", err
 	}
-	md, err := messageAt(fd, indexes)
+	md, err := messageAt(ps.fd, indexes)
 	if err != nil {
 		return "", err
 	}
@@ -229,13 +243,18 @@ func decodeProtobuf(fd protoreflect.FileDescriptor, body []byte) (string, error)
 	if uerr := proto.Unmarshal(msg, m); uerr != nil {
 		return "", fmt.Errorf("decoding Protobuf %s: %w", md.FullName(), uerr)
 	}
-	out, err := protojson.Marshal(m)
+	ps.prepareAnys(m, 0)
+	out, err := protojson.MarshalOptions{Resolver: ps}.Marshal(m)
 	if err != nil {
 		return "", fmt.Errorf("rendering Protobuf %s as JSON: %w", md.FullName(), err)
 	}
 	// protojson randomizes its whitespace on purpose; compact it so the same
 	// message always renders the same way.
-	return compact(out)
+	s, err := compact(out)
+	if err != nil {
+		return "", err
+	}
+	return restoreUnresolvedAnys(s), nil
 }
 
 func compact(b []byte) (string, error) {

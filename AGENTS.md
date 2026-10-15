@@ -487,8 +487,9 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   bounds must be non-negative and exact), `FuzzParseTopicSchema`
   (`internal/kafka/schema_fuzz_test.go`; a schema that loads must produce)
   `FuzzParseWire` (`internal/schemareg/wire_fuzz_test.go`; the Confluent
-  wire-format header and Protobuf message-index path of any record bytes,
-  checked against franz-go's own decoder), and `FuzzParsePath`
+  wire-format header, Protobuf message-index path and Confluent 8
+  schema-ID header of any record bytes, checked against franz-go's own
+  decoder), and `FuzzParsePath`
   (`internal/jsonpath`; a JSON-path predicate's canonical form, which the
   search cache keys on, must re-parse to itself and match the same records).
   Before the first release they found a recall gap for Katakana, Thai, İ and

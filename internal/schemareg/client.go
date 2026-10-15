@@ -53,7 +53,7 @@ const (
 // the life of the process. It is safe for concurrent use.
 type Registry struct {
 	cl      *sr.Client
-	entries map[int]*entry
+	entries map[string]*entry // by schemaRef.cacheKey
 	now     func() time.Time
 	mu      sync.Mutex
 }
@@ -78,7 +78,7 @@ func New(cfg Config) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schema registry client: %w", err)
 	}
-	return &Registry{cl: cl, entries: map[int]*entry{}, now: time.Now}, nil
+	return &Registry{cl: cl, entries: map[string]*entry{}, now: time.Now}, nil
 }
 
 func clientOpts(cfg Config) ([]sr.ClientOpt, error) {
@@ -175,9 +175,10 @@ func tlsConfig(caFile string) (*tls.Config, error) {
 // lookup returns the compiled schema for id, fetching and compiling it on
 // first use. Waiters give up when ctx ends; the fetch itself runs under its
 // own timeout so one impatient caller cannot poison the cache for the rest.
-func (r *Registry) lookup(ctx context.Context, id int) (*schema, error) {
+func (r *Registry) lookup(ctx context.Context, ref schemaRef) (*schema, error) {
+	key := ref.cacheKey()
 	r.mu.Lock()
-	e, ok := r.entries[id]
+	e, ok := r.entries[key]
 	if ok && !r.stale(e) {
 		r.mu.Unlock()
 		return wait(ctx, e)
@@ -186,7 +187,7 @@ func (r *Registry) lookup(ctx context.Context, id int) (*schema, error) {
 		r.evictOne()
 	}
 	e = &entry{done: make(chan struct{})}
-	r.entries[id] = e
+	r.entries[key] = e
 	r.mu.Unlock()
 
 	// WithoutCancel: the fetch outlives this caller's cancellation, since
@@ -194,7 +195,7 @@ func (r *Registry) lookup(ctx context.Context, id int) (*schema, error) {
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*requestTimeout)
 	go func() {
 		defer cancel()
-		sch, err := r.fetch(fctx, id)
+		sch, err := r.fetch(fctx, ref)
 		r.mu.Lock()
 		e.sch, e.err, e.at = sch, err, r.now()
 		r.mu.Unlock()
@@ -221,7 +222,7 @@ func (r *Registry) stale(e *entry) bool {
 // evictOne drops a finished entry, preferring a failed one. Called with r.mu
 // held.
 func (r *Registry) evictOne() {
-	victim, found := 0, false
+	victim, found := "", false
 	for id, e := range r.entries {
 		select {
 		case <-e.done:
@@ -249,12 +250,16 @@ func wait(ctx context.Context, e *entry) (*schema, error) {
 
 var errSchemaNotFound = errors.New("schema not found in registry")
 
-// fetch reads schema id, its references and the subject/version pairs that
-// use it, and compiles it.
-func (r *Registry) fetch(ctx context.Context, id int) (*schema, error) {
+// fetch reads the referenced schema, its references and the subject/version
+// pairs that use it, and compiles it.
+func (r *Registry) fetch(ctx context.Context, ref schemaRef) (*schema, error) {
+	if ref.guid != "" {
+		return r.fetchGUID(ctx, ref.guid)
+	}
+	id := ref.id
 	s, err := r.cl.SchemaByID(ctx, id)
 	if err != nil {
-		return nil, registryError(id, err)
+		return nil, registryError(fmt.Sprintf("schema id %d", id), err)
 	}
 	// Subject and version are display metadata; a registry that refuses this
 	// call still lets the payload decode.
@@ -271,25 +276,63 @@ func (r *Registry) fetch(ctx context.Context, id int) (*schema, error) {
 	return sch, nil
 }
 
+// fetchGUID reads a schema named by GUID. Its numeric ID, and through it the
+// subject and version, are only labels: a registry that will not say still
+// lets the payload decode.
+func (r *Registry) fetchGUID(ctx context.Context, guid string) (*schema, error) {
+	ss, err := r.cl.SchemaByGUID(ctx, guid)
+	if err != nil {
+		return nil, registryError("schema guid "+guid, err)
+	}
+	sch, err := compile(ctx, r, ss.Schema)
+	if err != nil {
+		return nil, err
+	}
+	sch.guid = guid
+	sch.id = ss.ID
+	if sch.id <= 0 {
+		sch.id = r.idForGUID(ctx, guid)
+	}
+	if sch.id > 0 {
+		sch.versions, _ = r.cl.SchemaVersionsByID(ctx, sch.id) //nolint:errcheck // display metadata only
+	}
+	return sch, nil
+}
+
+// idForGUID picks the GUID's ID in the default context, else any context's,
+// or 0 when the registry does not say.
+func (r *Registry) idForGUID(ctx context.Context, guid string) int {
+	ids, err := r.cl.SchemaIDsByGUID(ctx, guid)
+	if err != nil || len(ids) == 0 {
+		return 0
+	}
+	for _, c := range ids {
+		if c.Context == "" || c.Context == "." {
+			return c.ID
+		}
+	}
+	return ids[0].ID
+}
+
 // registryError turns a client error into one that names the schema ID and
 // never echoes a URL with whatever it may hold.
-func registryError(id int, err error) error {
+func registryError(what string, err error) error {
 	var re *sr.ResponseError
 	if errors.As(err, &re) {
 		if re.StatusCode == http.StatusNotFound {
-			return fmt.Errorf("schema id %d: %w", id, errSchemaNotFound)
+			return fmt.Errorf("%s: %w", what, errSchemaNotFound)
 		}
 		msg := re.Message
 		if msg == "" {
 			msg = http.StatusText(re.StatusCode)
 		}
-		return fmt.Errorf("schema id %d: registry returned %d: %s", id, re.StatusCode, msg)
+		return fmt.Errorf("%s: registry returned %d: %s", what, re.StatusCode, msg)
 	}
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		return fmt.Errorf("schema id %d: registry unreachable: %w", id, ue.Err)
+		return fmt.Errorf("%s: registry unreachable: %w", what, ue.Err)
 	}
-	return fmt.Errorf("schema id %d: %w", id, err)
+	return fmt.Errorf("%s: %w", what, err)
 }
 
 // reference fetches one referenced schema by subject and version.
