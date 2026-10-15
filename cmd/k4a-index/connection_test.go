@@ -98,13 +98,26 @@ func TestResolveConnectionNoFlagsKeepsContext(t *testing.T) {
 	}
 }
 
+// TestResolveConnectionDirectDefaults pins #97: a --brokers connection
+// without --auth infers the method as the CLI does, so a bare local broker
+// is plaintext rather than a SCRAM credential error.
 func TestResolveConnectionDirectDefaults(t *testing.T) {
 	t.Parallel()
-	_, got, err := resolveConnection(&flags{Brokers: "b:9092"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Method != kafka.AuthSCRAM || got.Region != "us-east-1" {
-		t.Errorf("direct defaults = method %q region %q, want scram us-east-1", got.Method, got.Region)
+	for _, tc := range []struct {
+		f    flags
+		want kafka.AuthMethod
+	}{
+		{flags{Brokers: "b:9092"}, kafka.AuthPlaintext},
+		{flags{Brokers: "b:9092", Username: "u", Password: "p"}, kafka.AuthSCRAM}, // pragma: allowlist secret
+		{flags{Brokers: "b:9092", CertFile: "c", KeyFile: "k"}, kafka.AuthMTLS},
+		{flags{Brokers: "b:9092", Auth: "iam"}, kafka.AuthIAM},
+	} {
+		_, got, err := resolveConnection(&tc.f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Method != tc.want || got.Region != "us-east-1" {
+			t.Errorf("resolveConnection(%+v) = method %q region %q, want %q us-east-1", tc.f, got.Method, got.Region, tc.want)
+		}
 	}
 }
