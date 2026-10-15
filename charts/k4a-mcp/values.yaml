@@ -2,8 +2,10 @@
 # `mcp` target of the repo-root Dockerfile.
 #
 # k4a-mcp is stateless: it holds no index and no Kafka client, it just proxies
-# MCP tool calls to k4a-index over gRPC. Scale replicas freely — there is
-# nothing to coordinate.
+# MCP tool calls to k4a-index over gRPC, and it serves MCP in the go-sdk's
+# Stateless mode, so no Mcp-Session-Id is issued and no session lives in pod
+# memory. Any replica can answer any request: scale replicas freely, with no
+# sticky routing needed.
 replicaCount: 1
 
 image:
