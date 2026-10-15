@@ -52,21 +52,7 @@ func TestListenerFlagsGuardTheServer(t *testing.T) {
 	go srv.Serve(lis) //nolint:errcheck // stopped in cleanup
 	t.Cleanup(srv.Stop)
 
-	code := func(o endpointauth.ClientOptions) codes.Code {
-		dial, err := o.GRPCDialOptions()
-		if err != nil {
-			t.Fatal(err)
-		}
-		conn, err := grpc.NewClient(lis.Addr().String(), dial...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer conn.Close() //nolint:errcheck // test cleanup
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, err = indexv1.NewIndexClient(conn).Coverage(ctx, &indexv1.CoverageRequest{Topic: "t.x"})
-		return status.Code(err)
-	}
+	code := func(o endpointauth.ClientOptions) codes.Code { return coverageCode(t, lis.Addr().String(), o) }
 	if got := code(endpointauth.ClientOptions{CAFile: pki.CA, Token: "tok"}); got != codes.Unimplemented {
 		t.Errorf("with the token: %v, want Unimplemented (admitted)", got)
 	}
@@ -89,6 +75,24 @@ func TestListenerFlagsGuardTheServer(t *testing.T) {
 	if _, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
 		t.Errorf("health check without the token: %v, want SERVING", err)
 	}
+}
+
+// coverageCode makes one Coverage call with o and returns its status code.
+func coverageCode(t *testing.T, addr string, o endpointauth.ClientOptions) codes.Code {
+	t.Helper()
+	dial, err := o.GRPCDialOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := grpc.NewClient(addr, dial...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // test cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = indexv1.NewIndexClient(conn).Coverage(ctx, &indexv1.CoverageRequest{Topic: "t.x"})
+	return status.Code(err)
 }
 
 func TestValidateFlagsRefusesHalfListenerConfig(t *testing.T) {
