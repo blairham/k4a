@@ -877,6 +877,7 @@ func (a *App) indexerFor(topic string) *index.Indexer {
 func indexParams(p kafka.SearchParams) index.QueryParams {
 	out := index.QueryParams{
 		Pattern:    p.Pattern,
+		JSONPath:   p.PathString(),
 		Since:      p.Since,
 		Until:      p.Until,
 		Partitions: p.Partitions,

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/state"
 )
@@ -419,5 +420,32 @@ func TestIsValidAgainst_PartitionCountChanged(t *testing.T) {
 	// even with a generous closed window.
 	if entry.IsValidAgainst(map[int32]int64{0: 100, 1: 200, 2: 50}, until) {
 		t.Error("partition count change should always invalidate")
+	}
+}
+
+// TestBuildKey_PathIsPartOfTheKey: two searches differing only in their JSON
+// path must not share a cache entry, and equivalent spellings must.
+func TestBuildKey_PathIsPartOfTheKey(t *testing.T) {
+	t.Parallel()
+
+	key := func(path string) string {
+		p := kafka.SearchParams{}
+		if path != "" {
+			expr, err := jsonpath.Parse(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Path = expr
+		}
+		return BuildKey("c", "t", p).Hash()
+	}
+	if key(`.a == 1`) == key(`.a == 2`) {
+		t.Error("different JSON paths share a cache key")
+	}
+	if key(`.a == 1`) == key("") {
+		t.Error("a JSON-path search shares a cache key with a match-all search")
+	}
+	if key(`.a==1`) != key(`.["a"] == 1`) {
+		t.Error("equivalent JSON paths got different cache keys")
 	}
 }

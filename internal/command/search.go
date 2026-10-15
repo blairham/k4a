@@ -18,6 +18,7 @@ import (
 	goflags "github.com/jessevdk/go-flags"
 
 	"github.com/blairham/k4a/internal/config"
+	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/searchcache"
 	"github.com/blairham/k4a/internal/searchcli"
@@ -29,11 +30,12 @@ import (
 // is the search pattern; everything else tunes the search.
 type SearchFlags struct {
 	Topic      string `short:"t" long:"topic"          env:"KAFKA_TOPIC" required:"true" description:"Topic to search (required)"`
-	Scope      string `          long:"scope"                                            description:"Match in: key, value, key+value, key+value+headers"        default:"key+value"`
+	Scope      string `          long:"scope"                                            description:"Match in: key, value, key+value, key+value+headers"                                       default:"key+value"`
 	Since      string `          long:"since"                                            description:"Lower time bound (e.g., 1h, 24h, 7d) or RFC3339 timestamp"`
 	Until      string `          long:"until"                                            description:"Upper time bound (same format as --since)"`
 	Partitions string `short:"P" long:"partitions"                                       description:"Comma-separated partition IDs (default: all)"`
-	Format     string `          long:"format"                                           description:"Output format: text or json"                               default:"text"`
+	Path       string `          long:"path"                                             description:"JSON-path predicate on the raw key/value, e.g. '.order.status == \"failed\"' (scan-only)"`
+	Format     string `          long:"format"                                           description:"Output format: text or json"                                                              default:"text"`
 	ConnectionFlags
 	Cap           int  `          long:"cap"                                              description:"Maximum matches (0 = library default)"`
 	CaseSensitive bool `          long:"case-sensitive"                                   description:"Don't add (?i) prefix to the pattern"`
@@ -47,12 +49,21 @@ type SearchCommand struct{}
 // Help returns the detailed help text.
 func (c *SearchCommand) Help() string {
 	return `Usage: k4a search PATTERN [options]
+       k4a search --path EXPR [PATTERN] [options]
 
   Run a deep search against a Kafka topic. The bare positional argument
   is the search term (regex by default; falls back to literal substring
   if the regex is invalid). Matching is grep-style — the pattern can hit
   anywhere inside the raw key/value/headers — whether the answer comes
   from an index or a broker scan. All tuning happens via flags.
+
+  --path matches a JSON-path predicate instead of (or, with a PATTERN, as
+  well as) the regex: a jq-style path of .name, ["any name"] and [N] steps,
+  then exists (the default), ==, !=, <, <=, > or >= against a JSON string,
+  number, true, false or null. It is evaluated on the raw key and value
+  (not headers), compares numbers numerically and strings exactly, and a
+  record whose path is missing never matches, not even with !=. The index
+  cannot answer it, so it always scans the broker.
 
   Identical to the TUI search (s in Messages, or :search), just non-interactive — useful
   for scripts, CI, "did this message ever happen" one-liners.
@@ -90,6 +101,7 @@ Search:
       --since=DURATION|TIMESTAMP  Lower time bound (e.g., 1h, 24h, 7d, 2026-05-14T00:00:00Z)
       --until=DURATION|TIMESTAMP  Upper time bound
       --partitions=LIST           Comma-separated partition IDs (default: all)
+      --path=EXPR                 JSON-path predicate (see above)
       --case-sensitive            Don't add (?i) prefix to the pattern
       --cap=N                     Maximum matches before stopping
 
@@ -106,6 +118,9 @@ Examples:
 
   # Regex against specific partitions, JSON output for piping into jq
   k4a search "order-\\d{8}" -t orders --partitions 0,1,2 --format json | jq .
+
+  # Failed orders in the last hour, by field rather than by substring
+  k4a search --path '.order.status == "failed"' -t orders --since 1h
 
   # Case-sensitive header search
   k4a search "X-Trace-Id" -t requests --scope key+value+headers --case-sensitive`
@@ -128,8 +143,8 @@ func (c *SearchCommand) Run(args []string) int {
 		log.Error("invalid flags", "err", err)
 		return 1
 	}
-	if len(rest) == 0 {
-		log.Error("search pattern is required (positional argument)")
+	if len(rest) == 0 && strings.TrimSpace(flags.Path) == "" {
+		log.Error("search pattern is required (positional argument, or --path)")
 		return 1
 	}
 	pattern := strings.Join(rest, " ")
@@ -158,18 +173,9 @@ func (c *SearchCommand) Run(args []string) int {
 // translation mirrors the TUI's search-bar implementation so behavior is
 // identical between interactive and CLI use.
 func buildSearchParams(pattern string, flags *SearchFlags) (kafka.SearchParams, error) {
-	pat := strings.TrimSpace(pattern)
-	if pat == "" {
-		return kafka.SearchParams{}, fmt.Errorf("pattern is empty")
-	}
-	if !flags.CaseSensitive && !strings.HasPrefix(pat, "(?") {
-		pat = "(?i)" + pat
-	}
-	re, err := regexp.Compile(pat)
+	path, re, err := parseQuery(pattern, flags.Path, flags.CaseSensitive)
 	if err != nil {
-		// Fall back to literal substring on regex parse failure — same
-		// behavior as the TUI search bar.
-		re = regexp.MustCompile("(?i)" + regexp.QuoteMeta(strings.TrimSpace(pattern)))
+		return kafka.SearchParams{}, err
 	}
 
 	scope, err := parseScopeFlag(flags.Scope)
@@ -191,12 +197,44 @@ func buildSearchParams(pattern string, flags *SearchFlags) (kafka.SearchParams, 
 
 	return kafka.SearchParams{
 		Pattern:    re,
+		Path:       path,
 		Scope:      scope,
 		Since:      since,
 		Until:      until,
 		Partitions: parts,
 		Cap:        flags.Cap,
 	}, nil
+}
+
+// parseQuery turns the user's regex pattern and JSON-path predicate into the
+// matchers every surface uses. Either may be empty (nil result) but not both.
+// The regex is case-insensitive unless asked or already flagged, and a
+// literal substring when it is not a valid regex.
+func parseQuery(pattern, path string, caseSensitive bool) (*jsonpath.Expr, *regexp.Regexp, error) {
+	var expr *jsonpath.Expr
+	if strings.TrimSpace(path) != "" {
+		var err error
+		if expr, err = jsonpath.Parse(path); err != nil {
+			return nil, nil, err
+		}
+	}
+	pat := strings.TrimSpace(pattern)
+	if pat == "" {
+		if expr == nil {
+			return nil, nil, fmt.Errorf("pattern is empty")
+		}
+		return expr, nil, nil
+	}
+	if !caseSensitive && !strings.HasPrefix(pat, "(?") {
+		pat = "(?i)" + pat
+	}
+	re, err := regexp.Compile(pat)
+	if err != nil {
+		// Fall back to literal substring on regex parse failure — same
+		// behavior as the TUI search bar.
+		re = regexp.MustCompile("(?i)" + regexp.QuoteMeta(strings.TrimSpace(pattern)))
+	}
+	return expr, re, nil
 }
 
 func parseScopeFlag(s string) (kafka.SearchScope, error) {

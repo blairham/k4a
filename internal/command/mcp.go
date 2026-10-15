@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"regexp"
 	"strings"
 	"time"
 
@@ -159,7 +158,8 @@ func (c *MCPCommand) Run(args []string) int {
 		&mcp.Tool{
 			Name: "search",
 			Description: "Search a Kafka topic for records matching a regex " +
-				"(or literal substring on regex parse failure). Matching is " +
+				"(or literal substring on regex parse failure) and/or a JSON-path " +
+				"predicate (path, e.g. .order.status == \"failed\"; always a scan). Matching is " +
 				"grep-style — the pattern can hit anywhere inside the raw " +
 				"key/value/headers — regardless of whether the answer is served " +
 				"from an index or a broker scan; patterns an index cannot answer " +
@@ -203,7 +203,8 @@ func isCleanShutdown(ctx context.Context, err error) bool {
 // produce the tool's JSON schema automatically.
 type mcpSearchInput struct {
 	Topic         string  `json:"topic"                    jsonschema:"name of the Kafka topic to search (required)"`
-	Query         string  `json:"query"                    jsonschema:"regex pattern OR literal substring; falls back to literal on regex parse failure"`
+	Query         string  `json:"query,omitempty"          jsonschema:"regex pattern OR literal substring; falls back to literal on regex parse failure. Required unless path is set; with path, both must match"`
+	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the raw key/value, jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. Always answered by a broker scan, never the index"`
 	Since         string  `json:"since,omitempty"          jsonschema:"lower time bound; relative duration like 24h/7d or RFC3339 timestamp"`
 	Until         string  `json:"until,omitempty"          jsonschema:"upper time bound; same format as since"`
 	Scope         string  `json:"scope,omitempty"          jsonschema:"match scope: key, value, key+value (default), or key+value+headers"`
@@ -227,8 +228,8 @@ func makeSearchHandler(
 		if strings.TrimSpace(in.Topic) == "" {
 			return nil, searchcli.Summary{}, fmt.Errorf("topic is required")
 		}
-		if strings.TrimSpace(in.Query) == "" {
-			return nil, searchcli.Summary{}, fmt.Errorf("query is required")
+		if strings.TrimSpace(in.Query) == "" && strings.TrimSpace(in.Path) == "" {
+			return nil, searchcli.Summary{}, fmt.Errorf("query or path is required")
 		}
 
 		params, err := buildMCPParams(in)
@@ -244,14 +245,9 @@ func makeSearchHandler(
 // search.go. The two share the same time/scope/partition parsing
 // semantics so behavior is identical across surfaces.
 func buildMCPParams(in mcpSearchInput) (kafka.SearchParams, error) {
-	pat := strings.TrimSpace(in.Query)
-	if !in.CaseSensitive && !strings.HasPrefix(pat, "(?") {
-		pat = "(?i)" + pat
-	}
-	re, err := regexp.Compile(pat)
+	path, re, err := parseQuery(in.Query, in.Path, in.CaseSensitive)
 	if err != nil {
-		// Same fallback as the CLI / TUI: treat as literal substring.
-		re = regexp.MustCompile("(?i)" + regexp.QuoteMeta(strings.TrimSpace(in.Query)))
+		return kafka.SearchParams{}, err
 	}
 
 	scope, err := parseScopeFlag(in.Scope)
@@ -270,6 +266,7 @@ func buildMCPParams(in mcpSearchInput) (kafka.SearchParams, error) {
 
 	return kafka.SearchParams{
 		Pattern:    re,
+		Path:       path,
 		Scope:      scope,
 		Since:      since,
 		Until:      until,

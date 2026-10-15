@@ -21,7 +21,9 @@ import (
 // controls whether it reports the topic as followed (served_from_index).
 type fakeIndex struct {
 	indexv1.UnimplementedIndexServer
+	values    []string // match values, cycled; default {"tag":"needle"}
 	following bool
+	capped    bool
 	matches   int
 }
 
@@ -41,14 +43,20 @@ func (f *fakeIndex) Search(_ *indexv1.SearchRequest, stream grpc.ServerStreaming
 		return err
 	}
 	for i := 0; i < f.matches; i++ {
+		value := `{"tag":"needle"}`
+		if len(f.values) > 0 {
+			value = f.values[i%len(f.values)]
+		}
 		if err := stream.Send(&indexv1.SearchEvent{Event: &indexv1.SearchEvent_Match{Match: &indexv1.Match{
-			Partition: 0, Offset: int64(200 + i), TimestampMs: 1_500_000, Key: "k", Value: `{"tag":"needle"}`,
+			Partition: 0, Offset: int64(200 + i), TimestampMs: 1_500_000, Key: "k", Value: value,
 		}}}); err != nil {
 			return err
 		}
 	}
 	return stream.Send(&indexv1.SearchEvent{
-		Event: &indexv1.SearchEvent_Progress{Progress: &indexv1.Progress{Matched: int64(f.matches), Done: true}},
+		Event: &indexv1.SearchEvent_Progress{Progress: &indexv1.Progress{
+			Matched: int64(f.matches), Done: true, Capped: f.capped,
+		}},
 	})
 }
 
@@ -238,5 +246,79 @@ func TestSearchHandlerPatternRecall(t *testing.T) {
 	}
 	if out.PatternRecall != "best_effort" || out.PatternRecallNote == "" {
 		t.Errorf("recall=%q note=%q, want best_effort with a reason", out.PatternRecall, out.PatternRecallNote)
+	}
+}
+
+// TestSearchHandlerJSONPath: the daemon cannot select by path, so the tool
+// filters what it returns by the scan's own rule, and path_recall is "full"
+// only when the daemon's answer was the whole window.
+func TestSearchHandlerJSONPath(t *testing.T) {
+	t.Parallel()
+	values := []string{`{"status":"failed"}`, `{"status":"ok"}`, `not json`, `{"status":"failed","n":1}`}
+	cases := []struct {
+		name       string
+		wantRecall string
+		fake       fakeIndex
+		limit      int
+		wantN      int
+	}{
+		{
+			name:       "complete",
+			fake:       fakeIndex{following: true, matches: 8, values: values},
+			limit:      0,
+			wantN:      4,
+			wantRecall: "full",
+		},
+		{
+			name:       "capped flag",
+			fake:       fakeIndex{following: true, matches: 8, values: values, capped: true},
+			limit:      0,
+			wantN:      4,
+			wantRecall: "best_effort",
+		},
+		// An older daemon without the capped field: a full page is a cap.
+		{
+			name:       "full page",
+			fake:       fakeIndex{following: true, matches: 8, values: values},
+			limit:      8,
+			wantN:      4,
+			wantRecall: "best_effort",
+		},
+		{
+			name:       "unfollowed",
+			fake:       fakeIndex{following: false, values: values},
+			limit:      0,
+			wantN:      0,
+			wantRecall: "best_effort",
+		},
+	}
+	for _, c := range cases {
+		client := dialFake(t, &c.fake)
+		_, out, err := searchHandler(client)(context.Background(), nil, mcpSearchInput{
+			Topic: "demo", Path: `.status == "failed"`, Limit: c.limit,
+		})
+		if err != nil {
+			t.Fatalf("%s: search: %v", c.name, err)
+		}
+		if out.Matched != c.wantN || len(out.Matches) != c.wantN {
+			t.Errorf("%s: matched=%d matches=%d, want %d", c.name, out.Matched, len(out.Matches), c.wantN)
+		}
+		for _, m := range out.Matches {
+			if !strings.Contains(m.Value, "failed") {
+				t.Errorf("%s: kept a non-matching record %q", c.name, m.Value)
+			}
+		}
+		if out.PathRecall != c.wantRecall {
+			t.Errorf("%s: path_recall=%q, want %q", c.name, out.PathRecall, c.wantRecall)
+		}
+		if c.wantRecall == "best_effort" && out.PathRecallNote == "" {
+			t.Errorf("%s: best_effort without a note", c.name)
+		}
+	}
+
+	if _, _, err := searchHandler(dialFake(t, &fakeIndex{following: true}))(
+		context.Background(), nil, mcpSearchInput{Topic: "demo", Path: ".a =="},
+	); err == nil {
+		t.Error("an invalid path was accepted")
 	}
 }

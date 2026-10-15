@@ -229,3 +229,30 @@ func TestCanServe_RejectsUnservablePatterns(t *testing.T) {
 		}
 	}
 }
+
+// TestCanServe_DeclinesJSONPath: a fully covered window with a servable (or
+// no) pattern must still go to the scan once a JSON-path predicate is set —
+// the index holds analyzed terms, not document structure.
+func TestCanServe_DeclinesJSONPath(t *testing.T) {
+	t.Parallel()
+
+	since := queryBase
+	until := queryBase.Add(time.Minute)
+	book := Bookkeeper{
+		NewestOffsetPerPartition: map[int32]int64{0: 100},
+		OldestOffsetPerPartition: map[int32]int64{0: 0},
+		NewestTimePerPartition:   map[int32]int64{0: until.UnixMilli()},
+		OldestTimePerPartition:   map[int32]int64{0: since.UnixMilli()},
+	}
+	for _, pat := range []*regexp.Regexp{nil, regexp.MustCompile("(?i)order")} {
+		params := QueryParams{Since: since, Until: until, Pattern: pat}
+		if ok, reason := book.CanServe(params); !ok {
+			t.Fatalf("premise: covered window with pattern %v not servable: %s", pat, reason)
+		}
+		params.JSONPath = `.order.status == "failed"`
+		if ok, reason := book.CanServe(params); ok || reason != ReasonJSONPathScanOnly {
+			t.Errorf("CanServe with a JSON path (pattern %v) = %v, %q; want false, %q",
+				pat, ok, reason, ReasonJSONPathScanOnly)
+		}
+	}
+}
