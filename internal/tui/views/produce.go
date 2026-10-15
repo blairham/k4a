@@ -210,6 +210,9 @@ func (v *ProduceView) HandleKey(_ string) (string, string) {
 // Editing reports whether the form is still taking input.
 func (v *ProduceView) Editing() bool { return v.state == produceStateForm }
 
+// Topic returns the topic the form will produce to.
+func (v *ProduceView) Topic() string { return v.topic }
+
 // HandleKeyMsg processes tea.KeyMsg for form interaction.
 func (v *ProduceView) HandleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	if v.state == produceStateForm {
