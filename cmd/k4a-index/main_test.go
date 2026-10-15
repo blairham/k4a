@@ -26,6 +26,10 @@ func TestParseByteSize(t *testing.T) {
 		{"1.5GiB", 0, true},               // no fractional support
 		{"bogus", 0, true},
 		{"-5", 0, true},
+		{"8388607TiB", 8388607 << 40, false}, // the largest TiB count that fits
+		{"8388608TiB", 0, true},              // 2^63: one past int64, wrapped to negative
+		{"9000000TiB", 0, true},              // wrapped to a different negative value
+		{"9223372036854775807", 1<<63 - 1, false},
 	}
 	for _, c := range cases {
 		got, err := parseByteSize(c.in)
