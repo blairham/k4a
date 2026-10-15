@@ -724,19 +724,18 @@ func (a *App) stopAllIndexers() {
 // "search" action with a topic+query param, which runs the actual scan.
 func (a *App) openSearchBar(topic string) (tea.Model, tea.Cmd) {
 	if topic == "" {
-		// No topic context — search is only meaningful from the
-		// messages view; surface a quick flash and stay put.
-		a.errFlash = "search is only available from the messages view"
+		// No topic context: surface a quick flash and stay put.
+		a.errFlash = "search needs a topic: open one, or select one in Topics"
 		return a, nil
 	}
 	// Carry the in-memory filter (if any) into the search bar so the
 	// user can refine from a filter that found nothing in the buffer.
 	preset := ""
-	if v := typedView[*views.MessagesView](a, style.ViewMessages); v != nil {
+	if v, ok := a.activeView().(*views.MessagesView); ok && v.Topic() == topic {
 		preset = v.Filter()
 	}
 	a.promptDispatch = func(input string) (string, tea.Cmd) {
-		_, c := a.executeSearch(input)
+		_, c := a.executeSearch(topic, input)
 		return "", c
 	}
 	cmd := a.prompt.Open(preset, chrome.OpenOpts{Prompt: "search>"})
@@ -754,6 +753,9 @@ func (a *App) openSearchBar(topic string) (tea.Model, tea.Cmd) {
 // Every entry point into search (TUI Ctrl+F, MCP server, `k4a search`
 // CLI) routes through this so they all pick up the same fast paths.
 func (a *App) searchRunner() views.SearchFunc {
+	if a.searchFunc != nil {
+		return a.searchFunc
+	}
 	base := a.localSearchRunner()
 	if a.remoteIndex == nil {
 		return base

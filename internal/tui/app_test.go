@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -3105,4 +3106,78 @@ func TestFormFieldTakesGlobalShortcutKeys(t *testing.T) {
 	if app.view == style.ViewCreateTopic {
 		t.Error("esc did not leave the form")
 	}
+}
+
+// TestSearchCommandUsesActiveViewTopic: viewMap keeps the last Messages view
+// after a tab switch, so :search must resolve its topic from the active view,
+// not from whatever was tailed last.
+func TestSearchCommandUsesActiveViewTopic(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // NewApp opens the ~/.k4a state root
+
+	newApp := func() *App {
+		app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+		app.width = 80
+		app.height = 40
+		app.searchFunc = func(context.Context, string, kafka.SearchParams) (
+			<-chan kafka.ConsumedMessage, <-chan kafka.DeepSearchProgress, <-chan error,
+		) {
+			msgs, prog, errs := make(chan kafka.ConsumedMessage), make(chan kafka.DeepSearchProgress), make(chan error)
+			close(msgs)
+			close(prog)
+			close(errs)
+			return msgs, prog, errs
+		}
+		app.setView(style.ViewMessages, views.NewMessagesView(nil, "stale-tail"))
+		return app
+	}
+	searchedTopic := func(t *testing.T, app *App) string {
+		t.Helper()
+		app.dispatchCommand("search") //nolint:errcheck
+		if !app.prompt.Active() {
+			t.Fatalf("search bar did not open; errFlash = %q", app.errFlash)
+		}
+		app.promptDispatch("needle") //nolint:errcheck
+		sv := typedView[*views.SearchView](app, style.ViewSearch)
+		if sv == nil {
+			t.Fatal("no search view opened")
+		}
+		return sv.Topic()
+	}
+
+	t.Run("topics selection", func(t *testing.T) {
+		app := newApp()
+		app.Update(views.TopicsRefreshMsg{Topics: []kafka.TopicInfo{{Name: "orders"}}}) //nolint:errcheck
+		if got := searchedTopic(t, app); got != "orders" {
+			t.Errorf("searched %q, want the selected topic %q", got, "orders")
+		}
+	})
+
+	t.Run("topic detail", func(t *testing.T) {
+		app := newApp()
+		app.setView(style.ViewTopicDetail, views.NewTopicDetailView(nil, "payments"))
+		app.view = style.ViewTopicDetail
+		if got := searchedTopic(t, app); got != "payments" {
+			t.Errorf("searched %q, want %q", got, "payments")
+		}
+	})
+
+	t.Run("messages", func(t *testing.T) {
+		app := newApp()
+		app.view = style.ViewMessages
+		if got := searchedTopic(t, app); got != "stale-tail" {
+			t.Errorf("searched %q, want %q", got, "stale-tail")
+		}
+	})
+
+	t.Run("no topic in view", func(t *testing.T) {
+		app := newApp()
+		app.view = style.ViewCluster
+		app.dispatchCommand("search") //nolint:errcheck
+		if app.prompt.Active() {
+			t.Error("search bar opened from Cluster, which has no topic")
+		}
+		if app.errFlash == "" {
+			t.Error("expected a flash explaining search needs a topic")
+		}
+	})
 }
