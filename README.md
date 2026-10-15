@@ -284,6 +284,22 @@ k4a delete-acl --resource-type topic --resource-name orders \
   --principal User:alice --operation read        # exactly one binding, as create-acl names it
 ```
 
+### Consuming from a point in time
+
+`k4a consume` reads with the `k4a` consumer group by default. To start
+somewhere specific instead, seek (each implies `--no-group`, since a group
+starts at its committed offsets):
+
+```bash
+k4a consume -t orders --since 1h                      # first record of the last hour
+k4a consume -t orders --since 2026-10-15T08:00:00Z    # or since an RFC3339 time
+k4a consume -t orders --partition 3 --offset 1200     # partition 3 from offset 1200
+k4a consume -t orders --from-beginning
+```
+
+An offset outside a partition's log starts at its nearest end; `--since`
+past the newest record waits at the end for new ones.
+
 ### Producing records
 
 `k4a produce` generates test messages by default (random, or from a
