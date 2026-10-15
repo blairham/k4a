@@ -118,3 +118,29 @@ func TestSeekZeroValueIsStart(t *testing.T) {
 		t.Errorf("zero Seek = %s, want the log start", got)
 	}
 }
+
+// ConsumeSeek is the TUI's seek: every partition from the seek, then on
+// into the live tail.
+func TestConsumeSeek(t *testing.T) {
+	t.Parallel()
+	const topic, per = "seek.tail.v1", 4
+	client := newBlockingFixture(t, topic, per)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	ch, _, _ := client.ConsumeSeek(ctx, topic, Seek{Mode: SeekOffset, Offset: 2})
+	seen := map[int][]int64{}
+	total := 0
+	for m := range ch {
+		seen[m.Partition] = append(seen[m.Partition], m.Offset)
+		// One more than the seek should yield, so a wrong start shows.
+		if total++; total > blockingPartitions*2 {
+			break
+		}
+	}
+	for p := range blockingPartitions {
+		if got := seen[p]; len(got) != 2 || got[0] != 2 {
+			t.Errorf("partition %d offsets = %v, want [2 3]", p, got)
+		}
+	}
+}

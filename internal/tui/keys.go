@@ -366,6 +366,8 @@ func (a *App) executeValueAction(pc pendingConfirm, input string) (errMsg string
 		return a.applyReplicationFactor(pc.param, input)
 	case "purge_topic":
 		return a.applyPurge(pc.param, input)
+	case views.ActionSeek:
+		return a.applySeek(input)
 	case "save_message":
 		return a.saveMessage(pc.param, input)
 	}

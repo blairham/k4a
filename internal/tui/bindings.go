@@ -106,6 +106,7 @@ var viewBindings = map[style.ViewType][]binding{
 		{keyS, "Search", true},
 		{keyO, descOverview, true},
 		{"<f>", "Follow", true},
+		{"<t>", "Seek", true},
 		{keyCtrlD, descPurge, true},
 		{"<g>", "Newest", false},
 		{keyP, "Next Partition", false},

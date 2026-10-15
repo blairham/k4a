@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/blairham/k4a/internal/kafka"
+	"github.com/blairham/k4a/internal/timebound"
 	"github.com/blairham/k4a/internal/tui/style"
 )
 
@@ -50,9 +52,24 @@ type MessagesView struct {
 	partitionFilter int
 	follow          bool
 	loading         bool
+	// seek, when set, replaced the live tail: the view reads from that
+	// point and keeps the first maxMessages records (capped) instead of the
+	// newest. nil is the live tail.
+	seek *kafka.Seek
+	// gen counts consumers started by this view, so a record still in
+	// flight from one a seek replaced is dropped rather than mixed in.
+	gen int
 	// raw shows registry-decoded keys and values as they were before
 	// decoding; toggled with x.
-	raw bool
+	raw    bool
+	capped bool
+}
+
+// genMessageMsg is a consumed record tagged with the consumer generation
+// that read it.
+type genMessageMsg struct {
+	msg kafka.ConsumedMessage
+	gen int
 }
 
 // Decoder decodes a message's registry-framed key and value in place
@@ -71,6 +88,40 @@ const decodeWait = 3 * time.Second
 // KeyToggleRaw switches Messages and Message Detail between decoded and raw
 // keys and values.
 const KeyToggleRaw = "x"
+
+// KeySeek opens the Messages seek prompt; ActionSeek is what it asks the app
+// for, with the topic as its param.
+const (
+	KeySeek    = "t"
+	ActionSeek = "seek_messages"
+)
+
+// seekLive is the seek prompt's word for the live tail.
+const seekLive = "live"
+
+// ParseSeek reads the seek prompt: "live" (or nothing) for the live tail,
+// "b" / "beginning" / "start" for the log start, a number for an offset in
+// every partition, or a time internal/timebound accepts (1h, 7d, RFC3339).
+func ParseSeek(input string, now time.Time) (*kafka.Seek, error) {
+	in := strings.ToLower(strings.TrimSpace(input))
+	switch in {
+	case "", seekLive:
+		return nil, nil //nolint:nilnil // nil is the live tail, not a missing seek
+	case "b", "beginning", "start":
+		return &kafka.Seek{Mode: kafka.SeekStart}, nil
+	}
+	if n, err := strconv.ParseInt(in, 10, 64); err == nil {
+		if n < 0 {
+			return nil, fmt.Errorf("offset %d is negative", n)
+		}
+		return &kafka.Seek{Mode: kafka.SeekOffset, Offset: n}, nil
+	}
+	t, err := timebound.Parse(strings.TrimSpace(input), now)
+	if err != nil {
+		return nil, fmt.Errorf("seek to an offset, a time (1h, 7d, RFC3339), b or live: %w", err)
+	}
+	return &kafka.Seek{Mode: kafka.SeekTime, Time: t}, nil
+}
 
 // Fixed-width columns for messages. VALUE gets remaining space.
 var msgFixedCols = []table.Column{
@@ -171,7 +222,11 @@ func (v *MessagesView) Init() tea.Cmd {
 		v.partitions = ids
 	}
 
-	v.msgCh, v.errCh, v.readyCh = v.client.Consume(ctx, v.topic)
+	if v.seek != nil {
+		v.msgCh, v.errCh, v.readyCh = v.client.ConsumeSeek(ctx, v.topic, *v.seek)
+	} else {
+		v.msgCh, v.errCh, v.readyCh = v.client.Consume(ctx, v.topic)
+	}
 	v.msgCh = decodeStream(ctx, v.msgCh, v.decoder)
 
 	return tea.Batch(
@@ -180,6 +235,26 @@ func (v *MessagesView) Init() tea.Cmd {
 		v.waitForError(),
 	)
 }
+
+// SeekTo restarts the view at seek, or on the live tail when seek is nil:
+// the old consumer stops, the buffer clears, and records the old consumer
+// still had in flight are dropped (see gen).
+func (v *MessagesView) SeekTo(seek *kafka.Seek) tea.Cmd {
+	v.Stop()
+	v.gen++
+	v.seek = seek
+	v.capped = false
+	v.follow = seek == nil
+	v.messages = nil
+	v.err = nil
+	v.loading = true
+	v.rebuildRows()
+	v.table.GotoTop()
+	return v.Init()
+}
+
+// Seek returns the active seek, or nil on the live tail.
+func (v *MessagesView) Seek() *kafka.Seek { return v.seek }
 
 // Stop cancels the consumer.
 func (v *MessagesView) Stop() {
@@ -198,26 +273,48 @@ func (v *MessagesView) Update(msg tea.Msg) tea.Cmd {
 	case ConsumerReadyMsg:
 		v.loading = false
 		return nil
+	case genMessageMsg:
+		if msg.gen != v.gen {
+			return nil
+		}
+		return v.addMessage(msg.msg)
 	case MessageMsg:
-		v.loading = false
-		m := kafka.ConsumedMessage(msg)
-		v.messages = append(v.messages, m)
-		v.trackPartition(m.Partition)
-
-		// Drain any additional pending messages from the channel to batch them.
-		v.drainPending()
-
-		// Cap the in-memory buffer to maxMessages.
-		if len(v.messages) > maxMessages {
-			v.messages = v.messages[len(v.messages)-maxMessages:]
-		}
-		v.rebuildRows()
-		if v.follow {
-			v.table.GotoTop()
-		}
-		return v.waitForMessage()
+		return v.addMessage(kafka.ConsumedMessage(msg))
 	}
 	return nil
+}
+
+// addMessage buffers m and whatever else is already waiting, then keeps
+// the newest maxMessages on the live tail, or the first maxMessages after
+// a seek, where the point is what follows the seek, not what is newest.
+func (v *MessagesView) addMessage(m kafka.ConsumedMessage) tea.Cmd {
+	if v.capped {
+		return nil
+	}
+	v.loading = false
+	v.messages = append(v.messages, m)
+	v.trackPartition(m.Partition)
+
+	// Drain any additional pending messages from the channel to batch them.
+	v.drainPending()
+
+	if len(v.messages) > maxMessages {
+		if v.seek != nil {
+			v.messages = v.messages[:maxMessages]
+			v.capped = true
+			v.Stop()
+		} else {
+			v.messages = v.messages[len(v.messages)-maxMessages:]
+		}
+	}
+	v.rebuildRows()
+	if v.follow {
+		v.table.GotoTop()
+	}
+	if v.capped {
+		return nil
+	}
+	return v.waitForMessage()
 }
 
 // drainPending reads all immediately available messages from the channel
@@ -287,6 +384,8 @@ func (v *MessagesView) HandleKey(key string) (string, string) {
 	case "o":
 		// Switch to topic overview.
 		return "topic_detail", v.topic
+	case KeySeek:
+		return ActionSeek, v.topic
 	case keyCtrlD:
 		// The hint bar offers Purge here as it does on topic detail; the
 		// app routes the action to the retention prompt (and refuses it
@@ -416,8 +515,13 @@ func (v *MessagesView) View() string {
 	if v.err != nil {
 		return style.Error.Render(fmt.Sprintf("  Error: %v", v.err))
 	}
-	if v.table.Height() != v.height {
-		v.table.SetHeight(v.height)
+	status := v.seekStatus()
+	height := v.height
+	if status != "" {
+		height--
+	}
+	if v.table.Height() != height {
+		v.table.SetHeight(height)
 	}
 
 	if !v.loading && len(v.table.Rows()) == 0 {
@@ -428,6 +532,8 @@ func (v *MessagesView) View() string {
 				"No matches for /%s in the message buffer — press s to search the whole topic",
 				v.filter,
 			)
+		case v.seek != nil:
+			msg = fmt.Sprintf("No records from %s yet. New ones will appear here; t then live returns to the tail.", v.seek)
 		default:
 			msg = "No messages in this topic. New messages will appear here."
 		}
@@ -437,7 +543,23 @@ func (v *MessagesView) View() string {
 			Align(lipgloss.Center, lipgloss.Center).
 			Render(style.Muted.Render(msg))
 	}
+	if status != "" {
+		return style.Muted.Render(status) + "\n" + fixSelectedRow(v.table.View())
+	}
 	return fixSelectedRow(v.table.View())
+}
+
+// seekStatus is the line above a seeked view saying where it started and
+// how to get back to the live tail; empty on the live tail.
+func (v *MessagesView) seekStatus() string {
+	if v.seek == nil {
+		return ""
+	}
+	s := "  from " + v.seek.String()
+	if v.capped {
+		s += fmt.Sprintf(" · first %d records, stopped", maxMessages)
+	}
+	return s + " · t then live returns to the tail"
 }
 
 // applyColumns recalculates columns with the current scroll offset.
@@ -547,12 +669,13 @@ func (v *MessagesView) waitForMessage() tea.Cmd {
 	if ch == nil {
 		return nil
 	}
+	gen := v.gen
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
 			return nil
 		}
-		return MessageMsg(msg)
+		return genMessageMsg{msg: msg, gen: gen}
 	}
 }
 

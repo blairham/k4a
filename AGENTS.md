@@ -171,6 +171,10 @@ the same change.
   message lives in Message Detail, also on `s`, after `enter`.
 - `f` — toggle follow mode (auto-scroll); `g` jump to newest + resume follow
 - `o` — jump to topic overview
+- `t` — seek (`MessagesView.SeekTo`, `kafka.Client.ConsumeSeek`): an
+  offset, a time (`1h`, RFC3339), `b` or `live`. A seeked view keeps the
+  first 1000 records after the point instead of the newest, and drops
+  records from the replaced consumer by generation
 - `p` / `P` — cycle the partition filter forward / backward; `a` clears it
 - `h` / `l` — scroll the table horizontally / pan the value column
 - `ctrl+d` — purge the topic (the same retention prompt as Topic Detail)
