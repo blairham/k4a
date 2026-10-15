@@ -12,15 +12,18 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.79.0
 	github.com/aws/smithy-go v1.28.2
 	github.com/blevesearch/bleve/v2 v2.6.1
+	github.com/bufbuild/protocompile v0.14.1
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/charmbracelet/log v1.0.0
 	github.com/hashicorp/cli v1.1.7
 	github.com/jessevdk/go-flags v1.6.1
+	github.com/linkedin/goavro/v2 v2.15.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/twmb/franz-go v1.22.1
 	github.com/twmb/franz-go/pkg/kadm v1.19.0
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260721222903-95f7d9a51d6a
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
+	github.com/twmb/franz-go/pkg/sr v1.8.0
 	golang.org/x/mod v0.41.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/grpc v1.84.0

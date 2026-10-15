@@ -1,0 +1,15 @@
+// SPDX-FileCopyrightText: 2026 Blair Hamilton
+// SPDX-License-Identifier: Apache-2.0
+
+// Confluent's decimal type, which its serializers treat as built in and so
+// never register as a reference.
+syntax = "proto3";
+
+package confluent.type;
+
+message Decimal {
+  // Two's-complement big-endian unscaled value.
+  bytes value = 1;
+  uint32 precision = 2;
+  int32 scale = 3;
+}
