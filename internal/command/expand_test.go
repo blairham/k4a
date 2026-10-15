@@ -54,3 +54,32 @@ func TestExpandEnvFlagsNoEnvVar(t *testing.T) {
 		t.Errorf("Val = %q, want empty", f.Val)
 	}
 }
+
+// A `$` inside a value is literal: os.ExpandEnv turned `pa$$word` into `pa`
+// plus whatever `$word` held. Only a whole-value reference expands, except
+// for --brokers, which also expands embedded references.
+func TestExpandEnvFlagsKeepsLiteralDollar(t *testing.T) {
+	t.Setenv("word", "LEAK")
+	t.Setenv("K4A_TEST_HOST", "broker.example.com")
+
+	f := &struct {
+		Brokers  string `long:"brokers"`
+		Password string `long:"password"`
+		Pattern  string `long:"pattern"`
+	}{
+		Brokers:  "$K4A_TEST_HOST:9092",
+		Password: "pa$$word", // pragma: allowlist secret
+		Pattern:  "^err$word",
+	}
+	expandEnvFlags(f)
+
+	if f.Brokers != "broker.example.com:9092" {
+		t.Errorf("Brokers = %q, want broker.example.com:9092", f.Brokers)
+	}
+	if f.Password != "pa$$word" { // pragma: allowlist secret
+		t.Errorf("Password = %q, want it unchanged", f.Password)
+	}
+	if f.Pattern != "^err$word" {
+		t.Errorf("Pattern = %q, want it unchanged", f.Pattern)
+	}
+}
