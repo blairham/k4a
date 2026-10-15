@@ -382,6 +382,7 @@ Live message tail from a topic (newest first).
 | `p` / `P` | Cycle the partition filter forward / backward |
 | `a` | Clear the partition filter (all partitions) |
 | `h` / `l` | Scroll the table horizontally / pan the value column |
+| `ctrl+d` | Purge the topic's messages (same prompt as Topic Detail) |
 
 Saving a single message is in **Message Detail** (`enter`, then `s`) —
 in this list `s` opens search.
@@ -394,6 +395,15 @@ Full message content with metadata cards, headers, and scrollable pretty-printed
 |-----|--------|
 | `s` | Save message to file |
 | `j` / `k` | Scroll message body |
+| `ctrl+f` / `ctrl+b` | Page the message body down / up |
+
+### Search Results
+
+Matches from a whole-topic search (`s` in Messages, or `:search`), streamed as the scan runs.
+
+| Key | Action |
+|-----|--------|
+| `enter` | View the matched message |
 
 ### Context Selector
 
@@ -411,15 +421,20 @@ When `--context` or `--brokers` is provided on the CLI, the context selector is 
 |-----|--------|
 | `1` / `2` / `3` / `4` | Switch tabs: Topics, Groups, Cluster, ACLs |
 | `j` / `k` | Navigate up/down |
-| `G` | Go to bottom |
-| `PgDn` / `PgUp` | Page down/up |
+| `g` / `G` | Go to top / bottom |
+| `ctrl+f` / `ctrl+b` | Page down/up (also `PgDn` / `PgUp`) |
 | `enter` | Select / drill in |
 | `esc` | Go back / clear filter |
-| `r` | Refresh active view |
-| `/` | Filter (regex) |
+| `r` | Refresh active view (not in Messages, Message Detail or Search, which have nothing to refetch) |
+| `/` | Filter (regex), in the views listed under [Filtering](#filtering) |
 | `:` | Command mode |
-| `?` | Help overlay |
+| `?` | Help overlay: the keys for the current view only |
 | `ctrl+c` | Quit |
+
+The hint bar at the top shows each view's most used keys; `?` lists all of
+them. In a form (Produce, Create Topic, Create ACL, Reset Offsets) every key
+but `esc` and `ctrl+c` goes to the field being edited, so the tab and
+command keys are not offered there.
 
 ## Command Mode
 
@@ -427,10 +442,10 @@ Enter command mode with `:`. Supports tab autocomplete.
 
 | Command | Action |
 |---------|--------|
-| `:q` `:quit` `:exit` | Quit |
-| `:topics` | Switch to Topics view |
-| `:groups` | Switch to Groups view |
-| `:cluster` | Switch to Cluster view |
+| `:q` `:q!` `:quit` `:exit` | Quit |
+| `:topics` `:topic` | Switch to Topics view |
+| `:groups` `:group` | Switch to Groups view |
+| `:cluster` `:brokers` | Switch to Cluster view |
 | `:acls` | Switch to ACLs view |
 | `:context` `:ctx` | Open context selector |
 | `:produce [TOPIC]` | Produce messages |
@@ -492,7 +507,9 @@ Display:
 ```
 
 The headless subcommands (`search`, `consume`, `produce`, `verify`, …) take
-the same connection flags plus two for the optional shared index:
+the same connection flags, except that `--context` has no `-c` short form
+there (`produce` uses `-c` for `--count`). `search` and `mcp` also take the
+optional shared-index flags:
 
 ```
 Shared index:

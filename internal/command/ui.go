@@ -91,14 +91,16 @@ Direct Connection:
       --readonly          Disable all mutating operations (read-only mode)
 
 Navigation:
-  1/2/3          Switch tabs (Topics, Groups, Cluster)
+  1/2/3/4        Switch tabs (Topics, Groups, Cluster, ACLs)
   j/k            Move up/down
   Enter          Messages (from topic view) / drill into detail
   o              Topic overview
+  s              Search the whole topic (from messages), or :search
   Esc            Go back
   /              Filter
   :              Command mode
   r              Refresh
+  ?              Keys for the current view
   :q             Quit
 
 Examples:
