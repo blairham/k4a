@@ -9,8 +9,15 @@ import (
 	"os"
 	"time"
 
+	goflags "github.com/jessevdk/go-flags"
+
 	"github.com/blairham/k4a/internal/upgrade"
 )
+
+// UpgradeFlags are the upgrade subcommand's flags.
+type UpgradeFlags struct {
+	Check bool `long:"check" description:"Check for updates without installing"`
+}
 
 // UpgradeCommand implements the "upgrade" CLI command.
 type UpgradeCommand struct {
@@ -34,10 +41,28 @@ func (c *UpgradeCommand) Synopsis() string {
 
 // Run executes the upgrade.
 func (c *UpgradeCommand) Run(args []string) int {
+	// Parse strictly: upgrade replaces the running binary, so a mistyped flag
+	// or a stray argument must refuse rather than fall through to an install.
+	var flags UpgradeFlags
+	parser := goflags.NewParser(&flags, goflags.Default)
+	parser.Name = "k4a upgrade"
+	parser.Usage = "[--check]"
+	rest, err := parser.ParseArgs(args)
+	if err != nil {
+		if goflags.WroteHelp(err) {
+			return 0
+		}
+		return 1
+	}
+	if len(rest) > 0 {
+		fmt.Fprintf(os.Stderr, "Error: unexpected argument %q\nUsage: k4a upgrade [--check]\n", rest[0])
+		return 1
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	if len(args) > 0 && args[0] == "--check" {
+	if flags.Check {
 		return c.check(ctx)
 	}
 
