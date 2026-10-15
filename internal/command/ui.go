@@ -41,8 +41,8 @@ type UIFlags struct {
 	CAFile   string `long:"ca"   env:"KAFKA_TLS_CA"   description:"CA certificate PEM file"`
 
 	// IAM
-	Region  string `short:"r" long:"region"  env:"AWS_REGION"  default:"us-east-1" description:"AWS region (IAM auth)"`
-	Profile string `short:"p" long:"profile" env:"AWS_PROFILE"                     description:"AWS profile (IAM auth)"`
+	Region  string `short:"r" long:"region"  env:"AWS_REGION"  description:"AWS region (IAM auth)"`
+	Profile string `short:"p" long:"profile" env:"AWS_PROFILE" description:"AWS profile (IAM auth)"`
 
 	Insecure bool `short:"k" long:"insecure" description:"Skip TLS certificate verification"`
 	Logoless bool `          long:"logoless" description:"Hide the ASCII logo from the header"`
@@ -225,24 +225,26 @@ func (c *UICommand) upgradeAndRestart(ctxName string) int {
 	return 0
 }
 
+// authConfig is the connection the flags alone describe; empty fields are
+// "not set" and leave a context's value in place.
+func (flags *UIFlags) authConfig() kafka.AuthConfig {
+	return kafka.AuthConfig{
+		Method:   kafka.AuthMethod(flags.Auth),
+		Username: flags.Username,
+		Password: flags.Password,
+		CertFile: flags.CertFile,
+		KeyFile:  flags.KeyFile,
+		CAFile:   flags.CAFile,
+		Region:   flags.Region,
+		Profile:  flags.Profile,
+		Insecure: flags.Insecure,
+	}
+}
+
 func resolveConnection(flags UIFlags) (string, kafka.AuthConfig, string, error) {
 	// If --brokers is provided directly, use flags.
 	if flags.Brokers != "" {
-		auth := flags.Auth
-		if auth == "" {
-			auth = "scram"
-		}
-		return flags.Brokers, kafka.AuthConfig{
-			Method:   kafka.AuthMethod(auth),
-			Username: flags.Username,
-			Password: flags.Password,
-			CertFile: flags.CertFile,
-			KeyFile:  flags.KeyFile,
-			CAFile:   flags.CAFile,
-			Region:   flags.Region,
-			Profile:  flags.Profile,
-			Insecure: flags.Insecure,
-		}, "direct", nil
+		return flags.Brokers, directAuthConfig(flags.authConfig()), "direct", nil
 	}
 
 	// Load config file.
@@ -278,20 +280,7 @@ func resolveConnection(flags UIFlags) (string, kafka.AuthConfig, string, error) 
 		return "", kafka.AuthConfig{}, "", err
 	}
 
-	authCfg := ctx.ToAuthConfig()
-
-	// Allow flags to override config values.
-	if flags.Auth != "" {
-		authCfg.Method = kafka.AuthMethod(flags.Auth)
-	}
-	if flags.Profile != "" {
-		authCfg.Profile = flags.Profile
-	}
-	if flags.Region != "" && flags.Region != "us-east-1" {
-		authCfg.Region = flags.Region
-	}
-
-	return brokers, authCfg, ctxName, nil
+	return brokers, overlayAuth(ctx.ToAuthConfig(), flags.authConfig()), ctxName, nil
 }
 
 // errPickContext says "the config is fine, the user just hasn't chosen yet" —
