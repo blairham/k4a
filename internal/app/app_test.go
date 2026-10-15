@@ -27,11 +27,17 @@ func documentedSubcommands(t *testing.T) []string {
 	}
 	s := string(doc)
 	start := strings.Index(s, "### Subcommands")
-	end := strings.Index(s, "An unrecognized first argument")
-	if start < 0 || end < start {
+	if start < 0 {
 		t.Fatal("AGENTS.md has no subcommand section to check against")
 	}
-	matches := regexp.MustCompile("`([a-z][a-z-]*)`").FindAllStringSubmatch(s[start:end], -1)
+	// The list is the first paragraph under the heading; later paragraphs
+	// are prose that quotes other code spans.
+	paras := strings.SplitN(s[start:], "\n\n", 3)
+	if len(paras) < 2 {
+		t.Fatal("AGENTS.md subcommand section has no list paragraph")
+	}
+	list := paras[1]
+	matches := regexp.MustCompile("`([a-z][a-z-]*)`").FindAllStringSubmatch(list, -1)
 	names := make([]string, 0, len(matches))
 	for _, m := range matches {
 		names = append(names, m[1])
