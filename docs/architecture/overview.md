@@ -130,9 +130,10 @@ prints the root.
 ## What's intentionally out of scope
 
 - **No write-by-default surfaces.** Destructive ops (delete topic /
-  group / ACL, purge, offset reset, broker config, ACL and quota edits) require
-  an explicit key (`ctrl+d`, `R`, `enter` in Broker Detail, `e` in ACLs) and a
-  confirmation. `ui.readonly: true` removes them entirely.
+  group / ACL, purge, offset reset, broker config, ACL and quota edits,
+  partition reassignment) require an explicit key (`ctrl+d`, `R`, `enter`
+  in Broker Detail, `e` in ACLs, `a` in Topic Detail) and a confirmation.
+  `ui.readonly: true` removes them entirely.
 - **No cross-cluster views.** One cluster per running instance. Switch
   contexts in-app via the context selector — that tears down the client
   and dials the new one.
