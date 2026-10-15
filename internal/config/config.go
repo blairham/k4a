@@ -71,6 +71,13 @@ type Context struct {
 	CAFile        string `yaml:"ca,omitempty"`
 	IndexEndpoint string `yaml:"index-endpoint,omitempty"`
 	OAuth         OAuth  `yaml:",inline"`
+	// IndexCA, IndexCert and IndexKey verify the shared index's TLS listener
+	// and present a client certificate to it; IndexToken is its bearer token,
+	// best written as $VAR so the file does not hold it.
+	IndexCA       string `yaml:"index-ca,omitempty"`
+	IndexCert     string `yaml:"index-cert,omitempty"`
+	IndexKey      string `yaml:"index-key,omitempty"`
+	IndexToken    string `yaml:"index-token,omitempty"`
 	Insecure      bool   `yaml:"insecure,omitempty"`
 	IndexInsecure bool   `yaml:"index-insecure,omitempty"`
 	// NoTLS runs a SASL auth method without TLS. There is no "tls: false"

@@ -105,14 +105,32 @@ Coverage is honest: if the index doesn't span your whole `--since/--until`
 window (or the topic isn't followed), k4a scans — it never serves partial or
 stale results as complete.
 
-> **TLS note.** The daemon itself serves plaintext gRPC on `:9500`. If it is
-> exposed that way on a private network, use `:9500` +
+> **TLS note.** By default the daemon serves plaintext gRPC on `:9500`. If it
+> is exposed that way on a private network, use `:9500` +
 > `index-insecure: true`.
 >
-> If it sits behind a TLS-terminating load balancer or Ingress on `:443`
-> (see [`guides/deploy.md`](deploy.md#networking)), that listener must
-> negotiate ALPN `h2` for gRPC-over-TLS clients to connect. Drop
-> `index-insecure` and point at `:443` to use TLS.
+> If the daemon serves TLS itself (`--tls-cert`), or sits behind a
+> TLS-terminating load balancer or Ingress on `:443` (see
+> [`guides/deploy.md`](deploy.md#networking); that listener must negotiate
+> ALPN `h2`), drop `index-insecure`. Add `index-ca` when its certificate
+> does not chain to the system roots.
+
+> **Credentials.** A daemon started with a bearer token or a client CA
+> refuses callers without one. Give the context what it asks for:
+>
+> ```yaml
+>     index-ca: /path/to/index-ca.crt      # private CA for the daemon's certificate
+>     index-token: $K4A_INDEX_TOKEN      # bearer token, read from the environment
+>     index-cert: /path/to/client.crt      # mTLS, when the daemon has a client CA
+>     index-key: /path/to/client.key
+> ```
+>
+> or per invocation `--index-ca`, `--index-cert`/`--index-key`,
+> `--index-token-file`. `K4A_INDEX_TOKEN` overrides a context's `index-token`
+> and is never sent to an endpoint named with `--index-endpoint`. k4a refuses to send a token with `index-insecure` (a
+> plaintext dial), and a context's credentials are never sent to an endpoint
+> named with `--index-endpoint`. A refused or misconfigured daemon still
+> degrades to a local scan, with a warning naming the reason.
 
 ---
 

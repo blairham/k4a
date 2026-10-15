@@ -20,7 +20,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"os/signal"
@@ -32,9 +34,13 @@ import (
 	"github.com/charmbracelet/log"
 	goflags "github.com/jessevdk/go-flags"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
+	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
 	"github.com/blairham/k4a/internal/kafka"
@@ -70,6 +76,11 @@ type flags struct {
 	MergeGrace    time.Duration `long:"drain-stall-merge-grace" env:"K4A_INDEX_DRAIN_STALL_MERGE_GRACE" description:"Tolerate a drain stall up to this long while a scorch file merge is in flight: the merger is working, and killing it restarts the merge from scratch on the same volume — a restart livelock. 0 disables the grace."                                                                                                                    default:"30m"`
 	WipeStrikes   int           `long:"drain-stall-wipe-after"  env:"K4A_INDEX_DRAIN_STALL_WIPE_AFTER"  description:"On the Nth consecutive drain-stall exit for the same topic index (counted in the index dir, so the count survives container restarts), quarantine the index before exiting so the next boot re-warms fresh. 0 disables."                                                                                                                default:"3"`
 	ShutdownGrace time.Duration `long:"shutdown-timeout"        env:"K4A_INDEX_SHUTDOWN_TIMEOUT"        description:"On SIGTERM, how long in-flight RPCs may run before the server stops them. Keep it under the pod's terminationGracePeriodSeconds, leaving room to flush every index. 0 stops them at once."                                                                                                                                              default:"15s"`
+	TLSCert       string        `long:"tls-cert"                env:"K4A_INDEX_TLS_CERT"                description:"Server certificate PEM file: serve gRPC over TLS (needs --tls-key). The file is re-read when it changes."`
+	TLSKey        string        `long:"tls-key"                 env:"K4A_INDEX_TLS_KEY"                 description:"Server private key PEM file (with --tls-cert)"`
+	TLSClientCA   string        `long:"tls-client-ca"           env:"K4A_INDEX_TLS_CLIENT_CA"           description:"Require a client certificate signed by this CA on every RPC except health checks (mTLS; needs --tls-cert)"`
+	TokenFile     string        `long:"token-file"              env:"K4A_INDEX_TOKEN_FILE"              description:"File holding the bearer token every RPC except health checks must present. K4A_INDEX_TOKEN sets it directly."`
+	MaxLimit      int           `long:"max-search-limit"        env:"K4A_INDEX_MAX_SEARCH_LIMIT"        description:"Most matches one Search returns; a larger or unset request limit is lowered to this and the answer reports capped."                                                                                                                                                                                                                     default:"10000"`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
 	NoTLS         bool          `long:"no-tls"                                                          description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
 
@@ -157,6 +168,8 @@ func run(args []string) int {
 // startupLimits is what validateFlags derives from the flags before anything
 // touches Kafka.
 type startupLimits struct {
+	tls           *tls.Config
+	listener      endpointauth.ServerOptions
 	policy        allowPolicy
 	topicMaxBytes int64
 	maxTotalBytes int64
@@ -205,7 +218,53 @@ func validateFlags(f *flags) (startupLimits, bool) {
 			"max_total_bytes", maxTotalBytes, "topic_max_bytes", topicMaxBytes)
 		return startupLimits{}, false
 	}
-	return startupLimits{policy: policy, topicMaxBytes: topicMaxBytes, maxTotalBytes: maxTotalBytes}, true
+	if f.MaxLimit <= 0 || f.MaxLimit > math.MaxInt32 {
+		log.Error("max-search-limit must be between 1 and 2147483647", "max_search_limit", f.MaxLimit)
+		return startupLimits{}, false
+	}
+	lim := startupLimits{policy: policy, topicMaxBytes: topicMaxBytes, maxTotalBytes: maxTotalBytes}
+	if lim.listener, lim.tls, err = listenerAuth(f); err != nil {
+		log.Error("listener auth", "err", err)
+		return startupLimits{}, false
+	}
+	return lim, true
+}
+
+// listenerAuth loads the gRPC listener's TLS material and bearer token. A
+// half-configured listener is refused rather than served without the part
+// the operator meant to add.
+func listenerAuth(f *flags) (endpointauth.ServerOptions, *tls.Config, error) {
+	token, err := endpointauth.LoadToken(f.TokenFile, os.Getenv("K4A_INDEX_TOKEN"))
+	if err != nil {
+		return endpointauth.ServerOptions{}, nil, err
+	}
+	o := endpointauth.ServerOptions{
+		CertFile:     f.TLSCert,
+		KeyFile:      f.TLSKey,
+		ClientCAFile: f.TLSClientCA,
+		Token:        token,
+	}
+	cfg, err := endpointauth.ServerTLS(o)
+	if err != nil {
+		return endpointauth.ServerOptions{}, nil, err
+	}
+	return o, cfg, nil
+}
+
+// warnListenerExposure says, once at startup, what reaching the port grants.
+// The default stays plaintext and open so an upgrade does not break a running
+// install, but it should never be that way silently.
+func warnListenerExposure(o endpointauth.ServerOptions) {
+	switch {
+	case !o.TLSEnabled() && !o.Authenticated():
+		log.Warn("gRPC listener is plaintext and unauthenticated: anyone who can reach it can search every " +
+			"followed topic and start follows; set --token-file or --tls-client-ca (SECURITY.md)")
+	case !o.TLSEnabled():
+		log.Warn("gRPC listener is plaintext: the bearer token crosses the network in the clear unless TLS " +
+			"is terminated in front of it; set --tls-cert/--tls-key to serve TLS here")
+	case !o.Authenticated():
+		log.Warn("gRPC listener serves TLS but asks no caller credential: set --token-file or --tls-client-ca")
+	}
 }
 
 func logStartup(f *flags, lim startupLimits) {
@@ -223,6 +282,10 @@ func logStartup(f *flags, lim startupLimits) {
 		"drain_stall_wipe_after", f.WipeStrikes,
 		"shutdown_timeout", f.ShutdownGrace,
 		"listen", f.Listen,
+		"tls", lim.listener.TLSEnabled(),
+		"client_ca", lim.listener.ClientCAFile != "",
+		"token", lim.listener.Token != "",
+		"max_search_limit", f.MaxLimit,
 		"data_dir", f.dataRoot(),
 		"auth", f.Auth,
 		"log_level", f.LogLevel,
@@ -263,11 +326,11 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	go mgr.sweep()
 	log.Info("follow-set ready", "cluster", cluster, "prefollowed", mgr.size())
 
-	srv := grpc.NewServer(
-		grpc.UnaryInterceptor(unaryLogInterceptor),
-		grpc.StreamInterceptor(streamLogInterceptor),
-	)
-	indexv1.RegisterIndexServer(srv, newIndexServer(mgr))
+	srv := newGRPCServer(lim)
+	is := newIndexServer(mgr)
+	is.maxLimit = f.MaxLimit
+	indexv1.RegisterIndexServer(srv, is)
+	warnListenerExposure(lim.listener)
 
 	var lc net.ListenConfig
 	lis, err := lc.Listen(ctx, "tcp", f.Listen)
@@ -289,6 +352,25 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 		return 1
 	}
 	return 0
+}
+
+// newGRPCServer builds the server with its transport credentials and
+// interceptors. Logging runs outside the guard so a refused call is still
+// logged, with its Unauthenticated code.
+func newGRPCServer(lim startupLimits) *grpc.Server {
+	guard := endpointauth.NewGuard(lim.listener)
+	opts := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(unaryLogInterceptor, guard.UnaryInterceptor),
+		grpc.ChainStreamInterceptor(streamLogInterceptor, guard.StreamInterceptor),
+	}
+	if lim.tls != nil {
+		opts = append(opts, grpc.Creds(credentials.NewTLS(lim.tls)))
+	}
+	srv := grpc.NewServer(opts...)
+	// The standard health service, open whatever credentials the listener
+	// asks for, so a probe never needs the deployment's token.
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	return srv
 }
 
 // grpcStopper is the slice of *grpc.Server stopServer needs.
