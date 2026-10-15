@@ -89,6 +89,11 @@ func (c *AlterReplicationCmd) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	if err := flags.checkWritable("alter-replication"); err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+
 	if err := kafka.ValidateReplicationFactor(flags.ReplicationFactor); err != nil {
 		log.Error("invalid flags", "err", err)
 		return 1
