@@ -8,20 +8,54 @@
 # sticky routing needed.
 replicaCount: 1
 
+# Resource names default to "<release>-k4a-mcp", or just the release name when
+# it already contains "k4a-mcp" (so `helm install k4a-mcp` keeps the bare name
+# "k4a-mcp"). fullnameOverride pins the name outright.
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   repository: ""
   tag: ""
   pullPolicy: IfNotPresent
 
 # k4a-mcp needs no cloud credentials — it never talks to Kafka — so nothing
-# needs to be bound to this ServiceAccount.
+# needs to be bound to this ServiceAccount. annotations are there for
+# platform conventions that expect them (IRSA, workload identity, policy
+# tooling). Empty name = the chart fullname.
 serviceAccount:
-  name: k4a-mcp
+  name: ""
+  annotations: {}
 
 service:
   # MCP streamable-HTTP. The Service is ClusterIP; expose it to MCP clients
   # with an internal LoadBalancer or Ingress that terminates TLS.
   port: 9501
+
+# Rendered as K4A_MCP_LOG_LEVEL: debug, info, warn, error.
+logLevel: info
+
+# On SIGTERM k4a-mcp drains in-flight HTTP requests for up to 5s; the kubelet
+# kills it after this many seconds.
+terminationGracePeriodSeconds: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532        # distroless nonroot
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# k4a-mcp writes nothing to disk; /tmp is a small emptyDir in case anything
+# ever needs a scratch file under the read-only root filesystem.
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+
+tmpSizeLimit: 16Mi
 
 resources:
   requests:
@@ -32,9 +66,29 @@ resources:
 
 config:
   # In-cluster gRPC endpoint of the k4a-index daemon. Same namespace, so the
-  # short Service name resolves; ClusterIP, plaintext (the TLS edge is for
+  # short Service name resolves; the default matches a k4a-index release named
+  # "k4a-index" (otherwise its Service is "<release>-k4a-index"); ClusterIP, plaintext (the TLS edge is for
   # external MCP clients hitting k4a-mcp, not this hop).
   indexAddr: k4a-index:9500
   # HTTP path the MCP endpoint is served at. Clients register
   #   claude mcp add --transport http k4a-index https://<k4a-mcp-host>/mcp
   path: /mcp
+
+# Optional NetworkPolicy, default off. Admits ingress to the HTTP port only.
+networkPolicy:
+  enabled: false
+  # NetworkPolicyPeer list allowed to reach the HTTP port; empty = any source
+  # (still only on that port). A load balancer that targets pod IPs reaches
+  # the pod from non-pod addresses, so admit its subnets with an ipBlock.
+  ingressFrom: []
+  # NetworkPolicyEgressRule list. Empty = egress is not restricted. If you set
+  # it, allow DNS and the k4a-index gRPC port.
+  egress: []
+
+# Optional PodDisruptionBudget, default off. With replicaCount 1 and
+# minAvailable 1 a node drain blocks until you intervene, so raise
+# replicaCount first or use maxUnavailable. maxUnavailable wins when set.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: ""
