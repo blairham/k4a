@@ -53,6 +53,9 @@ type ProduceView struct {
 	topic    string
 	count    string
 	interval string
+	key      string
+	value    string
+	headers  string
 	results  []kafka.ProduceResult
 	table    table.Model
 	state    produceState
@@ -68,7 +71,6 @@ func NewProduceView(client *kafka.Client, topic string) *ProduceView {
 	v := &ProduceView{
 		client:   client,
 		topic:    topic,
-		count:    "10",
 		interval: "1s",
 		state:    produceStateForm,
 	}
@@ -103,9 +105,28 @@ func NewProduceView(client *kafka.Client, topic string) *ProduceView {
 				Placeholder("topic name").
 				Value(&v.topic),
 			huh.NewInput().
+				Title("Value").
+				Key("value").
+				Placeholder("blank to generate messages").
+				Value(&v.value),
+			huh.NewInput().
+				Title("Key").
+				Key("key").
+				Placeholder("record key (with a value; blank for none)").
+				Value(&v.key),
+			huh.NewInput().
+				Title("Headers").
+				Key("headers").
+				Placeholder("name=value, comma-separated").
+				Validate(func(s string) error {
+					_, err := kafka.ParseHeaderList(s)
+					return err
+				}).
+				Value(&v.headers),
+			huh.NewInput().
 				Title("Count").
 				Key("count").
-				Placeholder("number of messages").
+				Placeholder("10 generated, 1 with a value").
 				Value(&v.count),
 			huh.NewInput().
 				Title("Interval").
@@ -277,27 +298,12 @@ func (v *ProduceView) startProduce() tea.Cmd {
 		return nil
 	}
 
-	count, err := strconv.Atoi(v.count)
-	if err != nil || count <= 0 {
-		count = 10
-	}
-
 	interval, err := time.ParseDuration(v.interval)
 	if err != nil {
 		interval = time.Second
 	}
 
-	// Generate messages.
-	var messages []*kgo.Record
-	if v.schema != "" {
-		schema, schemaErr := kafka.LoadTopicSchema(v.schema)
-		if schemaErr != nil {
-			return nil
-		}
-		messages, err = kafka.GenerateSchemaMessages(schema, count)
-	} else {
-		messages, err = kafka.GenerateMessages(v.topic, count)
-	}
+	messages, err := buildProduceRecords(v.topic, v.schema, v.key, v.value, v.headers, v.count)
 	if err != nil {
 		return nil
 	}
@@ -320,6 +326,44 @@ func (v *ProduceView) startProduce() tea.Cmd {
 	}()
 
 	return v.waitForResult()
+}
+
+// buildProduceRecords turns the form into records: the typed value (with
+// its key) count times, default once, or else generated messages, default
+// ten. The headers go on every record either way.
+func buildProduceRecords(topic, schemaPath, key, value, headerList, countText string) ([]*kgo.Record, error) {
+	headers, err := kafka.ParseHeaderList(headerList)
+	if err != nil {
+		return nil, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(countText))
+	if err != nil || count <= 0 {
+		count = 10
+		if value != "" {
+			count = 1
+		}
+	}
+	if value != "" {
+		return kafka.CustomRecords(topic, key, value, headers, count), nil
+	}
+
+	var messages []*kgo.Record
+	if schemaPath != "" {
+		schema, schemaErr := kafka.LoadTopicSchema(schemaPath)
+		if schemaErr != nil {
+			return nil, schemaErr
+		}
+		messages, err = kafka.GenerateSchemaMessages(schema, count)
+	} else {
+		messages, err = kafka.GenerateMessages(topic, count)
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range messages {
+		m.Headers = append(m.Headers, headers...)
+	}
+	return messages, nil
 }
 
 func (v *ProduceView) waitForResult() tea.Cmd {
