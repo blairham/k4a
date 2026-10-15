@@ -1,7 +1,7 @@
 # Design: Filter and search across a topic
 
 **Status:** shipped
-**Code:** `internal/tui/views/messages.go`, `internal/tui/views/search.go`, `internal/kafka/deep_search.go`, `internal/command/search.go`
+**Code:** `internal/tui/views/messages.go`, `internal/tui/views/search.go`, `internal/kafka/deep_search.go`, `internal/command/search.go`, `internal/jsonpath/`
 
 ## Purpose
 
@@ -240,7 +240,53 @@ each partition (because of reverse-chunked scan). We do not buffer-and-sort.
   want until the foreground shape is proven.
 - **Cross-topic search.** Switch topic, re-run.
 - **Match count only mode.** Counting requires the same read.
-- **JSON path search (v1).** A follow-up; the regex form covers most needs.
+
+## JSON path search
+
+`k4a search --path EXPR`, `path:EXPR` in the TUI search bar, and the `path`
+field of both MCP `search` tools match a predicate on the record's JSON
+structure rather than a regex over its bytes:
+
+```
+.order.status == "failed"
+.items[0].qty >= 10
+.["content-type"] != "text/plain"
+.trace.id exists          (a bare path means the same)
+```
+
+**Syntax: a jq subset, not JSONPath.** A path is `.` followed by `.name`,
+`["any name"]` (a JSON string) or `[N]` steps; a predicate is `exists` or one
+of `== != < <= > >=` against one JSON scalar. jq won because its path
+spelling is what people already type at `--format json | jq`, and because the
+subset is closed: no wildcards, recursive descent, filters or functions, so a
+predicate selects at most one value and its meaning fits in a paragraph.
+JSONPath (RFC 9535) brings `$`, `..`, `*` and filter expressions, i.e.
+multi-valued results and a second query language inside the first — none of
+which the "find the failed orders" case needs. Anything wider can grow from
+this grammar later without breaking it.
+
+**Semantics** (`internal/jsonpath`): evaluated on the raw key and/or value
+bytes per `--scope` (headers are never evaluated); a key or value that is not
+exactly one JSON document never matches. Numbers compare numerically at
+256-bit precision, so `12.50 == 12.5` and IDs above 2^53 compare exactly;
+strings compare exactly (case-sensitive) and order bytewise. A comparison
+between different JSON types is never `<`/`>`/`==`, and is `!=`. **A missing
+path matches nothing, `!=` included** — `.status != "ok"` does not select
+records that have no status, unlike jq's `null != "ok"`. With a regex as
+well, both must match. Decoded (Schema Registry) values are not searched:
+that is the decoded-search follow-up.
+
+**Scan-only, by construction.** The index holds analyzed terms of flattened
+text, so it can neither find every record whose structure matches nor prove
+one does not. `QueryParams.JSONPath` reaches `Bookkeeper.CanServe`, which
+declines first, before coverage — the same method the local dispatcher and
+`remoteindex` use, so neither can serve a path query. The result cache
+keys on the canonical path (`Expr.String`), so equivalent spellings share an
+entry. `k4a-mcp` has no scan: it filters the daemon's records by the path
+and reports `path_recall` (see shared-index-service.md).
+
+`FuzzParsePath` checks that any predicate that parses has a canonical form
+that re-parses to itself and matches exactly the same records.
 
 An **on-disk result cache** does ship, despite the "sessions are short,
 search params change" argument against one — `internal/searchcache`, at

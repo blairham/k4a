@@ -297,7 +297,13 @@ anywhere inside the raw key/value/headers.
 k4a search "4100000017" -t example.ingest.prices.v1 --since 24h
 k4a search "order-\d{8}" -t orders --partitions 0,1,2 --format json | jq .
 k4a search "X-Trace-Id" -t requests --scope key+value+headers --case-sensitive
+k4a search --path '.order.status == "failed"' -t orders --since 1h
 ```
+
+`--path` matches a JSON-path predicate on the raw key/value instead of (or,
+with a pattern, as well as) the regex — a jq-style path, then `exists` (the
+default), `==`, `!=`, `<`, `<=`, `>` or `>=` against a JSON scalar. It always
+scans the broker. In the TUI, type `path:` before the path in the search bar.
 
 | Flag | Description |
 |------|-------------|
@@ -306,6 +312,7 @@ k4a search "X-Trace-Id" -t requests --scope key+value+headers --case-sensitive
 | `--since` / `--until` | Time bounds — a duration (`1h`, `24h`, `7d`, `2w`) or an RFC3339 timestamp |
 | `-P`, `--partitions` | Comma-separated partition IDs (default: all) |
 | `--cap` | Maximum matches before stopping (`0` = the built-in 10,000 default) |
+| `--path` | JSON-path predicate, e.g. `'.items[0].qty >= 10'` (scan-only) |
 | `--case-sensitive` | Don't prepend `(?i)` to the pattern |
 | `--format` | `text` (default), `json` (NDJSON, one match per line), or `summary` (a single JSON document with stats + matches — best for `jq` or an LLM) |
 | `-q`, `--quiet` | Suppress the progress/summary line on stderr |

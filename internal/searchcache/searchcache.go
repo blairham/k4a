@@ -57,9 +57,12 @@ const (
 // Key uniquely identifies a cacheable search. All fields are part of
 // the cache key; changing any of them produces a different entry.
 type Key struct {
-	Cluster       string
-	Topic         string
-	Pattern       string
+	Cluster string
+	Topic   string
+	Pattern string
+	// Path is omitted when empty so keys of plain regex searches hash exactly
+	// as they did before JSON-path search existed.
+	Path          string `json:",omitempty"`
 	PartitionsCSV string // sorted, comma-separated; "" means all partitions
 	SinceMS       int64  // Unix milliseconds; 0 means "no lower bound"
 	UntilMS       int64  // Unix milliseconds; 0 means "no upper bound"
@@ -91,6 +94,7 @@ func BuildKey(cluster, topic string, params kafka.SearchParams) Key {
 		Cluster:       cluster,
 		Topic:         topic,
 		Pattern:       "",
+		Path:          params.PathString(),
 		Scope:         uint8(params.Scope),
 		PartitionsCSV: strings.Join(csv, ","),
 	}

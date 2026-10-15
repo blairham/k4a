@@ -13,6 +13,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	"github.com/blairham/k4a/internal/jsonpath"
 )
 
 // Deep search tuning constants. These are deliberately not exposed as
@@ -75,13 +77,30 @@ const (
 // SearchParams configures a deep search. Zero values mean "no constraint":
 // an empty Partitions slice means all partitions; a zero Since/Until means
 // no time bound on that side; a zero Cap means deepSearchMatchCap.
+//
+// Pattern and Path are both optional and AND together: a record matches when
+// the regex hits somewhere in scope (if set) and the JSON-path predicate holds
+// on its key or value (if set). Neither set matches every record.
 type SearchParams struct {
-	Pattern    *regexp.Regexp
+	Pattern *regexp.Regexp
+	// Path is a JSON-path predicate evaluated on the raw key and/or value
+	// bytes in scope (never headers). The index cannot answer it exactly, so
+	// every index backend declines it and it is always scanned.
+	Path       *jsonpath.Expr
 	Since      time.Time
 	Until      time.Time
 	Partitions []int32
 	Scope      SearchScope // 0 means ScopeKey|ScopeValue
 	Cap        int
+}
+
+// PathString is the canonical text of Path, or "" when unset — the form the
+// cache key, the index gate and summaries carry.
+func (p SearchParams) PathString() string {
+	if p.Path == nil {
+		return ""
+	}
+	return p.Path.String()
 }
 
 func (p SearchParams) effectiveScope() SearchScope {
@@ -219,6 +238,7 @@ func (c *Client) runDeepSearch(
 	ds := &deepScan{
 		topic:      topic,
 		re:         params.Pattern,
+		path:       params.Path,
 		prefilter:  extractPrefilter(params.Pattern),
 		scope:      params.effectiveScope(),
 		until:      params.Until,
@@ -264,6 +284,7 @@ type deepScan struct {
 	start      time.Time
 	until      time.Time
 	re         *regexp.Regexp
+	path       *jsonpath.Expr
 	matchCh    chan<- ConsumedMessage
 	cancelAll  context.CancelFunc
 	topic      string
@@ -585,6 +606,9 @@ func subWorkerCount(rangeSize int64, partitions int) int {
 // unless the value contains "foo", so bytes.Contains is a sound necessary
 // condition. Returns nil for regexes with no useful literal prefix.
 func extractPrefilter(re *regexp.Regexp) []byte {
+	if re == nil {
+		return nil
+	}
 	p, _ := re.LiteralPrefix()
 	if len(p) < deepSearchPrefilterMinLen {
 		return nil
@@ -686,7 +710,7 @@ func (ds *deepScan) scanRecord(ctx context.Context, r *kgo.Record, start, end in
 		return scanContinue
 	}
 
-	if !recordMatches(r, ds.re, ds.prefilter, ds.scope) {
+	if !ds.selects(r) {
 		return scanContinue
 	}
 
@@ -703,6 +727,25 @@ func (ds *deepScan) scanRecord(ctx context.Context, r *kgo.Record, start, end in
 	case <-ctx.Done():
 		return scanAbort
 	}
+}
+
+// selects applies the regex and the JSON-path predicate, each only when set.
+func (ds *deepScan) selects(r *kgo.Record) bool {
+	if ds.re != nil && !recordMatches(r, ds.re, ds.prefilter, ds.scope) {
+		return false
+	}
+	return ds.path == nil || PathMatches(ds.path, r.Key, r.Value, ds.scope)
+}
+
+// PathMatches reports whether the predicate holds on the key or the value,
+// whichever scope selects. Headers are never JSON documents in their own
+// right here, so ScopeHeaders adds nothing. Exported so a surface that
+// filters already-fetched records (k4a-mcp) applies the identical rule.
+func PathMatches(e *jsonpath.Expr, key, value []byte, scope SearchScope) bool {
+	if scope == 0 {
+		scope = ScopeKey | ScopeValue
+	}
+	return (scope&ScopeKey != 0 && e.Match(key)) || (scope&ScopeValue != 0 && e.Match(value))
 }
 
 // recordMatches reports whether r matches re in the configured scope.

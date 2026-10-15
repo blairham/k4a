@@ -45,6 +45,7 @@ type Params struct {
 	Since         *time.Time `json:"since,omitempty"`
 	Until         *time.Time `json:"until,omitempty"`
 	Pattern       string     `json:"pattern"`
+	Path          string     `json:"path,omitempty"`
 	Scope         string     `json:"scope"`
 	Partitions    []int32    `json:"partitions,omitempty"`
 	Cap           int        `json:"cap,omitempty"`
@@ -99,6 +100,7 @@ func Run(
 		Topic:         topic,
 		Params: Params{
 			Pattern:       paramPattern(p),
+			Path:          p.PathString(),
 			Scope:         scopeString(p.Scope),
 			Partitions:    p.Partitions,
 			Cap:           p.Cap,

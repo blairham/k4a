@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/tui/style"
 )
@@ -451,7 +452,7 @@ func (v *SearchView) progressFragments() string {
 }
 
 func (v *SearchView) start() tea.Cmd {
-	re, err := compileSearchQuery(v.query)
+	params, err := searchParamsFor(v.query)
 	if err != nil {
 		v.state = searchStateErrored
 		v.scanErr = err
@@ -463,10 +464,7 @@ func (v *SearchView) start() tea.Cmd {
 	v.scanID++
 	v.state = searchStateRunning
 
-	matchCh, progCh, errCh := v.runSearch(ctx, v.topic, kafka.SearchParams{
-		Pattern: re,
-		Scope:   kafka.ScopeKey | kafka.ScopeValue,
-	})
+	matchCh, progCh, errCh := v.runSearch(ctx, v.topic, params)
 	v.matchCh = matchCh
 	v.progCh = progCh
 	v.errCh = errCh
@@ -529,6 +527,32 @@ func matchRow(m kafka.ConsumedMessage) table.Row {
 		m.Key,
 		value,
 	}
+}
+
+// pathQueryPrefix marks bar input as a JSON-path predicate, the TUI spelling
+// of `k4a search --path`. It only applies when a path ('.') follows, so a
+// regex search for text like "path: /api" is unaffected.
+const pathQueryPrefix = "path:"
+
+// searchParamsFor interprets the bar input: `path:.a.b == "x"` is a JSON-path
+// predicate (always scanned; the index declines it), anything else a regex.
+func searchParamsFor(q string) (kafka.SearchParams, error) {
+	params := kafka.SearchParams{Scope: kafka.ScopeKey | kafka.ScopeValue}
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(q), pathQueryPrefix); ok &&
+		strings.HasPrefix(strings.TrimSpace(rest), ".") {
+		expr, err := jsonpath.Parse(rest)
+		if err != nil {
+			return params, err
+		}
+		params.Path = expr
+		return params, nil
+	}
+	re, err := compileSearchQuery(q)
+	if err != nil {
+		return params, err
+	}
+	params.Pattern = re
+	return params, nil
 }
 
 // compileSearchQuery interprets the bar input. It's tried as a regex first;

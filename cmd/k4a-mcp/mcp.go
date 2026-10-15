@@ -19,6 +19,8 @@ import (
 
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
+	"github.com/blairham/k4a/internal/jsonpath"
+	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/timebound"
 )
 
@@ -55,7 +57,12 @@ func newMCPServer(client indexv1.IndexClient, version string) *mcp.Server {
 			"span your time window, the index is only authoritative for the covered " +
 			"slice; scan the remainder. If pattern_recall is 'best_effort' the index " +
 			"cannot guarantee finding every match of this particular pattern — treat " +
-			"zero matches as unverified and confirm with a direct scan.",
+			"zero matches as unverified and confirm with a direct scan. path filters the " +
+			"index's records by a JSON-path predicate (e.g. .order.status == \"failed\"); " +
+			"the index cannot select by path, so this frontend filters what the daemon " +
+			"returns and path_recall says whether that was every record in the window " +
+			"('full') or a capped page ('best_effort': zero matches are unverified; narrow " +
+			"the window, add a query, or scan with k4a search --path).",
 	}, searchHandler(client))
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -73,6 +80,7 @@ func newMCPServer(client indexv1.IndexClient, version string) *mcp.Server {
 type mcpSearchInput struct {
 	Topic         string  `json:"topic"                    jsonschema:"name of the Kafka topic to search (required)"`
 	Query         string  `json:"query,omitempty"          jsonschema:"regex pattern OR literal substring (falls back to literal on parse failure); empty matches all records in the time/partition window"`
+	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the raw key/value, jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. ANDed with query"`
 	Since         string  `json:"since,omitempty"          jsonschema:"lower time bound; relative duration like 24h/7d or an RFC3339 timestamp"`
 	Until         string  `json:"until,omitempty"          jsonschema:"upper time bound; same format as since"`
 	Scope         string  `json:"scope,omitempty"          jsonschema:"match scope: key, value, key+value (default), or key+value+headers"`
@@ -130,11 +138,17 @@ type mcpCoverage struct {
 // "best_effort" means this particular pattern exceeds what the tokenized
 // index can promise (pattern_recall_note says why) and absence is unproven.
 // This surface has no scan to fall back to — honesty is the fallback.
+//
+// path_recall is the same qualifier for a JSON-path predicate, which the index
+// cannot select by: it is "full" only when the daemon returned every record
+// the query and window selected, so filtering them here missed nothing.
 type mcpSearchOutput struct {
 	Coverage          *mcpCoverage `json:"coverage,omitempty"`
 	Topic             string       `json:"topic"`
 	PatternRecall     string       `json:"pattern_recall,omitempty"`
 	PatternRecallNote string       `json:"pattern_recall_note,omitempty"`
+	PathRecall        string       `json:"path_recall,omitempty"`
+	PathRecallNote    string       `json:"path_recall_note,omitempty"`
 	Matches           []mcpMatch   `json:"matches"`
 	Matched           int          `json:"matched"`
 	ServedFromIndex   bool         `json:"served_from_index"`
@@ -177,6 +191,12 @@ func searchHandlerWithTimeout(
 			log.Error("mcp tool: search bad request", "topic", in.Topic, "err", err)
 			return nil, mcpSearchOutput{}, err
 		}
+		var path *jsonpath.Expr
+		if strings.TrimSpace(in.Path) != "" {
+			if path, err = jsonpath.Parse(in.Path); err != nil {
+				return nil, mcpSearchOutput{}, err
+			}
+		}
 		recall, recallNote := patternRecall(req.GetPattern())
 
 		stream, err := client.Search(ctx, req)
@@ -192,6 +212,7 @@ func searchHandlerWithTimeout(
 			PatternRecall:     recall,
 			PatternRecallNote: recallNote,
 		}
+		capped := false
 		for {
 			ev, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
@@ -210,10 +231,16 @@ func searchHandlerWithTimeout(
 				out.Matches = append(out.Matches, matchToMCP(e.Match))
 			case *indexv1.SearchEvent_Progress:
 				out.Matched = int(e.Progress.GetMatched())
+				capped = capped || e.Progress.GetCapped()
 			}
 		}
 		if out.Matched == 0 {
 			out.Matched = len(out.Matches)
+		}
+		if path != nil {
+			// A daemon predating the capped field still reports a full page.
+			capped = capped || (req.GetLimit() > 0 && len(out.Matches) >= int(req.GetLimit()))
+			filterByPath(&out, path, req.GetScopes(), capped)
 		}
 		log.Info("mcp tool: search done",
 			"topic", in.Topic,
@@ -306,6 +333,41 @@ func buildSearchRequest(in mcpSearchInput) (*indexv1.SearchRequest, error) {
 	return req, nil
 }
 
+// filterByPath keeps the matches whose key or value (per the wire scopes)
+// satisfies path — the same rule as the scan, kafka.PathMatches — and says
+// whether that answer is complete. It is only when the daemon was not capped:
+// otherwise older records it never sent may match too.
+func filterByPath(out *mcpSearchOutput, path *jsonpath.Expr, scopes []string, capped bool) {
+	scope := kafka.SearchScope(0)
+	for _, s := range scopes {
+		switch s {
+		case scopeKey:
+			scope |= kafka.ScopeKey
+		case scopeValue:
+			scope |= kafka.ScopeValue
+		}
+	}
+	kept := out.Matches[:0]
+	for _, m := range out.Matches {
+		if kafka.PathMatches(path, []byte(m.Key), []byte(m.Value), scope) {
+			kept = append(kept, m)
+		}
+	}
+	out.Matches = kept
+	out.Matched = len(kept)
+	out.PathRecall = recallFull
+	switch {
+	case !out.ServedFromIndex:
+		out.PathRecall = recallBestEffort
+		out.PathRecallNote = "the topic is not followed, so nothing was searched; scan with k4a search --path"
+	case capped:
+		out.PathRecall = recallBestEffort
+		out.PathRecallNote = "the index returned a capped page of candidates before the path filter " +
+			"ran, so older matches may be missing; narrow the window, add a query, or run " +
+			"k4a search --path, which scans"
+	}
+}
+
 // patternRecall classifies what the index can promise for this pattern —
 // the same decision the client dispatcher's CanServe gate makes (issue
 // pattern recall), surfaced as data because this frontend has no scan to fall back to.
@@ -316,13 +378,19 @@ func patternRecall(pattern string) (recall, note string) {
 	re, err := regexp.Compile(pattern)
 	if err != nil {
 		// Unreachable: buildSearchRequest already validated or literalized it.
-		return "best_effort", "pattern did not compile"
+		return recallBestEffort, "pattern did not compile"
 	}
 	if ok, reason := index.PatternServable(re); !ok {
-		return "best_effort", reason
+		return recallBestEffort, reason
 	}
-	return "full", ""
+	return recallFull, ""
 }
+
+// Recall qualifiers for pattern_recall and path_recall.
+const (
+	recallFull       = "full"
+	recallBestEffort = "best_effort"
+)
 
 // Wire scope names, as the daemon's SearchRequest.scopes reads them.
 const (
