@@ -731,11 +731,42 @@ type MessageHeader struct {
 
 // ConsumedMessage holds a message read from Kafka.
 type ConsumedMessage struct {
-	Time      time.Time
-	Key       string
-	Value     string
-	Topic     string
-	Headers   []MessageHeader
-	Partition int
-	Offset    int64
+	Time    time.Time
+	Key     string
+	Value   string
+	Topic   string
+	Headers []MessageHeader
+	// RawKey and RawValue keep the record bytes only when they could be
+	// schema-registry framed (a leading zero byte), for a display-side
+	// decoder; never serialized, so caches and indexes are unchanged.
+	RawKey        []byte   `json:"-"`
+	RawValue      []byte   `json:"-"`
+	KeyDecoding   Decoding `json:"-"`
+	ValueDecoding Decoding `json:"-"`
+	Partition     int
+	Offset        int64
+}
+
+// Decoding records what a schema-registry decoder did to a key or value.
+// The zero value means it was not framed, or no decoder ran.
+type Decoding struct {
+	// Raw is the undecoded rendering, kept for a raw/decoded toggle; set
+	// only when decoding succeeded.
+	Raw string
+	// Schema names the schema that decoded it, e.g. "orders-value v3 (id
+	// 11, AVRO)".
+	Schema string
+	// Reason says why a framed payload could not be decoded.
+	Reason string
+}
+
+// Decoded reports whether the field was decoded.
+func (d Decoding) Decoded() bool { return d.Schema != "" }
+
+// Shown returns the field's text: decoded unless raw is set.
+func (d Decoding) Shown(decoded string, raw bool) string {
+	if raw && d.Decoded() {
+		return d.Raw
+	}
+	return decoded
 }

@@ -157,11 +157,15 @@ the same change.
 - `p` / `P` — cycle the partition filter forward / backward; `a` clears it
 - `h` / `l` — scroll the table horizontally / pan the value column
 - `ctrl+d` — purge the topic (the same retention prompt as Topic Detail)
+- `x` — raw / schema-registry decoded keys and values (advertised only with a
+  registry configured)
 
 ### Message Detail View
 
 - `s` — save message to file (JSON)
 - `ctrl+f` / `ctrl+b` — page the body
+- `x` — raw / decoded; the cards show the key and value schema or the reason
+  a framed payload was not decoded
 
 ### Search View
 
@@ -312,7 +316,10 @@ Full context field set (`internal/config.Context`): `brokers`, `ssm-brokers`,
 `auth`, `region`, `profile`, `username`, `password`, `cert`, `key`, `ca`,
 `insecure`, `no-tls`, `oauth-token`, `oauth-token-file`, `oauth-token-url`,
 `oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `index-endpoint`,
-`index-insecure`, `index-ca`, `index-cert`, `index-key`, `index-token`.
+`index-insecure`, `index-ca`, `index-cert`, `index-key`, `index-token`, and the
+nested `schema-registry:` block (`url`, `username`, `password`, `token`, `ca`),
+overridden by `--schema-registry-*` on `ui` and `consume` (see
+`docs/design/schema-registry.md`).
 
 The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,
