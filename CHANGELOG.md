@@ -8,6 +8,104 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-10-15
+
+### Breaking
+
+- The Helm charts now name resources `<release>-<chart>`. A release named
+  `k4a-index` or `k4a-mcp` keeps its names; any other release is renamed
+  unless `fullnameOverride` is set, and `serviceAccount.name` follows, which
+  can break an existing EKS Pod Identity association (#66).
+- Without `--auth`, the method is inferred from what was given (credentials
+  mean `scram`, a cert or key means `mtls`, OAuth settings mean
+  `oauthbearer`, nothing means `plaintext`) instead of always `scram`, in the
+  CLI, the TUI and `k4a-index` (#69, #99).
+- `--auth mtls` refuses `--insecure` instead of silently skipping server
+  verification, as `docs/design/auth.md` always said (#98).
+- `$VAR` in a password, a path or a flag is expanded only when it is the whole
+  value (`$VAR` or `${VAR}`), so a literal `$` is no longer mangled (#71).
+- `ui.readonly` now blocks the mutating headless commands too, and
+  `delete-topic` asks for confirmation (`--yes` to skip; it refuses rather
+  than hangs without a terminal) (#88).
+
+### Added
+
+- Authentication: SCRAM-SHA-256, SASL/PLAIN and OAUTHBEARER (static token,
+  token file, or client credentials with refresh), and SASL without TLS as an
+  explicit `--no-tls` opt-in that warns (#78, #82).
+- Confluent Schema Registry decoding of Avro, Protobuf and JSON Schema keys
+  and values in Messages, Message Detail and `k4a consume --decode`, with a
+  per-context `schema-registry:` block; `x` toggles raw and decoded. Schema IDs
+  in Confluent 8 record headers, `google/type` imports and `Any` fields are
+  resolved (#86, #92, #129).
+- Headless commands for what the TUI could already do: `list-topics`,
+  `list-groups`, `describe-group`, `describe-broker-config`, `reset-offsets`,
+  `delete-offsets`, `delete-group`, `delete-acl`, `add-partitions`,
+  `purge-topic` (#101, #106, #108).
+- `k4a produce --value`, `--record-key`, `-H k=v` and `--stdin`, and Value,
+  Key and Headers fields in the TUI Produce form (#110).
+- Seeking: `k4a consume --from-beginning | --offset N | --since`, and `t` in
+  the Messages view; `consume --no-group` reads every partition, or one with
+  `--partition` (#85, #126, #127).
+- `k4a search --path` and `path:` in the TUI: a jq-style JSON-path predicate,
+  always answered by a scan (#125).
+- Copy a message's value, key or record (`c`/`K`/`C`) over OSC 52 or a native
+  clipboard tool (`ui.clipboard`), export the visible messages or search
+  results to JSONL (`e`), and step through messages in Message Detail
+  (`n`/`N`) (#100, #128).
+- TUI administration: edit broker configs, edit an ACL binding, a client
+  quotas view (`:quotas`), partition reassignment from Topic Detail (`a`), and
+  re-run/edit/filter in the Search view (#96, #105, #107, #109, #111).
+- `k4a index status` / `k4a index clear`, and `k4a state export` /
+  `k4a state import` (a validated tar.gz; inline secrets stripped unless
+  `--include-secrets`) (#73, #124).
+- `k4a-index` and `k4a-mcp`: optional TLS, mTLS and bearer-token auth on
+  their listeners, a server-side `--max-search-limit`, Prometheus metrics and
+  `/healthz` / `/readyz` on `--admin-listen`, `grpc.health.v1`, and
+  `--shutdown-timeout` (#77, #84, #90, #93).
+- `k4a-index`: bounded backfill when it starts following a topic, catch-up
+  after a restart, and a follow-set that survives a container restart (#95).
+- Helm charts: Kafka credentials and TLS from existing Secrets, OAuth and
+  `noTLS`, log level, a hardened pod and container security context, and
+  optional NetworkPolicy, PodDisruptionBudget and ServiceMonitor (#66, #82,
+  #90, #93).
+
+### Changed
+
+- The TUI's hint bars and `?` help are generated per view from one key table,
+  so they list only keys that work there (#83, #94).
+- `k4a-mcp` serves MCP statelessly, so replicas need no sticky sessions
+  (#61).
+- The on-disk search cache is capped at 256 MiB and drops entries unused for
+  7 days (#68).
+- Search patterns are logged at debug, not info, by `k4a-index` (#84).
+
+### Fixed
+
+- Form fields in the TUI take keys that are also global shortcuts, so
+  `orders-1` can be typed (#65).
+- Every connection flag (`--username`, `--password`, `--cert`, `--key`,
+  `--ca`, `-k`, `--region`) overrides the selected context, in the CLI and in
+  `k4a-index` (#63, #80).
+- An AWS profile's own `region`, and `AWS_REGION`, are used instead of
+  `us-east-1` (#104).
+- `k4a upgrade` refuses unknown flags instead of installing (#62).
+- Out-of-range partition counts, replication factors and partition IDs are
+  refused instead of wrapping (#67).
+- `:upgrade` restarts the TUI with the original command line (#74).
+- `:produce` matches only the whole word and keeps the topic's case;
+  `:search` uses the topic on screen; errors the TUI swallowed are shown
+  (#76, #79, #87).
+- The ACLs tab (`4`) showed an empty box; it now has its view (#109).
+- `enter` in a filtered Messages view opened the wrong message (#100).
+- Headless commands close their Kafka client; `produce` reports what was
+  actually sent after Ctrl+C (#72, #81).
+- `k4a-index`: illegal topic names (including `.` and `..`) are refused before
+  they become index paths; a tail that dies leaves the follow-set; a Coverage
+  probe no longer keeps a topic from being evicted; shutdown and eviction
+  races are closed; byte sizes that overflow are refused (#64, #70, #75, #77,
+  #89).
+
 ## [0.0.2] - 2026-10-09
 
 ### Fixed
