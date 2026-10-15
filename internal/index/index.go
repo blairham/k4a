@@ -148,10 +148,13 @@ func Open(root *state.Root, cluster, topic string) (*Indexer, error) {
 	if cluster == "" {
 		return nil, fmt.Errorf("cluster ID is required for index isolation")
 	}
-	if topic == "" {
-		return nil, fmt.Errorf("topic is required")
+	if err := ValidateTopicName(topic); err != nil {
+		return nil, err
 	}
 	dir := topicDir(root, cluster, topic)
+	if !containedChild(clusterDir(root, cluster), dir) {
+		return nil, fmt.Errorf("index dir %q escapes the cluster directory", dir)
+	}
 
 	lock, err := state.AcquireWriter(dir)
 	if err != nil {
@@ -173,7 +176,20 @@ func Open(root *state.Root, cluster, topic string) (*Indexer, error) {
 
 // topicDir returns the absolute path for one topic's index directory.
 func topicDir(root *state.Root, cluster, topic string) string {
-	return filepath.Join(root.File(state.SubsystemIndex), cluster, topic)
+	return filepath.Join(clusterDir(root, cluster), topic)
+}
+
+// clusterDir is the directory holding every topic index for one cluster.
+func clusterDir(root *state.Root, cluster string) string {
+	return filepath.Join(root.File(state.SubsystemIndex), cluster)
+}
+
+// IsTopicDir reports whether dir is exactly one topic directory under the
+// cluster's index directory. Callers that delete an index directory check it
+// first, so no topic name — however it got past validation — can turn a
+// RemoveAll into a deletion of the index root.
+func IsTopicDir(root *state.Root, cluster, dir string) bool {
+	return containedChild(clusterDir(root, cluster), dir)
 }
 
 func (ix *Indexer) loadOrInit() error {

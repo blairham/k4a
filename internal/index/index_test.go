@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -514,5 +515,52 @@ func TestPublishedSnapshotIsIsolated(t *testing.T) {
 	b := ix.BookkeeperSnapshot()
 	if b.NewestOffsetPerPartition[3] == 99999 {
 		t.Error("mutating a snapshot leaked into the published bookkeeper")
+	}
+}
+
+func TestValidateTopicName(t *testing.T) {
+	good := []string{"orders", "demo.topic.v1", "a_b-c.D9", strings.Repeat("a", 249)}
+	for _, n := range good {
+		if err := ValidateTopicName(n); err != nil {
+			t.Errorf("ValidateTopicName(%q) = %v, want nil", n, err)
+		}
+	}
+	bad := []string{"", ".", "..", "a/b", "../x", `a\b`, "a b", "tab\tx", "nul\x00", "é", strings.Repeat("a", 250)}
+	for _, n := range bad {
+		if err := ValidateTopicName(n); err == nil {
+			t.Errorf("ValidateTopicName(%q) = nil, want an error", n)
+		}
+	}
+}
+
+// TestOpenRefusesTopicOutsideClusterDir proves Open never resolves a topic to
+// a directory other than a direct child of the cluster's index directory.
+func TestOpenRefusesTopicOutsideClusterDir(t *testing.T) {
+	root := state.NewRoot(t.TempDir())
+	for _, topic := range []string{".", "..", "../other", "a/b"} {
+		if ix, err := Open(root, testCluster, topic); err == nil {
+			_ = ix.Close() //nolint:errcheck // test cleanup
+			t.Errorf("Open(%q) succeeded; want refusal", topic)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root.File(state.SubsystemIndex), "lock")); err == nil {
+		t.Error("a refused Open still created a lock at the index root")
+	}
+}
+
+func TestIsTopicDir(t *testing.T) {
+	root := state.NewRoot(t.TempDir())
+	if !IsTopicDir(root, testCluster, topicDir(root, testCluster, "orders")) {
+		t.Error("a real topic dir was not recognized")
+	}
+	for _, dir := range []string{
+		root.File(state.SubsystemIndex),
+		filepath.Join(root.File(state.SubsystemIndex), testCluster),
+		filepath.Join(root.File(state.SubsystemIndex), testCluster, "a", "b"),
+		filepath.Join(root.File(state.SubsystemIndex), "other-cluster", "orders"),
+	} {
+		if IsTopicDir(root, testCluster, dir) {
+			t.Errorf("IsTopicDir(%q) = true, want false", dir)
+		}
 	}
 }
