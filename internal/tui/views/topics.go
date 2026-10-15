@@ -174,15 +174,15 @@ func (v *TopicsView) HandleKey(key string) (action, param string) {
 		return "create_topic", ""
 	}
 	if act, ok := topicRowActions[key]; ok {
-		if name, ok := v.selectedTopic(); ok {
+		if name, ok := v.SelectedTopic(); ok {
 			return act, name
 		}
 	}
 	return "", ""
 }
 
-// selectedTopic is the name of the topic under the cursor.
-func (v *TopicsView) selectedTopic() (string, bool) {
+// SelectedTopic is the name of the topic under the cursor.
+func (v *TopicsView) SelectedTopic() (string, bool) {
 	if v.table.SelectedRow() == nil {
 		return "", false
 	}
