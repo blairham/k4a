@@ -61,6 +61,10 @@ func (c *StateCommand) Run(args []string) int {
 	case "status":
 		return runStateStatus(root)
 	case "clear":
+		if err := checkRootWritable(root, "state clear"); err != nil {
+			log.Error(err.Error())
+			return 1
+		}
 		target := "all"
 		if len(args) > 1 {
 			target = strings.ToLower(args[1])

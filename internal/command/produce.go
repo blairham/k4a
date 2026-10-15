@@ -96,6 +96,11 @@ func (c *ProduceCommand) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	if err := flags.checkWritable("produce"); err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+
 	interval, err := time.ParseDuration(flags.Interval)
 	if err != nil {
 		log.Error("invalid --interval", "err", err)
