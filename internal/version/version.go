@@ -61,11 +61,15 @@ func Get() Info {
 // String returns just the resolved version — the convenience the daemons use.
 func String() string { return Get().Version }
 
+// readBuildInfo is debug.ReadBuildInfo; a variable only so tests can supply
+// the build info a `go install` or VCS-stamped build would carry.
+var readBuildInfo = debug.ReadBuildInfo
+
 // buildInfo pulls the module version and VCS stamp out of the embedded build
 // info. Any field is empty when unavailable (e.g. `go run`, or a build with
 // -buildvcs=false).
 func buildInfo() (modVer, rev, revTime string, dirty bool) {
-	info, ok := debug.ReadBuildInfo()
+	info, ok := readBuildInfo()
 	if !ok {
 		return "", "", "", false
 	}
