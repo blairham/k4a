@@ -124,6 +124,7 @@ var writeActions = map[string]bool{
 	actionProduce:            true,
 	actionCreateTopic:        true,
 	actionCreateACL:          true,
+	views.ActionEditACL:      true,
 	"reset_offsets":          true,
 	"edit_topic_config":      true,
 	actionEditBrokerConfig:   true,
@@ -169,6 +170,8 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 	case actionCreateACL:
 		a.setView(style.ViewCreateACL, views.NewCreateACLView(a.client))
 		return a.openView(style.ViewCreateACL, a.viewMap[style.ViewCreateACL].Init())
+	case views.ActionEditACL:
+		return a.openACLEdit(param)
 	case "topic_config":
 		a.setView(style.ViewTopicConfig, views.NewTopicConfigView(a.client, param))
 		return a.openView(style.ViewTopicConfig, a.viewMap[style.ViewTopicConfig].Init())

@@ -6,6 +6,7 @@ package views
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
@@ -14,9 +15,17 @@ import (
 	"github.com/blairham/k4a/internal/tui/style"
 )
 
-// CreateACLResultMsg carries the result of an ACL creation attempt.
+// CreateACLResultMsg carries the result of an ACL creation (or, in edit
+// mode, replacement) attempt.
 type CreateACLResultMsg struct {
 	Err error
+}
+
+// EditACLSubmitMsg asks the App to confirm replacing Old with New. An edit
+// is a delete and a create, so it is never sent without a y/n.
+type EditACLSubmitMsg struct {
+	Old kafka.ACLEntry
+	New kafka.CreateACLConfig
 }
 
 // createACLState tracks the create ACL view state.
@@ -24,6 +33,7 @@ type createACLState int
 
 const (
 	createACLStateForm createACLState = iota
+	createACLStateConfirm
 	createACLStateCreating
 	createACLStateDone
 )
@@ -32,6 +42,7 @@ const (
 type CreateACLView struct {
 	err          error
 	client       *kafka.Client
+	editing      *kafka.ACLEntry // the binding being replaced; nil when creating
 	form         *huh.Form
 	result       string
 	resourceType string
@@ -57,18 +68,45 @@ func NewCreateACLView(client *kafka.Client) *CreateACLView {
 		permission:   "allow",
 		state:        createACLStateForm,
 	}
+	v.buildForm()
+	return v
+}
 
+// NewEditACLView opens the form on an existing binding. Submitting it asks
+// the App (EditACLSubmitMsg) to confirm replacing the binding.
+func NewEditACLView(client *kafka.Client, entry kafka.ACLEntry) *CreateACLView {
+	v := &CreateACLView{
+		client:       client,
+		editing:      &entry,
+		resourceType: entry.ResourceType,
+		resourceName: entry.ResourceName,
+		patternType:  entry.PatternType,
+		principal:    entry.Principal,
+		host:         entry.Host,
+		operation:    entry.Operation,
+		permission:   entry.Permission,
+		state:        createACLStateForm,
+	}
+	v.buildForm()
+	return v
+}
+
+// stringOptions offers values, plus current when it is not among them, so
+// an edited binding with an operation the form does not list keeps it.
+func stringOptions(current string, values ...string) []huh.Option[string] {
+	if current != "" && !slices.Contains(values, current) {
+		values = append(values, current)
+	}
+	return huh.NewOptions(values...)
+}
+
+func (v *CreateACLView) buildForm() {
 	v.form = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("Resource Type").
 				Key("resource_type").
-				Options(
-					huh.NewOption("topic", "topic"),
-					huh.NewOption("group", "group"),
-					huh.NewOption("cluster", "cluster"),
-					huh.NewOption("transactionalid", "transactionalid"),
-				).
+				Options(stringOptions(v.resourceType, "topic", "group", "cluster", "transactionalid")...).
 				Value(&v.resourceType),
 			huh.NewInput().
 				Title("Resource Name").
@@ -79,10 +117,7 @@ func NewCreateACLView(client *kafka.Client) *CreateACLView {
 			huh.NewSelect[string]().
 				Title("Pattern Type").
 				Key("pattern_type").
-				Options(
-					huh.NewOption("literal", "literal"),
-					huh.NewOption("prefixed", "prefixed"),
-				).
+				Options(stringOptions(v.patternType, "literal", "prefixed")...).
 				Value(&v.patternType),
 			huh.NewInput().
 				Title("Principal").
@@ -98,29 +133,17 @@ func NewCreateACLView(client *kafka.Client) *CreateACLView {
 			huh.NewSelect[string]().
 				Title("Operation").
 				Key("operation").
-				Options(
-					huh.NewOption("all", "all"),
-					huh.NewOption("read", "read"),
-					huh.NewOption("write", "write"),
-					huh.NewOption("create", "create"),
-					huh.NewOption("delete", "delete"),
-					huh.NewOption("alter", "alter"),
-					huh.NewOption("describe", "describe"),
-				).
+				Options(stringOptions(v.operation,
+					"all", "read", "write", "create", "delete", "alter", "describe")...).
 				Value(&v.operation),
 			huh.NewSelect[string]().
 				Title("Permission").
 				Key("permission").
-				Options(
-					huh.NewOption("allow", "allow"),
-					huh.NewOption("deny", "deny"),
-				).
+				Options(stringOptions(v.permission, "allow", "deny")...).
 				Value(&v.permission),
 		),
 	).WithTheme(huh.ThemeFunc(huh.ThemeDracula)).
 		WithWidth(60)
-
-	return v
 }
 
 // Init returns the initial command — starts the huh form.
@@ -132,12 +155,15 @@ func (v *CreateACLView) Init() tea.Cmd {
 func (v *CreateACLView) Update(msg tea.Msg) tea.Cmd {
 	if res, ok := msg.(CreateACLResultMsg); ok {
 		v.state = createACLStateDone
+		verb, doing := "created", "creating"
+		if v.editing != nil {
+			verb, doing = "replaced", "replacing"
+		}
 		if res.Err != nil {
 			v.err = res.Err
-			v.result = fmt.Sprintf("Error creating ACL: %v", res.Err)
+			v.result = fmt.Sprintf("Error %s ACL: %v", doing, res.Err)
 		} else {
-			v.result = fmt.Sprintf("ACL created: %s %s on %s:%s for %s",
-				v.permission, v.operation, v.resourceType, v.resourceName, v.principal)
+			v.result = fmt.Sprintf("ACL %s: %s", verb, ACLLabel(kafka.ACLEntry(v.config())))
 		}
 		return nil
 	}
@@ -149,6 +175,9 @@ func (v *CreateACLView) Update(msg tea.Msg) tea.Cmd {
 			v.form = f
 		}
 		if v.form.State == huh.StateCompleted {
+			if v.editing != nil {
+				return v.submitEdit()
+			}
 			return v.createACL()
 		}
 		return cmd
@@ -197,7 +226,12 @@ func (v *CreateACLView) Resize(width, height int) {
 func (v *CreateACLView) View() string {
 	switch v.state {
 	case createACLStateForm:
+		if v.editing != nil {
+			return "\n  " + style.Muted.Render("editing "+ACLLabel(*v.editing)) + "\n\n" + v.form.View()
+		}
 		return v.form.View()
+	case createACLStateConfirm:
+		return "\n  " + style.Muted.Render("confirm the replacement below")
 	case createACLStateCreating:
 		return "\n  Creating ACL..."
 	case createACLStateDone:
@@ -216,7 +250,16 @@ func (v *CreateACLView) createACL() tea.Cmd {
 
 	v.state = createACLStateCreating
 
-	cfg := kafka.CreateACLConfig{
+	cfg := v.config()
+	return func() tea.Msg {
+		err := v.client.CreateACL(context.Background(), cfg)
+		return CreateACLResultMsg{Err: err}
+	}
+}
+
+// config is the binding the form describes.
+func (v *CreateACLView) config() kafka.CreateACLConfig {
+	return kafka.CreateACLConfig{
 		ResourceType: v.resourceType,
 		ResourceName: v.resourceName,
 		PatternType:  v.patternType,
@@ -225,9 +268,33 @@ func (v *CreateACLView) createACL() tea.Cmd {
 		Operation:    v.operation,
 		Permission:   v.permission,
 	}
+}
 
-	return func() tea.Msg {
-		err := v.client.CreateACL(context.Background(), cfg)
-		return CreateACLResultMsg{Err: err}
+// submitEdit hands the edit to the App for confirmation.
+func (v *CreateACLView) submitEdit() tea.Cmd {
+	if v.resourceName == "" || v.principal == "" {
+		return nil
 	}
+	v.state = createACLStateConfirm
+	msg := EditACLSubmitMsg{Old: *v.editing, New: v.config()}
+	return func() tea.Msg { return msg }
+}
+
+// Replacing marks a confirmed edit as in flight.
+func (v *CreateACLView) Replacing() { v.state = createACLStateCreating }
+
+// CancelEdit records a declined replacement; nothing was sent.
+func (v *CreateACLView) CancelEdit() {
+	v.state = createACLStateDone
+	v.result = "edit canceled; the ACL is unchanged"
+}
+
+// ACLLabel is a one-line description of a binding for prompts and results.
+func ACLLabel(e kafka.ACLEntry) string {
+	host := ""
+	if e.Host != "" && e.Host != "*" {
+		host = " from " + e.Host
+	}
+	return fmt.Sprintf("%s %s on %s:%s (%s) for %s%s",
+		e.Permission, e.Operation, e.ResourceType, e.ResourceName, e.PatternType, e.Principal, host)
 }
