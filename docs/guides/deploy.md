@@ -155,6 +155,7 @@ these via env vars, so in-cluster the env column is what you actually edit.
 | `--drain-stall-timeout` | `K4A_INDEX_DRAIN_STALL_TIMEOUT` | `5m` | If a topic's indexing drain makes no progress while records are queued, dump all goroutine stacks to stderr and exit. `0` disables. |
 | `--drain-stall-merge-grace` | `K4A_INDEX_DRAIN_STALL_MERGE_GRACE` | `30m` | Tolerate a stall this long while a scorch segment merge is in flight, so the watchdog doesn't kill a working merge and livelock on restart. `0` disables the grace. |
 | `--drain-stall-wipe-after` | `K4A_INDEX_DRAIN_STALL_WIPE_AFTER` | `3` | On the Nth consecutive stall exit for the same topic index, quarantine that index so the next boot re-warms fresh. `0` disables. |
+| `--shutdown-timeout` | `K4A_INDEX_SHUTDOWN_TIMEOUT` | `15s` | On SIGTERM, how long in-flight RPCs may run before they are cut off, so a stalled Search cannot hold shutdown open past the pod's grace period (which would skip the final index flush). Keep it under `terminationGracePeriodSeconds` (Kubernetes default 30s). `0` stops them at once. |
 | `-l`, `--listen` | `K4A_INDEX_LISTEN` | `:9500` | gRPC listen address. |
 | `--data-dir` | `K4A_INDEX_DATA_DIR` | k4a's `~/.k4a` | Index storage root. |
 | `--log-level` | `K4A_INDEX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
