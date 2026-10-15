@@ -5,12 +5,14 @@ package command
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/charmbracelet/log"
+	goflags "github.com/jessevdk/go-flags"
 
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/index"
@@ -19,7 +21,14 @@ import (
 
 // StateCommand exposes k4a's local-state subsystems for inspection and
 // reset. See docs/design/state-management.md for the model.
-type StateCommand struct{}
+type StateCommand struct {
+	// Root, Out and Err default to ~/.k4a, stdout and stderr; Prompt to
+	// the terminal. Tests point them elsewhere.
+	Root   *state.Root
+	Out    io.Writer
+	Err    io.Writer
+	Prompt Prompt
+}
 
 // Help returns the help text.
 func (c *StateCommand) Help() string {
@@ -35,12 +44,22 @@ Subcommands:
   clear [subsystem]   Remove state for one subsystem, or all non-config state
                       Subsystems: session, cache, index, all (default)
   dir                 Print the state directory path
+  export [-o FILE]    Write config, session and search cache to a tar.gz
+                      archive (0600). --index adds local topic indexes;
+                      --no-config, --no-session, --no-cache leave parts out.
+                      Inline passwords and tokens are stripped from the
+                      config ($VAR references are kept) unless
+                      --include-secrets
+  import ARCHIVE      Validate an archive and write it into the state
+                      directory; asks before replacing anything unless --yes
 
 Examples:
   k4a state status
   k4a state clear cache
   k4a state clear all
-  k4a state dir`
+  k4a state dir
+  k4a state export -o k4a-state.tar.gz --index
+  k4a state import k4a-state.tar.gz`
 }
 
 // Synopsis returns the one-line description.
@@ -55,7 +74,10 @@ func (c *StateCommand) Run(args []string) int {
 		sub = strings.ToLower(args[0])
 	}
 
-	root := state.NewRoot(config.DefaultConfigDir())
+	root := c.Root
+	if root == nil {
+		root = state.NewRoot(config.DefaultConfigDir())
+	}
 
 	switch sub {
 	case "status":
@@ -70,6 +92,19 @@ func (c *StateCommand) Run(args []string) int {
 			target = strings.ToLower(args[1])
 		}
 		return runStateClear(root, target)
+	case "export", "import":
+		run := c.runStateExport
+		if sub == "import" {
+			run = c.runStateImport
+		}
+		if err := run(root, args[1:]); err != nil {
+			if goflags.WroteHelp(err) {
+				return 0
+			}
+			log.Error("state "+sub+" failed", "err", err)
+			return 1
+		}
+		return 0
 	case "dir":
 		fmt.Println(root.Path())
 		return 0
