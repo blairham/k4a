@@ -215,7 +215,7 @@ func warnCleartext(auth kafka.AuthConfig) {
 // context to inherit them from.
 func directAuthConfig(auth kafka.AuthConfig) kafka.AuthConfig {
 	if auth.Method == "" {
-		auth.Method = inferAuthMethod(auth)
+		auth.Method = kafka.InferAuthMethod(auth)
 	}
 	if auth.Region == "" {
 		auth.Region = awscreds.DefaultRegion
@@ -260,24 +260,4 @@ func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
 		base.NoTLS = true
 	}
 	return base
-}
-
-// inferAuthMethod picks the method a --brokers connection without --auth means
-// from what was supplied. Defaulting to scram made a bare `k4a -b
-// localhost:9092` fail with "scram auth requires a username and password";
-// a local broker is the common case for no credentials at all. Credentials
-// still mean scram, which keeps `-b host --username u --password p` working
-// as before, OAuth settings mean oauthbearer, and a client certificate means
-// mtls rather than being ignored.
-func inferAuthMethod(auth kafka.AuthConfig) kafka.AuthMethod {
-	switch {
-	case auth.Username != "" || auth.Password != "":
-		return kafka.AuthSCRAM
-	case auth.OAuth.IsSet():
-		return kafka.AuthOAuthBearer
-	case auth.CertFile != "" || auth.KeyFile != "":
-		return kafka.AuthMTLS
-	default:
-		return kafka.AuthPlaintext
-	}
 }

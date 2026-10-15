@@ -63,7 +63,7 @@ both are installed in the same namespace.
 | Value | Env | Notes |
 |---|---|---|
 | `kafka.brokers` | `KAFKA_BROKERS` | Bootstrap servers, comma-separated. Required. |
-| `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram` (SHA-512), `scram-sha-256`, `plain`, `oauthbearer`, `mtls`, `iam`. Default `iam`. |
+| `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram` (SHA-512), `scram-sha-256`, `plain`, `oauthbearer`, `mtls`, `iam`. Default `iam`; `""` infers it from the credentials supplied. |
 | `aws.region` | `AWS_REGION` | Region for IAM auth. Rendered only when set; the daemon defaults to `us-east-1`. |
 | `kafka.insecure` | `--insecure` | Skip TLS certificate verification. Passed as an argument (the flag has no env). Testing only; refused with `mtls`. |
 | `kafka.noTLS` | `--no-tls` | Run a SASL method without TLS (`SASL_PLAINTEXT`); the password or token crosses the network in cleartext and the daemon logs a warning. Passed as an argument. Development brokers only. |
@@ -177,7 +177,11 @@ equivalents `KAFKA_BROKERS`, `KAFKA_AUTH`, `AWS_REGION`, `AWS_PROFILE`,
 `KAFKA_TLS_KEY`, and for OAUTHBEARER `KAFKA_OAUTH_TOKEN`,
 `KAFKA_OAUTH_TOKEN_FILE`, `KAFKA_OAUTH_TOKEN_URL`, `KAFKA_OAUTH_CLIENT_ID`,
 `KAFKA_OAUTH_CLIENT_SECRET`, `KAFKA_OAUTH_SCOPES`. `--insecure` and
-`--no-tls` have no env form.
+`--no-tls` have no env form. A `--brokers` connection without `--auth` infers
+the method as the CLI does: credentials mean `scram`, OAuth settings
+`oauthbearer`, a client cert or key `mtls`, and nothing `plaintext`. The
+chart always renders `KAFKA_AUTH` (default `iam`), so set `kafka.auth: ""` to
+get the inference there.
 
 The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 (`kafka.auth`), `AWS_REGION` (`aws.region`, when set), `K4A_INDEX_ALLOW`,
