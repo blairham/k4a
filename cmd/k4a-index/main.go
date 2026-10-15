@@ -33,6 +33,7 @@ import (
 	goflags "github.com/jessevdk/go-flags"
 	"google.golang.org/grpc"
 
+	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
@@ -48,12 +49,12 @@ type flags struct {
 	KeyFile       string        `long:"key"                     env:"KAFKA_TLS_KEY"                     description:"Client private key PEM file (mTLS)"`
 	Profile       string        `long:"profile"                 env:"AWS_PROFILE"                       description:"AWS profile (IAM auth)"                                                                                                                                                                                                                                                                                                       short:"p"`
 	Brokers       string        `long:"brokers"                 env:"KAFKA_BROKERS"                     description:"Bootstrap servers (comma-separated); overrides config"                                                                                                                                                                                                                                                                        short:"b"`
-	Auth          string        `long:"auth"                    env:"KAFKA_AUTH"                        description:"Auth method: plaintext, tls, scram, mtls, iam"                                                                                                                                                                                                                                                                                short:"a"`
-	Username      string        `long:"username"                env:"KAFKA_USERNAME"                    description:"SASL/SCRAM username"`
-	Password      string        `long:"password"                env:"KAFKA_PASSWORD"                    description:"SASL/SCRAM password"`
+	Auth          string        `long:"auth"                    env:"KAFKA_AUTH"                        description:"Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam"                                                                                                                                                                                                                                             short:"a"`
+	Username      string        `long:"username"                env:"KAFKA_USERNAME"                    description:"SASL username (scram, scram-sha-256, plain)"`
+	Password      string        `long:"password"                env:"KAFKA_PASSWORD"                    description:"SASL password (scram, scram-sha-256, plain)"`
 	ConfigFile    string        `long:"config"                                                          description:"Config file path (default: ~/.k4a/config.yaml)"`
 	CAFile        string        `long:"ca"                      env:"KAFKA_TLS_CA"                      description:"CA certificate PEM file"`
-	Region        string        `long:"region"                  env:"AWS_REGION"                        description:"AWS region (IAM auth)"                                                                                                                                                                                                                                                                                                        short:"r" default:"us-east-1"`
+	Region        string        `long:"region"                  env:"AWS_REGION"                        description:"AWS region (IAM auth)"                                                                                                                                                                                                                                                                                                        short:"r"`
 	Context       string        `long:"context"                                                         description:"Named context from ~/.k4a/config.yaml"`
 	Listen        string        `long:"listen"                  env:"K4A_INDEX_LISTEN"                  description:"gRPC listen address"                                                                                                                                                                                                                                                                                                          short:"l" default:":9500"`
 	DataDir       string        `long:"data-dir"                env:"K4A_INDEX_DATA_DIR"                description:"Index storage root (default: k4a's ~/.k4a)"`
@@ -61,14 +62,40 @@ type flags struct {
 	LogLevel      string        `long:"log-level"               env:"K4A_INDEX_LOG_LEVEL"               description:"Log level: debug, info, warn, error"                                                                                                                                                                                                                                                                                                    default:"info"`
 	TopicMaxBytes string        `long:"topic-max-bytes"         env:"K4A_INDEX_TOPIC_MAX_BYTES"         description:"Per-topic index byte cap; the oldest records are trimmed once a topic's index exceeds it. Human size (e.g. 1GiB, 512MB); 0 disables. Total disk ≈ hot-set × this, so keep it under the volume sizeLimit."                                                                                                                               default:"1GiB"`
 	MaxTotalBytes string        `long:"max-total-bytes"         env:"K4A_INDEX_MAX_TOTAL_BYTES"         description:"Disk budget for the WHOLE index root, measured on disk. Over budget the daemon deletes orphaned index dirs, then evicts the coldest non-pinned topics until it fits — turning an abrupt volume-full pod eviction into a graceful loss of the coldest coverage. Set it below the volume's size limit. Human size; 0 disables."           default:"0"`
-	Prefollow     []string      `long:"topic"                   env:"K4A_INDEX_TOPIC"                   description:"Topics to pre-follow (warm + pinned) at startup; each must match --allow. Repeatable / comma-separated."                                                                                                                                                                                                                      short:"t"                     env-delim:","`
-	Allow         []string      `long:"allow"                   env:"K4A_INDEX_ALLOW"                   description:"Follow allowlist: glob patterns of topics the daemon may auto-follow (default-deny; MUST mirror the cluster-side topic grants (IAM policy or ACLs)). Repeatable / comma-separated."                                                                                                                                                                         env-delim:"," required:"true"`
+	Prefollow     []string      `long:"topic"                   env:"K4A_INDEX_TOPIC"                   description:"Topics to pre-follow (warm + pinned) at startup; each must match --allow. Repeatable / comma-separated."                                                                                                                                                                                                                      short:"t"                 env-delim:","`
+	Allow         []string      `long:"allow"                   env:"K4A_INDEX_ALLOW"                   description:"Follow allowlist: glob patterns of topics the daemon may auto-follow (default-deny; MUST mirror the cluster-side topic grants (IAM policy or ACLs)). Repeatable / comma-separated."                                                                                                                                                                     env-delim:"," required:"true"`
 	MaxFollow     int           `long:"max-followed"            env:"K4A_INDEX_MAX_FOLLOWED"            description:"Hard cap on concurrently-followed topics; at the cap a new follow evicts the coldest."                                                                                                                                                                                                                                                  default:"256"`
 	EvictAfter    time.Duration `long:"evict-after"             env:"K4A_INDEX_EVICT_AFTER"             description:"Drop a topic not searched within this idle window (LRU). Pinned pre-follow topics are exempt."                                                                                                                                                                                                                                          default:"168h"`
 	DrainStall    time.Duration `long:"drain-stall-timeout"     env:"K4A_INDEX_DRAIN_STALL_TIMEOUT"     description:"Fail fast if a topic's indexing drain makes no progress for this long while records are queued: dump all goroutine stacks to stderr and exit, so the pod restarts and re-warms instead of serving nothing silently. 0 disables."                                                                                                        default:"5m"`
 	MergeGrace    time.Duration `long:"drain-stall-merge-grace" env:"K4A_INDEX_DRAIN_STALL_MERGE_GRACE" description:"Tolerate a drain stall up to this long while a scorch file merge is in flight: the merger is working, and killing it restarts the merge from scratch on the same volume — a restart livelock. 0 disables the grace."                                                                                                                    default:"30m"`
 	WipeStrikes   int           `long:"drain-stall-wipe-after"  env:"K4A_INDEX_DRAIN_STALL_WIPE_AFTER"  description:"On the Nth consecutive drain-stall exit for the same topic index (counted in the index dir, so the count survives container restarts), quarantine the index before exiting so the next boot re-warms fresh. 0 disables."                                                                                                                default:"3"`
+	ShutdownGrace time.Duration `long:"shutdown-timeout"        env:"K4A_INDEX_SHUTDOWN_TIMEOUT"        description:"On SIGTERM, how long in-flight RPCs may run before the server stops them. Keep it under the pod's terminationGracePeriodSeconds, leaving room to flush every index. 0 stops them at once."                                                                                                                                              default:"15s"`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
+	NoTLS         bool          `long:"no-tls"                                                          description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
+
+	OAuth oauthFlags
+}
+
+// oauthFlags configures OAUTHBEARER, mirroring the CLI's flags of the same
+// names: a static token, a token file, or the client-credentials grant.
+type oauthFlags struct {
+	Token        string `long:"oauth-token"         env:"KAFKA_OAUTH_TOKEN"         description:"OAUTHBEARER static bearer token"`
+	TokenFile    string `long:"oauth-token-file"    env:"KAFKA_OAUTH_TOKEN_FILE"    description:"OAUTHBEARER token file, re-read on every connection"`
+	TokenURL     string `long:"oauth-token-url"     env:"KAFKA_OAUTH_TOKEN_URL"     description:"OAUTHBEARER client-credentials token endpoint (https)"`
+	ClientID     string `long:"oauth-client-id"     env:"KAFKA_OAUTH_CLIENT_ID"     description:"OAUTHBEARER client ID"`
+	ClientSecret string `long:"oauth-client-secret" env:"KAFKA_OAUTH_CLIENT_SECRET" description:"OAUTHBEARER client secret"`
+	Scopes       string `long:"oauth-scopes"        env:"KAFKA_OAUTH_SCOPES"        description:"OAUTHBEARER scopes (comma-separated)"`
+}
+
+func (o oauthFlags) config() kafka.OAuthConfig {
+	return kafka.OAuthConfig{
+		Token:        o.Token,
+		TokenFile:    o.TokenFile,
+		TokenURL:     o.TokenURL,
+		ClientID:     o.ClientID,
+		ClientSecret: o.ClientSecret,
+		Scopes:       o.Scopes,
+	}
 }
 
 func main() {
@@ -110,6 +137,9 @@ func run(args []string) int {
 		return 1
 	}
 	log.Info("resolved connection", "brokers", brokers, "auth", authCfg.Method)
+	if w := kafka.CleartextWarning(authCfg); w != "" {
+		log.Warn(w)
+	}
 
 	client, err := kafka.NewClient(authCfg, brokers)
 	if err != nil {
@@ -191,6 +221,7 @@ func logStartup(f *flags, lim startupLimits) {
 		"drain_stall_timeout", f.DrainStall,
 		"drain_stall_merge_grace", f.MergeGrace,
 		"drain_stall_wipe_after", f.WipeStrikes,
+		"shutdown_timeout", f.ShutdownGrace,
 		"listen", f.Listen,
 		"data_dir", f.dataRoot(),
 		"auth", f.Auth,
@@ -248,8 +279,8 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	// Stop the gRPC server when the process is signaled.
 	go func() {
 		<-ctx.Done()
-		log.Info("shutting down")
-		srv.GracefulStop()
+		log.Info("shutting down", "grace", f.ShutdownGrace)
+		stopServer(srv, f.ShutdownGrace)
 	}()
 
 	log.Info("k4a-index serving", "addr", f.Listen, "version", version.String())
@@ -258,6 +289,39 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 		return 1
 	}
 	return 0
+}
+
+// grpcStopper is the slice of *grpc.Server stopServer needs.
+type grpcStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+// stopServer drains in-flight RPCs for up to grace, then cuts off whatever is
+// left. GracefulStop alone waits for every stream to finish, so one stalled
+// Search could hold shutdown open until the kubelet's SIGKILL — which skips
+// the deferred stopAll, so no index gets its final flush. Stop is safe to call
+// while GracefulStop is still waiting; it makes GracefulStop return.
+func stopServer(srv grpcStopper, grace time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		srv.GracefulStop()
+		close(done)
+	}()
+	if grace <= 0 {
+		srv.Stop()
+		<-done
+		return
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		log.Warn("shutdown: in-flight RPCs outlived the grace period — stopping them", "grace", grace)
+		srv.Stop()
+		<-done
+	}
 }
 
 // byteSuffixes are tried in order; the first suffix that matches wins, so a
@@ -322,22 +386,28 @@ func (f *flags) dataRoot() string {
 // the same ones the headless CLI ConnectionFlags.Resolve uses — rather than
 // importing the whole command package into the daemon binary.
 func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
+	flagAuth := kafka.AuthConfig{
+		Method:   kafka.AuthMethod(f.Auth),
+		Username: f.Username,
+		Password: f.Password,
+		CertFile: f.CertFile,
+		KeyFile:  f.KeyFile,
+		CAFile:   f.CAFile,
+		Region:   f.Region,
+		Profile:  f.Profile,
+		OAuth:    f.OAuth.config(),
+		Insecure: f.Insecure,
+		NoTLS:    f.NoTLS,
+	}
 	if f.Brokers != "" {
-		auth := f.Auth
-		if auth == "" {
-			auth = "scram"
+		// A direct connection has no context to inherit defaults from.
+		if flagAuth.Method == "" {
+			flagAuth.Method = kafka.AuthSCRAM
 		}
-		return f.Brokers, kafka.AuthConfig{
-			Method:   kafka.AuthMethod(auth),
-			Username: f.Username,
-			Password: f.Password,
-			CertFile: f.CertFile,
-			KeyFile:  f.KeyFile,
-			CAFile:   f.CAFile,
-			Region:   f.Region,
-			Profile:  f.Profile,
-			Insecure: f.Insecure,
-		}, nil
+		if flagAuth.Region == "" {
+			flagAuth.Region = awscreds.DefaultRegion
+		}
+		return f.Brokers, flagAuth, nil
 	}
 
 	cfgPath := f.ConfigFile
@@ -360,15 +430,43 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 	if err != nil {
 		return "", kafka.AuthConfig{}, err
 	}
-	authCfg := cctx.ToAuthConfig()
-	if f.Auth != "" {
-		authCfg.Method = kafka.AuthMethod(f.Auth)
+	return brokers, overlayAuth(cctx.ToAuthConfig(), flagAuth), nil
+}
+
+// overlayAuth applies every connection flag that was set over the context's
+// values — the same rule as internal/command's overlayAuth, kept here because
+// the daemon resolves its connection without importing the command package.
+// An empty value means "not set", which is why --region has no flag default:
+// an explicit --region us-east-1 must still override a context in another
+// region. --insecure can only turn verification off, and --no-tls only TLS.
+func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
+	for _, f := range []struct{ dst, src *string }{
+		{&base.Username, &flags.Username},
+		{&base.Password, &flags.Password},
+		{&base.CertFile, &flags.CertFile},
+		{&base.KeyFile, &flags.KeyFile},
+		{&base.CAFile, &flags.CAFile},
+		{&base.Region, &flags.Region},
+		{&base.Profile, &flags.Profile},
+		{&base.OAuth.Token, &flags.OAuth.Token},
+		{&base.OAuth.TokenFile, &flags.OAuth.TokenFile},
+		{&base.OAuth.TokenURL, &flags.OAuth.TokenURL},
+		{&base.OAuth.ClientID, &flags.OAuth.ClientID},
+		{&base.OAuth.ClientSecret, &flags.OAuth.ClientSecret},
+		{&base.OAuth.Scopes, &flags.OAuth.Scopes},
+	} {
+		if *f.src != "" {
+			*f.dst = *f.src
+		}
 	}
-	if f.Profile != "" {
-		authCfg.Profile = f.Profile
+	if flags.Method != "" {
+		base.Method = flags.Method
 	}
-	if f.Region != "" && f.Region != "us-east-1" {
-		authCfg.Region = f.Region
+	if flags.Insecure {
+		base.Insecure = true
 	}
-	return brokers, authCfg, nil
+	if flags.NoTLS {
+		base.NoTLS = true
+	}
+	return base
 }

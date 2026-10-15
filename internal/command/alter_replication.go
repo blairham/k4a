@@ -12,6 +12,8 @@ import (
 
 	"github.com/charmbracelet/log"
 	goflags "github.com/jessevdk/go-flags"
+
+	"github.com/blairham/k4a/internal/kafka"
 )
 
 const alterReplicationTimeout = 60 * time.Second
@@ -47,7 +49,7 @@ Options:
   -b, --brokers=BROKERS          Bootstrap servers, comma-separated
   -t, --topic=TOPIC              Topic name (required)
       --replication-factor=N     New replication factor (required)
-  -a, --auth=METHOD              Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD              Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
       --username=USER            SASL/SCRAM username
       --password=PASS            SASL/SCRAM password # pragma: allowlist secret
       --cert=FILE                Client certificate PEM (mTLS)
@@ -56,6 +58,9 @@ Options:
   -r, --region=REGION            AWS region for IAM auth (default: us-east-1)
   -p, --profile=PROFILE          AWS profile for IAM auth
   -k, --insecure                 Skip TLS certificate verification
+      --no-tls                   Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN        OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                                 with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
 
 Examples:
   # Increase replication factor to 3
@@ -84,11 +89,17 @@ func (c *AlterReplicationCmd) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	if err := kafka.ValidateReplicationFactor(flags.ReplicationFactor); err != nil {
+		log.Error("invalid flags", "err", err)
+		return 1
+	}
+
 	client, err := flags.BuildClient()
 	if err != nil {
 		log.Error(err.Error())
 		return 1
 	}
+	defer client.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()

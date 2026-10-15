@@ -63,15 +63,18 @@ both are installed in the same namespace.
 | Value | Env | Notes |
 |---|---|---|
 | `kafka.brokers` | `KAFKA_BROKERS` | Bootstrap servers, comma-separated. Required. |
-| `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram`, `mtls`, `iam`. Default `iam`. |
+| `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram` (SHA-512), `scram-sha-256`, `plain`, `oauthbearer`, `mtls`, `iam`. Default `iam`. |
 | `aws.region` | `AWS_REGION` | Region for IAM auth. Rendered only when set; the daemon defaults to `us-east-1`. |
 | `kafka.insecure` | `--insecure` | Skip TLS certificate verification. Passed as an argument (the flag has no env). Testing only. |
-| `kafka.credentials.existingSecret` (`.usernameKey`, `.passwordKey`) | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | SASL/SCRAM credentials from an existing Secret. Keys default to `username` / `password`. |
+| `kafka.noTLS` | `--no-tls` | Run a SASL method without TLS (`SASL_PLAINTEXT`); the password or token crosses the network in cleartext and the daemon logs a warning. Passed as an argument. Development brokers only. |
+| `kafka.credentials.existingSecret` (`.usernameKey`, `.passwordKey`) | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | SASL username/password (`scram`, `scram-sha-256`, `plain`) from an existing Secret. Keys default to `username` / `password`. |
+| `kafka.oauth.tokenUrl`, `.clientId`, `.scopes` | `KAFKA_OAUTH_TOKEN_URL`, `KAFKA_OAUTH_CLIENT_ID`, `KAFKA_OAUTH_SCOPES` | OAUTHBEARER client-credentials grant. The token URL must be `https`. |
+| `kafka.oauth.existingSecret` (`.clientSecretKey`, `.tokenKey`) | `KAFKA_OAUTH_CLIENT_SECRET`, `KAFKA_OAUTH_TOKEN` | The client secret for the grant, or instead a static token, from an existing Secret. Set one of the two keys. |
 | `kafka.tls.existingSecret` (`.caKey`, `.certKey`, `.keyKey`) | `KAFKA_TLS_CA`, `KAFKA_TLS_CERT`, `KAFKA_TLS_KEY` | Secret mounted read-only at `/etc/k4a/tls`; each non-empty key becomes the matching file path. Keys default to `ca.crt` / `tls.crt` / `tls.key`. `mtls` needs all three. |
 | `serviceAccount.name` / `.annotations` | — | The pod's identity (empty name = the release fullname). For `iam` on EKS, bind it to an IAM role with EKS Pod Identity, or annotate it with the role ARN for IRSA. |
 
 With `iam` the daemon picks up the pod's AWS credentials, so no SASL secret is
-involved; `scram`, `tls` and `mtls` take their material from the two
+involved; the SASL methods, `tls` and `mtls` take their material from the
 `existingSecret` values above, which the chart never creates.
 
 ### Release naming
@@ -155,6 +158,7 @@ these via env vars, so in-cluster the env column is what you actually edit.
 | `--drain-stall-timeout` | `K4A_INDEX_DRAIN_STALL_TIMEOUT` | `5m` | If a topic's indexing drain makes no progress while records are queued, dump all goroutine stacks to stderr and exit. `0` disables. |
 | `--drain-stall-merge-grace` | `K4A_INDEX_DRAIN_STALL_MERGE_GRACE` | `30m` | Tolerate a stall this long while a scorch segment merge is in flight, so the watchdog doesn't kill a working merge and livelock on restart. `0` disables the grace. |
 | `--drain-stall-wipe-after` | `K4A_INDEX_DRAIN_STALL_WIPE_AFTER` | `3` | On the Nth consecutive stall exit for the same topic index, quarantine that index so the next boot re-warms fresh. `0` disables. |
+| `--shutdown-timeout` | `K4A_INDEX_SHUTDOWN_TIMEOUT` | `15s` | On SIGTERM, how long in-flight RPCs may run before they are cut off, so a stalled Search cannot hold shutdown open past the pod's grace period (which would skip the final index flush). Keep it under `terminationGracePeriodSeconds` (Kubernetes default 30s). `0` stops them at once. |
 | `-l`, `--listen` | `K4A_INDEX_LISTEN` | `:9500` | gRPC listen address. |
 | `--data-dir` | `K4A_INDEX_DATA_DIR` | k4a's `~/.k4a` | Index storage root. |
 | `--log-level` | `K4A_INDEX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
@@ -163,7 +167,10 @@ Connection flags mirror the headless CLI (`--context`/`--config`, or
 `-b/--brokers` + `--auth`/`--region`/`--profile`/TLS files), with env
 equivalents `KAFKA_BROKERS`, `KAFKA_AUTH`, `AWS_REGION`, `AWS_PROFILE`,
 `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_TLS_CA`, `KAFKA_TLS_CERT`,
-`KAFKA_TLS_KEY`.
+`KAFKA_TLS_KEY`, and for OAUTHBEARER `KAFKA_OAUTH_TOKEN`,
+`KAFKA_OAUTH_TOKEN_FILE`, `KAFKA_OAUTH_TOKEN_URL`, `KAFKA_OAUTH_CLIENT_ID`,
+`KAFKA_OAUTH_CLIENT_SECRET`, `KAFKA_OAUTH_SCOPES`. `--insecure` and
+`--no-tls` have no env form.
 
 The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 (`kafka.auth`), `AWS_REGION` (`aws.region`, when set), `K4A_INDEX_ALLOW`,

@@ -21,19 +21,36 @@ including deleting topics, consumer groups, ACLs and records.
     `profile` or the default chain. An SSO session, `credential_process` or
     static keys in `~/.aws` are read by the SDK; k4a stores none of them. The
     same credentials resolve `ssm-brokers` through SSM.
-  - **SASL/SCRAM** (`--auth scram`, SHA-512, always over TLS): a username and
-    password from `--username`/`--password`, `KAFKA_USERNAME`/`KAFKA_PASSWORD`,
-    or a context in `~/.k4a/config.yaml`. Context values expand `$VAR`, so the
-    file can name an environment variable instead of holding the password.
-    Prefer the environment to `--password`, which other local users can see
-    in the process list.
+  - **SASL username and password** (`--auth scram`, which is SCRAM-SHA-512;
+    `--auth scram-sha-256`; `--auth plain`): from `--username`/`--password`,
+    `KAFKA_USERNAME`/`KAFKA_PASSWORD`, or a context in `~/.k4a/config.yaml`.
+    A context value that is exactly `$VAR` or `${VAR}` is read from that
+    environment variable, so the file can name one instead of holding the
+    password; a `$` anywhere else is literal. Prefer the environment to
+    `--password`, which other local users can see in the process list.
+  - **OAUTHBEARER** (`--auth oauthbearer`): a static token
+    (`--oauth-token`/`KAFKA_OAUTH_TOKEN`), a token file re-read on every
+    connection, or the OAuth 2.0 client-credentials grant
+    (`--oauth-token-url` with a client ID and secret). The client secret is
+    sent only to an `https` token URL (or `http` on a loopback host), and the
+    fetched token is held in memory and never written to disk or logged. The
+    same `$VAR` and process-list advice applies to the token and the secret.
   - **mTLS** (`--auth mtls`): certificate, key and CA PEM files named by path;
     k4a reads them and never copies them.
 - **TLS** is verified against the system roots, plus `--ca` when given, at TLS
   1.2 or later. `--insecure` (`-k`, or `insecure: true` on a context) **turns
   verification off**: anyone on the network path can then impersonate the
-  broker and, under SCRAM, receive the password. Use it only against a
+  broker and, under PLAIN or OAUTHBEARER, receive the password or token (or,
+  under SCRAM, an exchange to guess it from). Use it only against a
   cluster you can reach no other way. `--auth plaintext` uses no TLS at all.
+- **SASL without TLS** is opt-in only: `--no-tls` (or `no-tls: true` on a
+  context) runs `scram`, `scram-sha-256`, `plain` or `oauthbearer` over a
+  plaintext connection, and k4a warns before connecting. Under PLAIN the
+  password, and under OAUTHBEARER the bearer token, then cross the network in
+  cleartext; SCRAM does not send the password but its exchange can be
+  captured and guessed offline. All traffic is unencrypted. Without the flag
+  a SASL method always uses TLS, and a TLS failure is an error, not a
+  fallback.
 - **Files k4a writes** live under `~/.k4a`, in directories created `0700`:
   the config file, session state, the search-result cache (which holds the
   matched messages) and, when you opt in with `index.enabled: true`, a local
@@ -73,7 +90,7 @@ searches over gRPC for anyone who can reach it.
   index under `--data-dir`. Protect that volume as you would the topics, and
   bound it with `--topic-max-bytes` and `--max-total-bytes`.
 - Its Kafka credentials and TLS options are the CLI's (above), including
-  `--insecure`.
+  `--insecure` and `--no-tls`.
 
 ### `k4a-mcp`, the networked MCP server
 
@@ -186,10 +203,11 @@ In scope, among others:
 
 - `k4a-index` following, indexing or returning records of a topic that does
   not match `--allow`
-- a password, SCRAM credential, AWS credential or private key written to a
-  log, the state directory, the search cache or the index
-- a TLS connection that skips verification without `--insecure`, or SCRAM
-  sent without TLS
+- a password, SCRAM credential, OAuth token or client secret, AWS credential
+  or private key written to a log, the state directory, the search cache or
+  the index
+- a TLS connection that skips verification without `--insecure`, or SASL
+  credentials sent without TLS when `--no-tls` was not given
 - files under `~/.k4a` created readable by other users
 - `k4a upgrade` installing an archive that does not match `checksums.txt`
 - a crash or unbounded resource use in `k4a-index` or `k4a-mcp` caused by a

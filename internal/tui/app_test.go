@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/blairham/tuikit/loading"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/kafka"
@@ -1711,6 +1713,41 @@ func TestExecuteCommandProduce(t *testing.T) {
 	}
 }
 
+// TestExecuteCommandProduceParsesWord matches the command word whole and
+// case-insensitively, and keeps the topic exactly as typed.
+func TestExecuteCommandProduceParsesWord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // the produce form looks for ~/.k4a/schemas
+
+	cases := []struct {
+		input, topic string
+		produce      bool
+	}{
+		{"produce my-topic", "my-topic", true},
+		{"Produce Orders", "Orders", true},
+		{"  PRODUCE   foo  ", "foo", true},
+		{"produce", "", true},
+		{"producer", "", false},
+		{"produce-foo", "", false},
+	}
+	for _, tc := range cases {
+		app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+		app.width = 80
+		app.height = 40
+
+		app.dispatchCommand(tc.input) //nolint:errcheck
+		if got := app.view == style.ViewProduce; got != tc.produce {
+			t.Errorf("%q: opened produce = %v, want %v", tc.input, got, tc.produce)
+			continue
+		}
+		if !tc.produce {
+			continue
+		}
+		if got := typedView[*views.ProduceView](app, style.ViewProduce).Topic(); got != tc.topic {
+			t.Errorf("%q: topic = %q, want %q", tc.input, got, tc.topic)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // refreshMsgMatchesView / refreshMsgHasError — more cases
 // ---------------------------------------------------------------------------
@@ -3035,4 +3072,112 @@ func TestUpdatePasteMsg(t *testing.T) {
 	if !strings.Contains(val, "hello") {
 		t.Errorf("commandBar value = %q, expected to contain 'hello'", val)
 	}
+}
+
+// TestFormFieldTakesGlobalShortcutKeys types a topic name made of keys that
+// are global shortcuts elsewhere (r refreshes, 1 switches view, : / ? open
+// bars). In a form being filled in they must reach the field.
+func TestFormFieldTakesGlobalShortcutKeys(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+	app.width = 80
+	app.height = 40
+	app.handleAction(actionCreateTopic, "") //nolint:errcheck
+
+	const name = "orders-1:/?"
+	for _, r := range name {
+		app.handleKey(keyPress(r)) //nolint:errcheck
+	}
+
+	if app.view != style.ViewCreateTopic {
+		t.Fatalf("view = %d, want ViewCreateTopic", app.view)
+	}
+	if app.commandBar.Active() || app.filterBar.Active() || app.showHelp {
+		t.Error("a key typed into the form opened a bar or the help overlay")
+	}
+	v := typedView[*views.CreateTopicView](app, style.ViewCreateTopic)
+	if got := ansi.Strip(v.View()); !strings.Contains(got, name) {
+		t.Errorf("form does not show %q; rendered:\n%s", name, got)
+	}
+
+	// esc still leaves the form.
+	app.handleKey(escKey()) //nolint:errcheck
+	if app.view == style.ViewCreateTopic {
+		t.Error("esc did not leave the form")
+	}
+}
+
+// TestSearchCommandUsesActiveViewTopic: viewMap keeps the last Messages view
+// after a tab switch, so :search must resolve its topic from the active view,
+// not from whatever was tailed last.
+func TestSearchCommandUsesActiveViewTopic(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // NewApp opens the ~/.k4a state root
+
+	newApp := func() *App {
+		app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+		app.width = 80
+		app.height = 40
+		app.searchFunc = func(context.Context, string, kafka.SearchParams) (
+			<-chan kafka.ConsumedMessage, <-chan kafka.DeepSearchProgress, <-chan error,
+		) {
+			msgs, prog, errs := make(chan kafka.ConsumedMessage), make(chan kafka.DeepSearchProgress), make(chan error)
+			close(msgs)
+			close(prog)
+			close(errs)
+			return msgs, prog, errs
+		}
+		app.setView(style.ViewMessages, views.NewMessagesView(nil, "stale-tail"))
+		return app
+	}
+	searchedTopic := func(t *testing.T, app *App) string {
+		t.Helper()
+		app.dispatchCommand("search") //nolint:errcheck
+		if !app.prompt.Active() {
+			t.Fatalf("search bar did not open; errFlash = %q", app.errFlash)
+		}
+		app.promptDispatch("needle") //nolint:errcheck
+		sv := typedView[*views.SearchView](app, style.ViewSearch)
+		if sv == nil {
+			t.Fatal("no search view opened")
+		}
+		return sv.Topic()
+	}
+
+	t.Run("topics selection", func(t *testing.T) {
+		app := newApp()
+		app.Update(views.TopicsRefreshMsg{Topics: []kafka.TopicInfo{{Name: "orders"}}}) //nolint:errcheck
+		if got := searchedTopic(t, app); got != "orders" {
+			t.Errorf("searched %q, want the selected topic %q", got, "orders")
+		}
+	})
+
+	t.Run("topic detail", func(t *testing.T) {
+		app := newApp()
+		app.setView(style.ViewTopicDetail, views.NewTopicDetailView(nil, "payments"))
+		app.view = style.ViewTopicDetail
+		if got := searchedTopic(t, app); got != "payments" {
+			t.Errorf("searched %q, want %q", got, "payments")
+		}
+	})
+
+	t.Run("messages", func(t *testing.T) {
+		app := newApp()
+		app.view = style.ViewMessages
+		if got := searchedTopic(t, app); got != "stale-tail" {
+			t.Errorf("searched %q, want %q", got, "stale-tail")
+		}
+	})
+
+	t.Run("no topic in view", func(t *testing.T) {
+		app := newApp()
+		app.view = style.ViewCluster
+		app.dispatchCommand("search") //nolint:errcheck
+		if app.prompt.Active() {
+			t.Error("search bar opened from Cluster, which has no topic")
+		}
+		if app.errFlash == "" {
+			t.Error("expected a flash explaining search needs a topic")
+		}
+	})
 }

@@ -19,11 +19,11 @@ import (
 
 // ProduceFlags defines flags for the produce command.
 type ProduceFlags struct {
-	Topic    string `short:"t" long:"topic"    env:"KAFKA_TOPIC" description:"Target topic (overridden by schema)"`
+	Topic    string `short:"t" long:"topic"    env:"KAFKA_TOPIC" description:"Target topic (overrides the schema's topic)"`
 	Schema   string `short:"s" long:"schema"                     description:"YAML schema file for message generation"`
-	Interval string `short:"i" long:"interval"                   description:"Delay between messages"                  default:"1s"`
+	Interval string `short:"i" long:"interval"                   description:"Delay between messages"                      default:"1s"`
 	ConnectionFlags
-	Count   int  `short:"c" long:"count"                      description:"Number of messages to produce"           default:"10"`
+	Count   int  `short:"c" long:"count"                      description:"Number of messages to produce"               default:"10"`
 	Verbose bool `short:"v" long:"verbose"                    description:"Verbose output"`
 }
 
@@ -46,9 +46,9 @@ Config:
 
 Options:
   -b, --brokers=BROKERS   Bootstrap servers, comma-separated
-  -t, --topic=TOPIC       Target topic (overridden by schema if provided)
+  -t, --topic=TOPIC       Target topic (overrides the schema's topic if both are given)
   -s, --schema=FILE       YAML schema file for realistic message generation
-  -a, --auth=METHOD       Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD       Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
   -c, --count=N           Number of messages (default: 10)
   -i, --interval=DUR      Delay between messages (default: 1s)
       --username=USER     SASL/SCRAM username
@@ -59,6 +59,9 @@ Options:
   -r, --region=REGION     AWS region for IAM auth (default: us-east-1)
   -p, --profile=PROFILE   AWS profile for IAM auth
   -k, --insecure          Skip TLS certificate verification
+      --no-tls            Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                          with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
   -v, --verbose           Verbose output
 
 Examples:
@@ -104,6 +107,7 @@ func (c *ProduceCommand) Run(args []string) int {
 		log.Error(err.Error())
 		return 1
 	}
+	defer client.Close()
 
 	topic, messages, msgErr := buildMessages(flags)
 	if msgErr != nil {
@@ -116,21 +120,48 @@ func (c *ProduceCommand) Run(args []string) int {
 
 	fmt.Printf("Producing %d messages to %s...\n", flags.Count, topic)
 
-	var failed int
+	tally := produceTally{total: len(messages)}
 	client.ProduceAll(ctx, messages, interval, func(r kafka.ProduceResult) {
+		tally.record(r)
 		if r.Err != nil {
 			fmt.Fprintf(os.Stderr, "  [%d/%d] FAIL: %v\n", r.Sequence, flags.Count, r.Err)
-			failed++
 		} else if flags.Verbose {
 			fmt.Printf("  [%d/%d] OK key=%s latency=%s\n", r.Sequence, flags.Count, r.Key, r.Duration)
 		}
 	})
 
-	fmt.Printf("\nDone: %d sent, %d failed\n", flags.Count-failed, failed)
-	if failed > 0 {
+	fmt.Printf("\n%s\n", tally.summary())
+	if !tally.complete() {
 		return 1
 	}
 	return 0
+}
+
+// produceTally counts what ProduceAll actually reported. Deriving "sent"
+// as total minus failed counted every record a Ctrl+C skipped as sent.
+type produceTally struct {
+	total, sent, failed int
+}
+
+func (t *produceTally) record(r kafka.ProduceResult) {
+	if r.Err != nil {
+		t.failed++
+	} else {
+		t.sent++
+	}
+}
+
+// complete reports whether every record was produced successfully.
+func (t *produceTally) complete() bool {
+	return t.sent == t.total
+}
+
+func (t *produceTally) summary() string {
+	s := fmt.Sprintf("Done: %d sent, %d failed", t.sent, t.failed)
+	if unsent := t.total - t.sent - t.failed; unsent > 0 {
+		s += fmt.Sprintf(", %d not sent (interrupted)", unsent)
+	}
+	return s
 }
 
 // buildMessages generates Kafka messages from either a schema file or random data.

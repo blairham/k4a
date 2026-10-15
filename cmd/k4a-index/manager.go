@@ -35,8 +35,11 @@ type followEntry struct {
 	worker    *topicWorker
 	cancel    context.CancelFunc
 	done      chan struct{} // closed when the worker's run() returns
-	lastQuery atomic.Int64  // unix millis of the last Search/Coverage that hit it
+	lastQuery atomic.Int64  // unix millis of the last Search or Follow that hit it
 	pinned    bool
+	// exited is set, under manager.mu, when the tail stopped on its own (the
+	// consume channel closed while ctx was still live). See tailExited.
+	exited bool
 }
 
 // touch records that the topic was just queried, resetting its LRU clock.
@@ -52,11 +55,15 @@ func (e *followEntry) touch() { e.lastQuery.Store(time.Now().UnixMilli()) }
 // Bleve index, stopping/deleting an evicted one) happens OUTSIDE the lock so a
 // registration never stalls concurrent lookups on the query hot path.
 type manager struct {
-	baseCtx       context.Context
-	src           tailSource
-	root          *state.Root
-	set           map[string]*followEntry
-	registering   map[string]struct{}
+	baseCtx     context.Context
+	src         tailSource
+	root        *state.Root
+	set         map[string]*followEntry
+	registering map[string]struct{}
+	// pins is every topic the operator pre-followed. It outlives the entry, so
+	// a pinned topic whose tail died and is re-registered on demand comes back
+	// pinned rather than as an evictable on-demand topic.
+	pins          map[string]struct{}
 	cluster       string
 	policy        allowPolicy
 	maxFollowed   int
@@ -64,7 +71,14 @@ type manager struct {
 	sweepEvery    time.Duration
 	maxTotalBytes int64
 	worker        workerOptions
-	mu            sync.Mutex
+	// wg tracks every goroutine that can still open or hold an index: on-demand
+	// registrations and each worker's tail. stopAll waits on it, so nothing it
+	// started outlives shutdown holding a writer lock.
+	wg sync.WaitGroup
+	mu sync.Mutex
+	// closing is set by stopAll; after it no registration is accepted, and one
+	// already in flight retires its worker instead of joining the set.
+	closing bool
 }
 
 // managerConfig carries the tunables; zero values fall back to the defaults
@@ -101,6 +115,7 @@ func newManager(
 		worker:        cfg.Worker,
 		set:           make(map[string]*followEntry),
 		registering:   make(map[string]struct{}),
+		pins:          make(map[string]struct{}),
 	}
 	if m.maxFollowed <= 0 {
 		m.maxFollowed = defaultMaxFollowed
@@ -128,6 +143,19 @@ func (m *manager) lookup(topic string) *topicWorker {
 	return e.worker
 }
 
+// peek returns the worker for a followed topic WITHOUT touching its LRU clock,
+// or nil. Coverage uses it: a coverage probe is not a search, and if it reset
+// the clock any topic that is merely probed would never look idle to
+// evictAfter.
+func (m *manager) peek(topic string) *topicWorker {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.set[topic]; e != nil {
+		return e.worker
+	}
+	return nil
+}
+
 // ensureFollowed is the demand-driven registration entry point. It gates on the
 // allowlist (default-deny) and, if allowed, kicks off registration as a
 // non-blocking side effect so the Search hot path returns immediately —
@@ -140,17 +168,33 @@ func (m *manager) ensureFollowed(topic string) bool {
 		return false
 	}
 	m.mu.Lock()
-	_, followed := m.set[topic]
+	if m.closing {
+		m.mu.Unlock()
+		return false
+	}
+	e, followed := m.set[topic]
 	_, inflight := m.registering[topic]
 	if followed || inflight {
+		// A Follow of a topic already followed is the client saying it just
+		// searched it and the daemon could not cover the query (it scanned
+		// instead). That is use, so it resets the LRU clock — the same as a
+		// covered Search does through lookup.
+		if followed {
+			e.touch()
+		}
 		m.mu.Unlock()
 		return true
 	}
 	m.registering[topic] = struct{}{}
+	_, pinned := m.pins[topic]
+	m.wg.Add(1)
 	m.mu.Unlock()
 
-	log.Info("follow: registering topic on demand", "topic", topic)
-	go m.register(topic, false)
+	log.Info("follow: registering topic on demand", "topic", topic, "pinned", pinned)
+	go func() {
+		defer m.wg.Done()
+		m.register(topic, pinned)
+	}()
 	return true
 }
 
@@ -162,6 +206,11 @@ func (m *manager) ensureFollowed(topic string) bool {
 func (m *manager) preFollow(topics []string) {
 	for _, t := range topics {
 		m.mu.Lock()
+		if m.closing {
+			m.mu.Unlock()
+			return
+		}
+		m.pins[t] = struct{}{}
 		if _, ok := m.set[t]; ok {
 			m.mu.Unlock()
 			continue
@@ -187,6 +236,20 @@ func (m *manager) register(topic string, pinned bool) {
 		return
 	}
 
+	m.mu.Lock()
+	if m.closing {
+		// Shutdown began while the index was opening: release it rather than
+		// start a tail nothing will ever stop.
+		delete(m.registering, topic)
+		m.mu.Unlock()
+		if stopErr := w.stop(); stopErr != nil {
+			log.Error("follow: releasing index opened during shutdown", "topic", topic, "err", stopErr)
+		}
+		return
+	}
+	m.wg.Add(1) // the tail goroutine below
+	m.mu.Unlock()
+
 	ctx, cancel := context.WithCancel(m.baseCtx)
 	entry := &followEntry{worker: w, cancel: cancel, done: make(chan struct{}), pinned: pinned}
 	entry.touch()
@@ -195,17 +258,22 @@ func (m *manager) register(topic string, pinned bool) {
 	// is always backed by a live goroutine — an eviction that races registration
 	// can safely cancel()+<-done without deadlocking on an unstarted worker.
 	go func() {
+		defer m.wg.Done()
 		w.run(ctx)
 		close(entry.done)
+		if ctx.Err() == nil {
+			m.tailExited(topic, entry)
+		}
 	}()
 
 	// Make room under the cap before inserting. evictColdestLocked removes the
 	// victim from the map while holding the lock; we stop it (slow) after.
 	m.mu.Lock()
-	if _, ok := m.set[topic]; ok {
-		// Lost a race — another register() beat us. Discard THIS worker without
-		// deleting the on-disk index: the winner owns the same dir, so only
-		// release our handle (cancel the tail, wait for it, drop the writer lock).
+	if _, ok := m.set[topic]; ok || m.closing {
+		// Lost a race — another register() beat us, or shutdown began. Discard
+		// THIS worker without deleting the on-disk index: the winner owns the
+		// same dir, so only release our handle (cancel the tail, wait for it,
+		// drop the writer lock).
 		delete(m.registering, topic)
 		m.mu.Unlock()
 		entry.cancel()
@@ -213,6 +281,15 @@ func (m *manager) register(topic string, pinned bool) {
 		if stopErr := entry.worker.stop(); stopErr != nil {
 			log.Error("follow: discarding duplicate worker", "topic", topic, "err", stopErr)
 		}
+		return
+	}
+	if entry.exited {
+		// The tail already died (a topic the broker does not have fails at
+		// once). tailExited ran before the entry was visible, so it is ours
+		// to retire rather than insert a worker that will never index. The
+		// in-flight marker stays until the writer lock is released.
+		m.mu.Unlock()
+		m.retire(topic, entry)
 		return
 	}
 	var victim *followEntry
@@ -233,6 +310,45 @@ func (m *manager) register(topic string, pinned bool) {
 	log.Info("follow: now following", "topic", topic, "pinned", pinned, "followed_total", m.size())
 }
 
+// tailExited handles a tail that stopped while its context was still live: the
+// consume channel closed because the topic does not exist, its metadata could
+// not be listed, or a fetch error was fatal. The entry leaves the follow-set
+// so Coverage stops reporting following=true for an index that will never
+// grow, and the worker is stopped so its final flush lands and its writer lock
+// is released. The directory stays: it is a warm index, and the next Search or
+// Follow of the topic re-registers it through the normal on-demand path (with
+// its pin, if it had one) — the same retry a failed open already gets.
+func (m *manager) tailExited(topic string, e *followEntry) {
+	m.mu.Lock()
+	e.exited = true
+	owned := m.set[topic] == e
+	if owned {
+		delete(m.set, topic)
+		// Hold the in-flight marker until the worker is stopped, so a search
+		// arriving meanwhile does not try to open an index whose writer lock
+		// this worker still holds.
+		m.registering[topic] = struct{}{}
+	}
+	m.mu.Unlock()
+	if owned {
+		m.retire(topic, e)
+	}
+}
+
+// retire stops a worker whose tail has ended, without deleting its index, then
+// clears the topic's in-flight marker so the next search may re-register it.
+func (m *manager) retire(topic string, e *followEntry) {
+	e.cancel()
+	<-e.done
+	if err := e.worker.stop(); err != nil {
+		log.Error("follow: stopping worker whose tail exited", "topic", topic, "err", err)
+	}
+	m.mu.Lock()
+	delete(m.registering, topic)
+	m.mu.Unlock()
+	log.Warn("follow: tail exited on its own — topic unfollowed until its next search", "topic", topic)
+}
+
 // evictColdestLocked removes and returns the least-recently-queried non-pinned
 // entry. Caller holds m.mu. Returns "", nil if every entry is pinned (the set
 // can then legitimately exceed maxFollowed — an operator who pins more than the
@@ -251,6 +367,7 @@ func (m *manager) evictColdestLocked() (string, *followEntry) {
 	}
 	if cold != nil {
 		delete(m.set, coldTopic)
+		m.registering[coldTopic] = struct{}{} // until teardown finishes; see teardown
 	}
 	return coldTopic, cold
 }
@@ -427,6 +544,7 @@ func (m *manager) evictIdle() {
 		}
 		if e.lastQuery.Load() < cutoff {
 			delete(m.set, t)
+			m.registering[t] = struct{}{} // until teardown finishes; see teardown
 			victims = append(victims, victim{topic: t, entry: e})
 		}
 	}
@@ -461,12 +579,27 @@ func (m *manager) reapIdleOrphans() {
 // cancel the tail and wait for run() to return (no more Submit), stop the async
 // indexer (drain + flush + release the writer lock), THEN remove the dir — so
 // the lock is released before we delete the directory that held it.
+//
+// The evicting caller marked the topic in-flight in the same critical section
+// that removed it from the set, and the mark is cleared only here, after the
+// directory is gone. Without it a Search or Follow arriving between stop and
+// RemoveAll would open the directory again and have it deleted from under the
+// new worker; with it, that request is told the topic is warming and the next
+// one re-registers cleanly.
 func (m *manager) teardown(topic string, e *followEntry) {
+	defer func() {
+		m.mu.Lock()
+		delete(m.registering, topic)
+		m.mu.Unlock()
+	}()
 	dir := e.worker.async.Inner().Dir()
 	e.cancel()
 	<-e.done
 	if err := e.worker.stop(); err != nil {
 		log.Error("follow: stopping evicted worker", "topic", topic, "err", err)
+	}
+	if beforeTeardownRemove != nil {
+		beforeTeardownRemove(topic)
 	}
 	if !index.IsTopicDir(m.root, m.cluster, dir) {
 		log.Error("follow: refusing to delete an index dir outside the cluster directory",
@@ -478,10 +611,19 @@ func (m *manager) teardown(topic string, e *followEntry) {
 	}
 }
 
+// beforeTeardownRemove, when set by a test, runs in teardown after the worker
+// is stopped and before its directory is deleted — the window a concurrent
+// re-registration of the same topic must not be able to use.
+var beforeTeardownRemove func(topic string)
+
 // stopAll tears down every followed worker — used on daemon shutdown so each
-// index is flushed and its writer lock released cleanly.
+// index is flushed and its writer lock released cleanly. It refuses further
+// registrations, and returns only once every registration still in flight and
+// every tail goroutine has finished, so no worker started before shutdown can
+// be left running with its writer lock held.
 func (m *manager) stopAll() {
 	m.mu.Lock()
+	m.closing = true
 	entries := make(map[string]*followEntry, len(m.set))
 	maps.Copy(entries, m.set)
 	m.set = make(map[string]*followEntry)
@@ -494,6 +636,7 @@ func (m *manager) stopAll() {
 			log.Error("follow: stopping worker on shutdown", "topic", t, "err", err)
 		}
 	}
+	m.wg.Wait()
 }
 
 // size returns the current followed-topic count.

@@ -63,7 +63,7 @@ Config:
 
 Connection:
   -b, --brokers=BROKERS           Bootstrap servers, comma-separated
-  -a, --auth=METHOD               Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD               Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
       --username=USER             SASL/SCRAM username
       --password=PASS             SASL/SCRAM password # pragma: allowlist secret
       --cert=FILE                 Client certificate PEM (mTLS)
@@ -72,6 +72,9 @@ Connection:
   -r, --region=REGION             AWS region for IAM auth
   -p, --profile=PROFILE           AWS profile for IAM auth
   -k, --insecure                  Skip TLS certificate verification
+      --no-tls                    Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN         OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                                  with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
 
 Search:
   -t, --topic=TOPIC               Topic to search (required)
@@ -228,11 +231,13 @@ func parsePartitionsFlag(s string) ([]int32, error) {
 		if p == "" {
 			continue
 		}
-		n, err := strconv.Atoi(p)
+		// Parse at 32 bits: partition IDs are int32 on the wire, and an
+		// Atoi + conversion wrapped 4294967296 to partition 0.
+		n, err := strconv.ParseInt(p, 10, 32)
 		if err != nil || n < 0 {
 			return nil, fmt.Errorf("invalid partition %q in --partitions", p)
 		}
-		out = append(out, int32(n)) //nolint:gosec // partition IDs fit in int32
+		out = append(out, int32(n))
 	}
 	return out, nil
 }

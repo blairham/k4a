@@ -49,7 +49,11 @@ Each `Context` is a flat struct mapping 1:1 to YAML fields. There's no
 nested `auth:` object — auth fields are siblings of `brokers`. We
 considered nesting (`auth: { method: iam, region: us-east-1 }`) but the
 flat form reads better at the YAML level and keeps the Go struct
-trivially serializable.
+trivially serializable. The OAUTHBEARER settings follow the same rule:
+they are a Go sub-struct (`config.OAuth`, inlined) but flat `oauth-token`,
+`oauth-token-file`, `oauth-token-url`, `oauth-client-id`,
+`oauth-client-secret` and `oauth-scopes` keys in YAML, and `no-tls: true`
+sits beside `insecure`. See `docs/design/auth.md`.
 
 ## Brokers vs SSM-brokers
 
@@ -104,14 +108,30 @@ means "I know what I want, don't ask".
 
 ## Env expansion details
 
-`os.ExpandEnv` runs on `brokers`, `username`, and `password`. It does
-*not* run on `ssm-brokers`, `cert`, `key`, `ca`, `region`, `profile`,
-or `auth`. Reasoning:
+Two rules, the same for a context field and for the matching CLI flag
+(`expandEnvFlags` in `internal/command/expand.go`):
 
-- `brokers` benefits from per-host overrides (`$KAFKA_HOST`).
-- SCRAM creds are commonly env-injected by secret managers.
-- File paths are deliberately literal — too easy to mask a path bug
-  with `$HOME` expansion that silently produces wrong paths in CI.
+- **`brokers`** gets full `os.ExpandEnv`, so `$KAFKA_HOST:9092` works
+  for per-host overrides. A host list never holds a literal `$`.
+- **`username`, `password`, `cert`, `key`, `ca`, the `oauth-*` fields**
+  (and every other string flag) expand only a *whole-value* reference
+  (`config.ExpandRef`): a value that is exactly `$NAME` or `${NAME}` is
+  replaced with that variable (empty when unset); anything else is used
+  literally. `password: ${SCRAM_PASSWORD}` keeps working, and
+  `pa$$word` is no longer mangled into `pa` plus whatever `$word` held.
+  There is no escape syntax: a secret that is literally `$NAME` in
+  shape has to come from the environment instead.
+
+Not expanded at all: `ssm-brokers`, `region`, `profile`, `auth`.
+Reasoning:
+
+- SCRAM creds are commonly env-injected by secret managers, but they
+  also contain `$` often enough that substring expansion corrupted them.
+- File paths are not expanded inside the value — `$HOME/certs/ca.pem`
+  stays literal, because it is too easy to mask a path bug with
+  expansion that silently produces wrong paths in CI. A whole path in
+  a variable (`ca: $KAFKA_TLS_CA`) is supported, and is what the flags
+  already allowed; before #40 the context ignored it.
 - AWS region/profile have their own env conventions handled inside the
   SDK (`AWS_REGION`, `AWS_PROFILE`); duplicating expansion at this
   layer would conflict.
@@ -139,7 +159,7 @@ or `auth`. Reasoning:
 ## Pickup notes
 
 - **Adding a context field:** add to `Context` struct, decide whether
-  it gets `os.ExpandEnv`, plumb through `ToAuthConfig` (or through
+  it gets `config.ExpandRef` (or `os.ExpandEnv`, for broker lists only), plumb through `ToAuthConfig` (or through
   `ResolveBrokers` if it's broker-related). Update the schema example
   in this doc and `AGENTS.md`.
 - **Adding a non-AWS secret-store backend** (e.g. Vault for brokers

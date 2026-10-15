@@ -162,9 +162,12 @@ Owns the set of topics currently being followed. Responsibilities:
   is written to the daemon's storage so a restart re-follows the same
   set. This is metadata only — the *index* itself is disposable.
 - **LRU eviction.** A topic not searched within `evictAfter` (default
-  **7 days**) is dropped: tail worker stopped, index directory deleted
-  (index dirs are independently deletable by `state-management.md`),
-  follow-set entry removed. Demand-driven registration only grows the
+  **7 days**) is dropped. A Search, or a Follow of a topic already followed
+  (the client scanned because coverage fell short), counts as use; a
+  Coverage probe does not, or a probed topic could never age out.
+  Eviction stops the tail worker, deletes the index directory (index dirs
+  are independently deletable by `state-management.md`) and removes the
+  follow-set entry. Demand-driven registration only grows the
   set; eviction is what bounds it.
 - **Caps.** A hard ceiling on concurrently-followed topics
   (`maxFollowed`, default **256**) bounds consumer connections and disk.
@@ -232,7 +235,7 @@ service Index {
   rpc Follow(FollowRequest) returns (FollowResponse);
 
   // Coverage reports per-partition indexed ranges without a query
-  // (used by the Topics view to render an "indexed?" column).
+  // (the client's index-vs-scan check before every search).
   rpc Coverage(CoverageRequest) returns (CoverageResponse);
 }
 ```
@@ -516,7 +519,11 @@ the rare failover's N× backfill is even a problem.
   demand-driven registration, a static pre-follow list (`config.prefollow` /
   `K4A_INDEX_TOPIC`) warms and pins hot topics before the first search;
   pinned topics are exempt from LRU/cap eviction. The bulk of the follow-set is
-  still demand-driven + allowlist-gated.
+  still demand-driven + allowlist-gated. A tail that ends on its own (topic
+  missing, metadata error, fatal fetch error) leaves the follow-set — its
+  worker stopped, its directory kept warm — so Coverage reports
+  `following=false`; the next Search or Follow re-registers it, pinned again
+  if it was pre-followed.
 
 ## Why this shape (vs alternatives)
 

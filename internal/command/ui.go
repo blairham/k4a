@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -29,11 +30,14 @@ type UIFlags struct {
 
 	// Direct connection (overrides config).
 	Brokers string `short:"b" long:"brokers" env:"KAFKA_BROKERS" description:"Bootstrap servers (comma-separated)"`
-	Auth    string `short:"a" long:"auth"    env:"KAFKA_AUTH"    description:"Auth method: plaintext, tls, scram, mtls, iam" default:""`
+	Auth    string `short:"a" long:"auth"    env:"KAFKA_AUTH"    description:"Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam" default:""`
 
-	// SASL/SCRAM
-	Username string `long:"username" env:"KAFKA_USERNAME" description:"SASL/SCRAM username"`
-	Password string `long:"password" env:"KAFKA_PASSWORD" description:"SASL/SCRAM password"` // pragma: allowlist secret
+	// SASL: scram (SHA-512), scram-sha-256, plain
+	Username string `long:"username" env:"KAFKA_USERNAME" description:"SASL username (scram, scram-sha-256, plain)"`
+	Password string `long:"password" env:"KAFKA_PASSWORD" description:"SASL password (scram, scram-sha-256, plain)"` // pragma: allowlist secret
+
+	// OAUTHBEARER
+	OAuth OAuthFlags
 
 	// mTLS
 	CertFile string `long:"cert" env:"KAFKA_TLS_CERT" description:"Client certificate PEM file (mTLS)"`
@@ -45,6 +49,7 @@ type UIFlags struct {
 	Profile string `short:"p" long:"profile" env:"AWS_PROFILE" description:"AWS profile (IAM auth)"`
 
 	Insecure bool `short:"k" long:"insecure" description:"Skip TLS certificate verification"`
+	NoTLS    bool `          long:"no-tls"   description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
 	Logoless bool `          long:"logoless" description:"Hide the ASCII logo from the header"`
 	Readonly bool `          long:"readonly" description:"Disable all mutating operations (read-only mode)"`
 }
@@ -69,7 +74,7 @@ Config:
 
 Direct Connection:
   -b, --brokers=BROKERS   Bootstrap servers, comma-separated
-  -a, --auth=METHOD       Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD       Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
       --username=USER     SASL/SCRAM username
       --password=PASS     SASL/SCRAM password` + // pragma: allowlist secret
 		`
@@ -79,6 +84,9 @@ Direct Connection:
   -r, --region=REGION     AWS region for IAM auth (default: us-east-1)
   -p, --profile=PROFILE   AWS profile for IAM auth
   -k, --insecure          Skip TLS certificate verification
+      --no-tls            Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                          with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
       --logoless          Hide the ASCII logo from the header
       --readonly          Disable all mutating operations (read-only mode)
 
@@ -138,6 +146,7 @@ func (c *UICommand) Run(args []string) int {
 	var client *kafka.Client
 	var connInfo tui.ConnInfo
 	if !pickContext {
+		warnCleartext(authCfg) // before the TUI owns the screen
 		client, err = kafka.NewClient(authCfg, brokers)
 		if err != nil {
 			log.Error("client setup failed", "err", err)
@@ -172,7 +181,8 @@ func (c *UICommand) Run(args []string) int {
 
 	if appModel, ok := model.(*tui.App); ok && appModel.UpgradeRequested() {
 		resetTerminalBg()
-		return c.upgradeAndRestart(appModel.UpgradeContext())
+		argv, env := restartCommand(os.Args, os.Environ(), &flags, ctxName, appModel.UpgradeContext())
+		return c.upgradeAndRestart(argv, env)
 	}
 
 	return 0
@@ -198,7 +208,7 @@ func loadUIConfig(flags *UIFlags) (cfg *config.Config, cfgPath string) {
 	return cfg, cfgPath
 }
 
-func (c *UICommand) upgradeAndRestart(ctxName string) int {
+func (c *UICommand) upgradeAndRestart(argv, env []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -213,16 +223,42 @@ func (c *UICommand) upgradeAndRestart(ctxName string) int {
 		return 0
 	}
 
-	args := []string{"k4a"}
-	if ctxName != "" && ctxName != "direct" {
-		args = append(args, "--context", ctxName)
-	}
-
 	fmt.Println("Restarting...")
-	if err := reexec(exe, args, os.Environ()); err != nil {
+	if err := reexec(exe, argv, env); err != nil {
 		fmt.Printf("Upgraded successfully but restart failed: %v\nPlease restart k4a manually.\n", err)
 	}
 	return 0
+}
+
+// restartCommand is the argv and environment the TUI re-execs with after an
+// in-TUI upgrade. Restarting with only --context dropped a direct -b/--auth
+// connection (landing on the picker or an error) and every other flag,
+// --readonly included. So while the session is still on the connection it
+// started with, the original command line is replayed verbatim. After a
+// switch in the context picker that command line describes the wrong
+// cluster, so the restart names the active context and keeps only the flags
+// that are not about the connection; KAFKA_BROKERS is dropped from the
+// environment because it would otherwise win over --context again.
+func restartCommand(argv, env []string, flags *UIFlags, startCtx, activeCtx string) (newArgv, newEnv []string) {
+	if activeCtx == startCtx || activeCtx == "" {
+		return argv, env
+	}
+	newArgv = []string{argv[0], "--context", activeCtx}
+	if flags.ConfigFile != "" {
+		newArgv = append(newArgv, "--config", flags.ConfigFile)
+	}
+	if flags.Readonly {
+		newArgv = append(newArgv, "--readonly")
+	}
+	if flags.Logoless {
+		newArgv = append(newArgv, "--logoless")
+	}
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "KAFKA_BROKERS=") {
+			newEnv = append(newEnv, kv)
+		}
+	}
+	return newArgv, newEnv
 }
 
 // authConfig is the connection the flags alone describe; empty fields are
@@ -237,7 +273,9 @@ func (flags *UIFlags) authConfig() kafka.AuthConfig {
 		CAFile:   flags.CAFile,
 		Region:   flags.Region,
 		Profile:  flags.Profile,
+		OAuth:    flags.OAuth.config(),
 		Insecure: flags.Insecure,
+		NoTLS:    flags.NoTLS,
 	}
 }
 

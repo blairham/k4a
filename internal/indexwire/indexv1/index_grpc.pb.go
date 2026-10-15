@@ -53,7 +53,8 @@ type IndexClient interface {
 	// fire-and-forget warm-up when it scanned a cold topic itself.
 	Follow(ctx context.Context, in *FollowRequest, opts ...grpc.CallOption) (*FollowResponse, error)
 	// Coverage reports a topic's indexed ranges without running a query.
-	// Used by the Topics view to render an "indexed?" column.
+	// Clients call it before a search to choose index or scan. It is a
+	// read-only probe: it never starts a follow or resets the LRU clock.
 	Coverage(ctx context.Context, in *CoverageRequest, opts ...grpc.CallOption) (*CoverageResponse, error)
 }
 
@@ -120,7 +121,8 @@ type IndexServer interface {
 	// fire-and-forget warm-up when it scanned a cold topic itself.
 	Follow(context.Context, *FollowRequest) (*FollowResponse, error)
 	// Coverage reports a topic's indexed ranges without running a query.
-	// Used by the Topics view to render an "indexed?" column.
+	// Clients call it before a search to choose index or scan. It is a
+	// read-only probe: it never starts a follow or resets the LRU clock.
 	Coverage(context.Context, *CoverageRequest) (*CoverageResponse, error)
 	mustEmbedUnimplementedIndexServer()
 }
