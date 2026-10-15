@@ -162,24 +162,47 @@ spec:
               value: /data
             - name: K4A_INDEX_LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            {{- if .Values.metrics.enabled }}
+            - name: K4A_INDEX_ADMIN_LISTEN
+              value: ":{{ .Values.metrics.port }}"
+            {{- end }}
           ports:
             - name: grpc
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-          # No HTTP health endpoint yet — the daemon exposes only gRPC. A TCP
-          # probe on the gRPC port (which works whether or not it serves TLS)
-          # is the honest readiness signal: it can accept
-          # queries as soon as it's listening (a query for a cold topic returns
-          # NONE coverage and the client scans), so warmth is not a gate here.
+            {{- if .Values.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          # Probes ask the daemon's grpc.health.v1 service, which reports
+          # SERVING once the listener is up (pre-follow done) and NOT_SERVING
+          # from SIGTERM on. The kubelet's gRPC probe cannot speak TLS, so a
+          # TLS listener is probed through the admin port's /readyz (the same
+          # status over plain HTTP), or by TCP when the admin port is off.
+          # Warmth is not a gate: a cold topic answers with no coverage and
+          # the client scans. A wedged indexing drain is caught by the
+          # drain-stall watchdog, which exits the process.
+          {{- $probe := dict "grpc" (dict "port" (int .Values.service.port)) }}
+          {{- $live := $probe }}
+          {{- if .Values.listener.tls.existingSecret }}
+          {{- if .Values.metrics.enabled }}
+          {{- $probe = dict "httpGet" (dict "path" "/readyz" "port" "metrics") }}
+          {{- $live = dict "httpGet" (dict "path" "/healthz" "port" "metrics") }}
+          {{- else }}
+          {{- $probe = dict "tcpSocket" (dict "port" "grpc") }}
+          {{- $live = $probe }}
+          {{- end }}
+          {{- end }}
           startupProbe:
-            tcpSocket: { port: grpc }
+            {{- toYaml $probe | nindent 12 }}
             periodSeconds: 5
             failureThreshold: 30
           readinessProbe:
-            tcpSocket: { port: grpc }
+            {{- toYaml $probe | nindent 12 }}
             periodSeconds: 10
           livenessProbe:
-            tcpSocket: { port: grpc }
+            {{- toYaml $live | nindent 12 }}
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}

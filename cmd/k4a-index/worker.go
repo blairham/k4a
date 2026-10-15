@@ -46,6 +46,9 @@ type topicWorker struct {
 	topic     string
 	opts      workerOptions
 	submitted atomic.Int64
+	// lag is the last sampled count of broker records past the newest
+	// indexed offset; -1 until the first sample (see sampleLag).
+	lag       atomic.Int64
 	readyOnce sync.Once
 }
 
@@ -76,7 +79,7 @@ func newTopicWorker(
 	if err != nil {
 		return nil, err
 	}
-	return &topicWorker{
+	w := &topicWorker{
 		async: index.NewAsyncWithOptions(ix, index.AsyncOptions{
 			TrimBytes: opts.TrimBytes,
 			// Never swallow a flush failure: whatever
@@ -89,7 +92,9 @@ func newTopicWorker(
 		topic:   topic,
 		opts:    opts,
 		readyCh: make(chan struct{}),
-	}, nil
+	}
+	w.lag.Store(-1)
+	return w, nil
 }
 
 // run drives the live tail until ctx is canceled. Each consumed record is
@@ -167,8 +172,56 @@ func (w *topicWorker) logStats(ctx context.Context) {
 				"covered_to", until,
 			)
 			lastSubmitted, lastDropped = submitted, dropped
+			w.sampleLag(ctx, book)
 		}
 	}
+}
+
+// The daemon's real source must satisfy it, or lag would silently never be sampled.
+var _ endOffsetSource = (*kafka.Client)(nil)
+
+// endOffsetSource is the part of the Kafka client lag sampling needs. A tail
+// source without it (the in-memory test fakes) simply reports no lag.
+type endOffsetSource interface {
+	EndOffsets(ctx context.Context, topic string) (map[int32]int64, error)
+}
+
+// lagSampleTimeout bounds one ListOffsets round trip, so a slow broker delays
+// a metric and never the stats loop.
+const lagSampleTimeout = 5 * time.Second
+
+// sampleLag records how many records the broker holds past what the index has,
+// for the k4a_index_topic_lag_records gauge. Only partitions with an indexed
+// record count: for the others there is no offset to measure from, and the
+// covered window already says they are not covered.
+func (w *topicWorker) sampleLag(ctx context.Context, book index.Bookkeeper) {
+	src, ok := w.src.(endOffsetSource)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, lagSampleTimeout)
+	defer cancel()
+	ends, err := src.EndOffsets(ctx, w.topic)
+	if err != nil {
+		log.Debug("lag sample failed", "topic", w.topic, "err", err)
+		return
+	}
+	w.lag.Store(lagRecords(ends, book.NewestOffsetPerPartition))
+}
+
+// lagRecords sums end - (newest+1) over the partitions that have both.
+func lagRecords(ends, newest map[int32]int64) int64 {
+	var lag int64
+	for p, end := range ends {
+		n, ok := newest[p]
+		if !ok {
+			continue
+		}
+		if d := end - (n + 1); d > 0 {
+			lag += d
+		}
+	}
+	return lag
 }
 
 // drainStallCheckEvery is how often the watchdog samples drain progress.

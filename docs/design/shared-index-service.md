@@ -732,6 +732,15 @@ fallback at every step, so nothing regresses if the daemon is absent.
 - **Ships:** a shared daemon everyone points at, following allowlisted
   non-sensitive topics only. See [`../guides/deploy.md`](../guides/deploy.md).
 
+### Observability (#55) — **IMPLEMENTED**
+- `grpc.health.v1` on the gRPC port (SERVING once listening, NOT_SERVING
+  from SIGTERM), and a separate plain-HTTP admin port (`--admin-listen`)
+  with Prometheus `/metrics`, `/healthz` and `/readyz`. Follow-set gauges
+  are read at scrape time from the live set; event counters cover searches
+  by outcome, search latency and evictions by reason. Lag is sampled from
+  the brokers' end offsets on the stats tick. See
+  [`guides/deploy.md`](../guides/deploy.md#metrics-and-probes).
+
 ### Phase 5 (gates sensitive topics) — per-caller authorization (≈ 2 weeks)
 - Daemon enforces each caller's own Kafka read grants before serving a
   topic's matches.

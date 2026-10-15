@@ -43,7 +43,8 @@ func TestListenerFlagsGuardTheServer(t *testing.T) {
 	if !ok {
 		t.Fatal("validateFlags refused a complete TLS + token configuration")
 	}
-	srv := newGRPCServer(lim)
+	srv, hs := newGRPCServer(lim)
+	setServing(hs, true)
 	indexv1.RegisterIndexServer(srv, indexv1.UnimplementedIndexServer{})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

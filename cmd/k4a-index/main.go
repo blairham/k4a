@@ -81,6 +81,7 @@ type flags struct {
 	TLSClientCA   string        `long:"tls-client-ca"           env:"K4A_INDEX_TLS_CLIENT_CA"           description:"Require a client certificate signed by this CA on every RPC except health checks (mTLS; needs --tls-cert)"`
 	TokenFile     string        `long:"token-file"              env:"K4A_INDEX_TOKEN_FILE"              description:"File holding the bearer token every RPC except health checks must present. K4A_INDEX_TOKEN sets it directly."`
 	MaxLimit      int           `long:"max-search-limit"        env:"K4A_INDEX_MAX_SEARCH_LIMIT"        description:"Most matches one Search returns; a larger or unset request limit is lowered to this and the answer reports capped."                                                                                                                                                                                                                     default:"10000"`
+	AdminListen   string        `long:"admin-listen"            env:"K4A_INDEX_ADMIN_LISTEN"            description:"Plain-HTTP address for /metrics (Prometheus), /healthz and /readyz, separate from the gRPC port. Empty disables it."`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
 	NoTLS         bool          `long:"no-tls"                                                          description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
 
@@ -282,6 +283,7 @@ func logStartup(f *flags, lim startupLimits) {
 		"drain_stall_wipe_after", f.WipeStrikes,
 		"shutdown_timeout", f.ShutdownGrace,
 		"listen", f.Listen,
+		"admin_listen", f.AdminListen,
 		"tls", lim.listener.TLSEnabled(),
 		"client_ca", lim.listener.ClientCAFile != "",
 		"token", lim.listener.Token != "",
@@ -326,7 +328,7 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	go mgr.sweep()
 	log.Info("follow-set ready", "cluster", cluster, "prefollowed", mgr.size())
 
-	srv := newGRPCServer(lim)
+	srv, hs := newGRPCServer(lim)
 	is := newIndexServer(mgr)
 	is.maxLimit = f.MaxLimit
 	indexv1.RegisterIndexServer(srv, is)
@@ -339,13 +341,23 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 		return 1
 	}
 
-	// Stop the gRPC server when the process is signaled.
+	if f.AdminListen != "" {
+		if err := serveAdmin(ctx, f.AdminListen, newAdminHandler(newMetricsRegistry(mgr), hs)); err != nil {
+			log.Error("admin listen", "addr", f.AdminListen, "err", err)
+			return 1
+		}
+	}
+
+	// Stop the gRPC server when the process is signaled. Readiness drops
+	// first, so load balancers stop routing before in-flight RPCs drain.
 	go func() {
 		<-ctx.Done()
 		log.Info("shutting down", "grace", f.ShutdownGrace)
+		hs.Shutdown()
 		stopServer(srv, f.ShutdownGrace)
 	}()
 
+	setServing(hs, true)
 	log.Info("k4a-index serving", "addr", f.Listen, "version", version.String())
 	if err := srv.Serve(lis); err != nil && ctx.Err() == nil {
 		log.Error("serve", "err", err)
@@ -357,7 +369,7 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 // newGRPCServer builds the server with its transport credentials and
 // interceptors. Logging runs outside the guard so a refused call is still
 // logged, with its Unauthenticated code.
-func newGRPCServer(lim startupLimits) *grpc.Server {
+func newGRPCServer(lim startupLimits) (*grpc.Server, *health.Server) {
 	guard := endpointauth.NewGuard(lim.listener)
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(unaryLogInterceptor, guard.UnaryInterceptor),
@@ -368,9 +380,25 @@ func newGRPCServer(lim startupLimits) *grpc.Server {
 	}
 	srv := grpc.NewServer(opts...)
 	// The standard health service, open whatever credentials the listener
-	// asks for, so a probe never needs the deployment's token.
-	healthpb.RegisterHealthServer(srv, health.NewServer())
-	return srv
+	// asks for, so a probe never needs the deployment's token. It starts
+	// NOT_SERVING; serve flips it once the listener is up and back on SIGTERM.
+	hs := health.NewServer()
+	setServing(hs, false)
+	healthpb.RegisterHealthServer(srv, hs)
+	return srv, hs
+}
+
+// indexServiceName is the health service name clients may ask about, besides
+// the server-wide "".
+const indexServiceName = "k4a.index.v1.Index"
+
+func setServing(hs *health.Server, up bool) {
+	st := healthpb.HealthCheckResponse_NOT_SERVING
+	if up {
+		st = healthpb.HealthCheckResponse_SERVING
+	}
+	hs.SetServingStatus("", st)
+	hs.SetServingStatus(indexServiceName, st)
 }
 
 // grpcStopper is the slice of *grpc.Server stopServer needs.
