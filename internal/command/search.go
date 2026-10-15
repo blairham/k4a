@@ -228,11 +228,13 @@ func parsePartitionsFlag(s string) ([]int32, error) {
 		if p == "" {
 			continue
 		}
-		n, err := strconv.Atoi(p)
+		// Parse at 32 bits: partition IDs are int32 on the wire, and an
+		// Atoi + conversion wrapped 4294967296 to partition 0.
+		n, err := strconv.ParseInt(p, 10, 32)
 		if err != nil || n < 0 {
 			return nil, fmt.Errorf("invalid partition %q in --partitions", p)
 		}
-		out = append(out, int32(n)) //nolint:gosec // partition IDs fit in int32
+		out = append(out, int32(n))
 	}
 	return out, nil
 }
