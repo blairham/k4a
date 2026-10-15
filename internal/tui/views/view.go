@@ -19,6 +19,7 @@ var (
 	_ View     = (*ACLsView)(nil)
 	_ View     = (*ContextView)(nil)
 	_ View     = (*SearchView)(nil)
+	_ View     = (*QuotasView)(nil)
 	_ FormView = (*ProduceView)(nil)
 	_ FormView = (*CreateTopicView)(nil)
 	_ FormView = (*CreateACLView)(nil)

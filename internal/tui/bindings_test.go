@@ -24,6 +24,7 @@ var allViewTypes = []style.ViewType{
 	style.ViewCluster, style.ViewMessages, style.ViewMessageDetail, style.ViewProduce,
 	style.ViewCreateTopic, style.ViewCreateACL, style.ViewContext, style.ViewACLs,
 	style.ViewTopicConfig, style.ViewResetOffsets, style.ViewBrokerDetail, style.ViewSearch,
+	style.ViewQuotas,
 }
 
 // keyName turns a hint-bar key ("<ctrl-d>", "<shift-g>") into the string
@@ -162,6 +163,14 @@ func bindingFixtures(t *testing.T) map[style.ViewType]func() views.View {
 		style.ViewSearch: func() views.View {
 			v := views.NewSearchView(nil, "orders", "a")
 			v.Update(views.SearchMatchMsg{Msg: msg(0, 1)}) //nolint:errcheck
+			return sized(v)
+		},
+		style.ViewQuotas: func() views.View {
+			v := views.NewQuotasView(nil)
+			e, _ := kafka.ParseQuotaEntity("user=alice")
+			v.Update(views.QuotasRefreshMsg{Quotas: []kafka.ClientQuota{ //nolint:errcheck
+				{Entity: e, Key: "producer_byte_rate", Value: 1024},
+			}})
 			return sized(v)
 		},
 		style.ViewProduce:     func() views.View { return sized(views.NewProduceView(nil, "orders")) },

@@ -21,6 +21,7 @@ func (a *App) switchView(v style.ViewType) tea.Cmd {
 		a.errFlash = "no context selected — pick one first"
 		return nil
 	}
+	a.ensureTopLevelView(v)
 	a.stopStoppableViews()
 	a.viewStack = nil
 	a.filterStack = nil
@@ -221,6 +222,8 @@ func (a *App) refreshMsgMatchesView(msg tea.Msg) bool {
 		return a.view == style.ViewContext
 	case views.ACLsRefreshMsg:
 		return a.view == style.ViewACLs
+	case views.QuotasRefreshMsg:
+		return a.view == style.ViewQuotas
 	case views.TopicConfigRefreshMsg:
 		return a.view == style.ViewTopicConfig
 	case views.ResetOffsetsTopicsMsg, views.ResetOffsetsResultMsg:
@@ -249,6 +252,8 @@ func refreshMsgHasError(msg tea.Msg) bool {
 	case views.TopicDetailRefreshMsg:
 		return m.Err != nil
 	case views.ACLsRefreshMsg:
+		return m.Err != nil
+	case views.QuotasRefreshMsg:
 		return m.Err != nil
 	case views.TopicConfigRefreshMsg:
 		return m.Err != nil
