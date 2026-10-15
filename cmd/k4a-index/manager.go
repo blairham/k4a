@@ -37,6 +37,9 @@ type followEntry struct {
 	done      chan struct{} // closed when the worker's run() returns
 	lastQuery atomic.Int64  // unix millis of the last Search/Coverage that hit it
 	pinned    bool
+	// exited is set, under manager.mu, when the tail stopped on its own (the
+	// consume channel closed while ctx was still live). See tailExited.
+	exited bool
 }
 
 // touch records that the topic was just queried, resetting its LRU clock.
@@ -52,11 +55,15 @@ func (e *followEntry) touch() { e.lastQuery.Store(time.Now().UnixMilli()) }
 // Bleve index, stopping/deleting an evicted one) happens OUTSIDE the lock so a
 // registration never stalls concurrent lookups on the query hot path.
 type manager struct {
-	baseCtx       context.Context
-	src           tailSource
-	root          *state.Root
-	set           map[string]*followEntry
-	registering   map[string]struct{}
+	baseCtx     context.Context
+	src         tailSource
+	root        *state.Root
+	set         map[string]*followEntry
+	registering map[string]struct{}
+	// pins is every topic the operator pre-followed. It outlives the entry, so
+	// a pinned topic whose tail died and is re-registered on demand comes back
+	// pinned rather than as an evictable on-demand topic.
+	pins          map[string]struct{}
 	cluster       string
 	policy        allowPolicy
 	maxFollowed   int
@@ -101,6 +108,7 @@ func newManager(
 		worker:        cfg.Worker,
 		set:           make(map[string]*followEntry),
 		registering:   make(map[string]struct{}),
+		pins:          make(map[string]struct{}),
 	}
 	if m.maxFollowed <= 0 {
 		m.maxFollowed = defaultMaxFollowed
@@ -147,10 +155,11 @@ func (m *manager) ensureFollowed(topic string) bool {
 		return true
 	}
 	m.registering[topic] = struct{}{}
+	_, pinned := m.pins[topic]
 	m.mu.Unlock()
 
-	log.Info("follow: registering topic on demand", "topic", topic)
-	go m.register(topic, false)
+	log.Info("follow: registering topic on demand", "topic", topic, "pinned", pinned)
+	go m.register(topic, pinned)
 	return true
 }
 
@@ -162,6 +171,7 @@ func (m *manager) ensureFollowed(topic string) bool {
 func (m *manager) preFollow(topics []string) {
 	for _, t := range topics {
 		m.mu.Lock()
+		m.pins[t] = struct{}{}
 		if _, ok := m.set[t]; ok {
 			m.mu.Unlock()
 			continue
@@ -197,6 +207,9 @@ func (m *manager) register(topic string, pinned bool) {
 	go func() {
 		w.run(ctx)
 		close(entry.done)
+		if ctx.Err() == nil {
+			m.tailExited(topic, entry)
+		}
 	}()
 
 	// Make room under the cap before inserting. evictColdestLocked removes the
@@ -215,6 +228,15 @@ func (m *manager) register(topic string, pinned bool) {
 		}
 		return
 	}
+	if entry.exited {
+		// The tail already died (a topic the broker does not have fails at
+		// once). tailExited ran before the entry was visible, so it is ours
+		// to retire rather than insert a worker that will never index. The
+		// in-flight marker stays until the writer lock is released.
+		m.mu.Unlock()
+		m.retire(topic, entry)
+		return
+	}
 	var victim *followEntry
 	var victimTopic string
 	if len(m.set) >= m.maxFollowed {
@@ -231,6 +253,45 @@ func (m *manager) register(topic string, pinned bool) {
 	}
 
 	log.Info("follow: now following", "topic", topic, "pinned", pinned, "followed_total", m.size())
+}
+
+// tailExited handles a tail that stopped while its context was still live: the
+// consume channel closed because the topic does not exist, its metadata could
+// not be listed, or a fetch error was fatal. The entry leaves the follow-set
+// so Coverage stops reporting following=true for an index that will never
+// grow, and the worker is stopped so its final flush lands and its writer lock
+// is released. The directory stays: it is a warm index, and the next Search or
+// Follow of the topic re-registers it through the normal on-demand path (with
+// its pin, if it had one) — the same retry a failed open already gets.
+func (m *manager) tailExited(topic string, e *followEntry) {
+	m.mu.Lock()
+	e.exited = true
+	owned := m.set[topic] == e
+	if owned {
+		delete(m.set, topic)
+		// Hold the in-flight marker until the worker is stopped, so a search
+		// arriving meanwhile does not try to open an index whose writer lock
+		// this worker still holds.
+		m.registering[topic] = struct{}{}
+	}
+	m.mu.Unlock()
+	if owned {
+		m.retire(topic, e)
+	}
+}
+
+// retire stops a worker whose tail has ended, without deleting its index, then
+// clears the topic's in-flight marker so the next search may re-register it.
+func (m *manager) retire(topic string, e *followEntry) {
+	e.cancel()
+	<-e.done
+	if err := e.worker.stop(); err != nil {
+		log.Error("follow: stopping worker whose tail exited", "topic", topic, "err", err)
+	}
+	m.mu.Lock()
+	delete(m.registering, topic)
+	m.mu.Unlock()
+	log.Warn("follow: tail exited on its own — topic unfollowed until its next search", "topic", topic)
 }
 
 // evictColdestLocked removes and returns the least-recently-queried non-pinned

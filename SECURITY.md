@@ -23,8 +23,9 @@ including deleting topics, consumer groups, ACLs and records.
     same credentials resolve `ssm-brokers` through SSM.
   - **SASL/SCRAM** (`--auth scram`, SHA-512, always over TLS): a username and
     password from `--username`/`--password`, `KAFKA_USERNAME`/`KAFKA_PASSWORD`,
-    or a context in `~/.k4a/config.yaml`. Context values expand `$VAR`, so the
-    file can name an environment variable instead of holding the password.
+    or a context in `~/.k4a/config.yaml`. A context value that is exactly `$VAR`
+    or `${VAR}` is read from that environment variable, so the file can name
+    one instead of holding the password; a `$` anywhere else is literal.
     Prefer the environment to `--password`, which other local users can see
     in the process list.
   - **mTLS** (`--auth mtls`): certificate, key and CA PEM files named by path;
