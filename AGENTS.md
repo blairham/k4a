@@ -165,17 +165,29 @@ the same change.
 - `ctrl+d` — purge the topic (the same retention prompt as Topic Detail)
 - `x` — raw / schema-registry decoded keys and values (advertised only with a
   registry configured)
+- `c` / `K` / `C` — copy the selected row's value / key / whole record as JSON
+- `e` — export the rows as shown (partition and `/` filters applied) to JSONL
 
 ### Message Detail View
 
 - `s` — save message to file (JSON)
+- `c` / `K` / `C` — copy the value / key / whole record as JSON
+- `n` / `N` — next / previous message in the list it was opened from
 - `ctrl+f` / `ctrl+b` — page the body
 - `x` — raw / decoded; the cards show the key and value schema or the reason
   a framed payload was not decoded
 
+Copy and export take what is on screen, decoded or raw, and say which. Copy
+is OSC 52 (`internal/tui/clipboard.go`; under tmux it is also sent through
+the DCS passthrough), so it works over SSH; export (`internal/tui/export.go`)
+writes one JSON record per line with topic, partition, offset, timestamp,
+key, value, headers and a `decoding` block, never under `~/.k4a`, and asks
+before overwriting.
+
 ### Search View
 
 - `enter` — view the matched message
+- `e` — export the matches so far to JSONL
 
 ### ACLs View
 
