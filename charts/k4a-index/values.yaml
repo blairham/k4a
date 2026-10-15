@@ -232,6 +232,16 @@ config:
   # logical cap on disk — scorch defers segment reclamation), and re-following
   # costs one scanned search plus ~1s of warm-up. Disk is the scarcer resource.
   evictAfter: 48h
+  # History a newly followed topic indexes before its live tail: the records
+  # of the last `window`, at most `maxRecords` across its partitions (split
+  # evenly; a partition with more starts later). topicMaxBytes still trims on
+  # top. While it runs the coverage frame reports backfilling and queries
+  # reaching "now" fall to a scan. window "0" keeps the old start (the most
+  # recent ~100 records). Rendered as K4A_INDEX_BACKFILL_WINDOW /
+  # K4A_INDEX_BACKFILL_MAX_RECORDS.
+  backfill:
+    window: 24h
+    maxRecords: 1000000
   # Per-topic index byte cap: once a followed topic's index exceeds this, the
   # daemon trims its OLDEST records inline (advancing the covered window forward)
   # so a high-volume topic can't fill the emptyDir and evict the pod. Human size
