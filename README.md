@@ -379,6 +379,7 @@ Partition table with offsets, replication, and retention info.
 | `e` | Edit topic configuration |
 | `p` | Increase partition count |
 | `R` | Change replication factor |
+| `a` | Reassign the selected partition: edit its replica list (broker IDs, preferred leader first), confirm, and follow the move in REPLICAS (`+adding -removing`) and the Replication card (`N moving`). An empty list cancels a move in progress |
 | `ctrl+d` | Purge messages (set retention: `1h`, `1d`, `0` for all; suffix `!` for permanent) |
 
 ### Topic Config

@@ -147,6 +147,11 @@ the same change.
 - `e` — edit topic configuration
 - `p` — increase partition count
 - `R` — change replication factor
+- `a` — reassign the selected partition: `kafka.ParseReplicaList`, a y/n,
+  then `kafka.Client.ReassignPartition` (AlterPartitionAssignments; every
+  broker must exist; an empty list cancels). Progress comes from
+  `ListPartitionReassignments` in `FetchTopicDetail` (`PartitionInfo.Adding`
+  / `Removing`, `TopicDetail.Reassigning`), best effort, on the 2s refresh
 - `ctrl+d` — purge messages (set retention: `1h`, `1d`, `0` for all, suffix `!` for permanent)
 
 ### Groups View

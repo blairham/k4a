@@ -503,6 +503,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		}
 		return a, nil
 
+	case reassignMsg:
+		cmd := a.applyReassignResult(msg)
+		return a, cmd
+
 	case quotaChangedMsg:
 		cmd := a.applyQuotaResult(msg)
 		return a, cmd
