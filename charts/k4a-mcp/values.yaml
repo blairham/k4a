@@ -43,6 +43,7 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532        # distroless nonroot
   runAsGroup: 65532
+  fsGroup: 65532          # so the nonroot process can read mounted Secrets (mode 0440)
   seccompProfile:
     type: RuntimeDefault
 
@@ -63,6 +64,48 @@ resources:
     memory: 64Mi
   limits:
     memory: 128Mi
+
+# Caller authentication on the MCP HTTP listener. Off by default, which keeps
+# an upgraded install serving plaintext with no caller credential (k4a-mcp
+# logs a warning saying so). This authenticates "a caller holding the
+# deployment's credential"; it does not authorize per caller (SECURITY.md).
+listener:
+  # Serve HTTPS from an existing kubernetes.io/tls Secret, mounted at
+  # /etc/k4a/listener-tls; the probes switch to HTTPS. A renewed certificate
+  # is picked up without a restart.
+  tls:
+    existingSecret: ""
+    certKey: tls.crt
+    keyKey: tls.key
+    # A CA key in the same Secret (e.g. ca.crt) to require client
+    # certificates on every request but /health (mTLS).
+    clientCAKey: ""
+  # Bearer token every request but /health must present (Authorization:
+  # Bearer <token>), from an existing Secret mounted at
+  # /etc/k4a/listener-token. Read at startup: restart after rotating it.
+  token:
+    existingSecret: ""
+    key: token
+
+# What k4a-mcp presents to k4a-index, for a k4a-index whose listener asks
+# for credentials (its listener.* values). Default: plaintext, no token.
+index:
+  tls:
+    # Dial k4a-index over TLS. Required for a token: k4a-mcp refuses to send
+    # one over plaintext.
+    enabled: false
+    # Existing Secret mounted at /etc/k4a/index-tls holding the CA that signed
+    # k4a-index's certificate and, for mTLS, a client certificate and key.
+    # Empty keys are skipped; an empty existingSecret means the system roots.
+    existingSecret: ""
+    caKey: ca.crt
+    certKey: ""
+    keyKey: ""
+  token:
+    # Existing Secret holding k4a-index's bearer token, mounted at
+    # /etc/k4a/index-token.
+    existingSecret: ""
+    key: token
 
 config:
   # In-cluster gRPC endpoint of the k4a-index daemon. Same namespace, so the

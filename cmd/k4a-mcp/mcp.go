@@ -165,9 +165,12 @@ func searchHandlerWithTimeout(
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		start := time.Now()
+		// The query is often the sensitive value being looked up (an email,
+		// an account number), so it is logged only at debug.
+		log.Debug("mcp tool: search query", "topic", in.Topic, "query", in.Query)
 		log.Info("mcp tool: search",
-			"topic", in.Topic, "query", in.Query, "scope", in.Scope,
-			"since", in.Since, "until", in.Until, "partitions", in.Partitions)
+			"topic", in.Topic, "scope", in.Scope,
+			"since", in.Since, "until", in.Until, "partitions", in.Partitions, "limit", in.Limit)
 
 		req, err := buildSearchRequest(in)
 		if err != nil {
