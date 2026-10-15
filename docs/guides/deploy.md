@@ -65,7 +65,7 @@ both are installed in the same namespace.
 | `kafka.brokers` | `KAFKA_BROKERS` | Bootstrap servers, comma-separated. Required. |
 | `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram` (SHA-512), `scram-sha-256`, `plain`, `oauthbearer`, `mtls`, `iam`. Default `iam`. |
 | `aws.region` | `AWS_REGION` | Region for IAM auth. Rendered only when set; the daemon defaults to `us-east-1`. |
-| `kafka.insecure` | `--insecure` | Skip TLS certificate verification. Passed as an argument (the flag has no env). Testing only. |
+| `kafka.insecure` | `--insecure` | Skip TLS certificate verification. Passed as an argument (the flag has no env). Testing only; refused with `mtls`. |
 | `kafka.noTLS` | `--no-tls` | Run a SASL method without TLS (`SASL_PLAINTEXT`); the password or token crosses the network in cleartext and the daemon logs a warning. Passed as an argument. Development brokers only. |
 | `kafka.credentials.existingSecret` (`.usernameKey`, `.passwordKey`) | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | SASL username/password (`scram`, `scram-sha-256`, `plain`) from an existing Secret. Keys default to `username` / `password`. |
 | `kafka.oauth.tokenUrl`, `.clientId`, `.scopes` | `KAFKA_OAUTH_TOKEN_URL`, `KAFKA_OAUTH_CLIENT_ID`, `KAFKA_OAUTH_SCOPES` | OAUTHBEARER client-credentials grant. The token URL must be `https`. |
