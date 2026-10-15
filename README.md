@@ -247,6 +247,20 @@ default as a new override. Both flags are repeatable and apply to every topic
 named. This is a dynamic config change — it takes effect immediately, with no
 broker restart, partition reassignment or leader election.
 
+### Topics, consumer groups and brokers
+
+The TUI's list and detail views have headless equivalents. Each takes
+`--format json` for scripting:
+
+```bash
+k4a list-topics                          # name, partitions, RF, out-of-sync
+k4a list-topics --counts --internal      # add message counts, show internal topics
+k4a list-groups --lag                    # state, members, topics, lag, coordinator
+k4a describe-group orders-consumer       # per-partition committed offset, HWM, lag
+k4a describe-broker-config 1             # non-default broker configs (--all for every key)
+k4a describe-broker-config --config-key log.retention.hours   # one key on every broker
+```
+
 ## Search
 
 `k4a search` runs a deep search against a topic without opening the TUI —
