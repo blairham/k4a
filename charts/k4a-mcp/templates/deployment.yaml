@@ -33,6 +33,48 @@ spec:
               value: {{ .Values.config.path | quote }}
             - name: K4A_MCP_LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            {{- if and .Values.listener.tls.clientCAKey (not .Values.listener.tls.existingSecret) }}
+            {{- fail "listener.tls.clientCAKey needs listener.tls.existingSecret: mTLS runs over the listener's TLS" }}
+            {{- end }}
+            {{- with .Values.listener.tls.existingSecret }}
+            - name: K4A_MCP_TLS_CERT
+              value: /etc/k4a/listener-tls/{{ $.Values.listener.tls.certKey }}
+            - name: K4A_MCP_TLS_KEY
+              value: /etc/k4a/listener-tls/{{ $.Values.listener.tls.keyKey }}
+            {{- with $.Values.listener.tls.clientCAKey }}
+            - name: K4A_MCP_TLS_CLIENT_CA
+              value: /etc/k4a/listener-tls/{{ . }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.listener.token.existingSecret }}
+            - name: K4A_MCP_TOKEN_FILE
+              value: /etc/k4a/listener-token/{{ $.Values.listener.token.key }}
+            {{- end }}
+            {{- if and .Values.index.token.existingSecret (not .Values.index.tls.enabled) }}
+            {{- fail "index.token.existingSecret needs index.tls.enabled: k4a-mcp never sends a token over plaintext" }}
+            {{- end }}
+            {{- if .Values.index.tls.enabled }}
+            - name: K4A_MCP_INDEX_TLS
+              value: "true"
+            {{- if .Values.index.tls.existingSecret }}
+            {{- with .Values.index.tls.caKey }}
+            - name: K4A_MCP_INDEX_CA
+              value: /etc/k4a/index-tls/{{ . }}
+            {{- end }}
+            {{- with .Values.index.tls.certKey }}
+            - name: K4A_MCP_INDEX_CERT
+              value: /etc/k4a/index-tls/{{ . }}
+            {{- end }}
+            {{- with .Values.index.tls.keyKey }}
+            - name: K4A_MCP_INDEX_KEY
+              value: /etc/k4a/index-tls/{{ . }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.index.token.existingSecret }}
+            - name: K4A_MCP_INDEX_TOKEN_FILE
+              value: /etc/k4a/index-token/{{ $.Values.index.token.key }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -42,14 +84,14 @@ spec:
           # index being reachable — the gRPC client is lazy and reconnects, and
           # a tool call surfaces served_from_index=false if the index is down.
           startupProbe:
-            httpGet: { path: /health, port: http }
+            httpGet: { path: /health, port: http{{ if .Values.listener.tls.existingSecret }}, scheme: HTTPS{{ end }} }
             periodSeconds: 5
             failureThreshold: 30
           readinessProbe:
-            httpGet: { path: /health, port: http }
+            httpGet: { path: /health, port: http{{ if .Values.listener.tls.existingSecret }}, scheme: HTTPS{{ end }} }
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /health, port: http }
+            httpGet: { path: /health, port: http{{ if .Values.listener.tls.existingSecret }}, scheme: HTTPS{{ end }} }
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
@@ -57,7 +99,22 @@ spec:
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: tmp
               mountPath: /tmp
+            {{- range $name, $secret := dict "listener-tls" .Values.listener.tls.existingSecret "listener-token" .Values.listener.token.existingSecret "index-tls" (and .Values.index.tls.enabled .Values.index.tls.existingSecret) "index-token" .Values.index.token.existingSecret }}
+            {{- if $secret }}
+            - name: {{ $name }}
+              mountPath: /etc/k4a/{{ $name }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
             sizeLimit: {{ .Values.tmpSizeLimit }}
+        {{- range $name, $secret := dict "listener-tls" .Values.listener.tls.existingSecret "listener-token" .Values.listener.token.existingSecret "index-tls" (and .Values.index.tls.enabled .Values.index.tls.existingSecret) "index-token" .Values.index.token.existingSecret }}
+        {{- if $secret }}
+        - name: {{ $name }}
+          secret:
+            secretName: {{ $secret }}
+            defaultMode: 0440
+        {{- end }}
+        {{- end }}

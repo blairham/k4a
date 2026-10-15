@@ -189,17 +189,26 @@ The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 TLS values above.
 
 `k4a-mcp` is much smaller: `--index-addr` / `K4A_MCP_INDEX_ADDR` (default
-`k4a-index:9500`, the in-cluster ClusterIP hop — plaintext on purpose, the
-TLS edge is for external clients), `--listen` / `K4A_MCP_LISTEN` (`:9501`),
-`--path` / `K4A_MCP_PATH` (`/mcp`), `--log-level` / `K4A_MCP_LOG_LEVEL`
-(chart value `logLevel`).
+`k4a-index:9500`, the in-cluster ClusterIP hop — plaintext by default),
+`--listen` / `K4A_MCP_LISTEN` (`:9501`), `--path` / `K4A_MCP_PATH` (`/mcp`),
+`--log-level` / `K4A_MCP_LOG_LEVEL` (chart value `logLevel`), plus the
+credential flags below.
+
+| Flag | Env | What it does |
+|---|---|---|
+| `--tls-cert`, `--tls-key` | `K4A_MCP_TLS_CERT`, `K4A_MCP_TLS_KEY` | Serve HTTPS; the certificate is re-read when its file changes. |
+| `--tls-client-ca` | `K4A_MCP_TLS_CLIENT_CA` | Require a client certificate from this CA on every request but `/health`. |
+| `--token-file` | `K4A_MCP_TOKEN_FILE` (or `K4A_MCP_TOKEN`) | Bearer token every request but `/health` must present. |
+| `--index-tls` | `K4A_MCP_INDEX_TLS` | Dial k4a-index over TLS (implied by `--index-ca`/`--index-cert`). |
+| `--index-ca`, `--index-cert`, `--index-key` | `K4A_MCP_INDEX_CA`, `_CERT`, `_KEY` | Verify k4a-index's certificate; present a client certificate to it. |
+| `--index-token-file` | `K4A_MCP_INDEX_TOKEN_FILE` (or `K4A_MCP_INDEX_TOKEN`) | Token for k4a-index. Refused at startup without TLS to the index. |
 
 ## Authenticating callers
 
-`k4a-index` can ask callers for a credential. **Nothing is required by
-default**, so upgrading an install changes nothing on the wire; the daemon
-instead logs a warning at startup that its listener is plaintext and
-unauthenticated. What it authenticates is "a caller holding this
+Both `k4a-index` and `k4a-mcp` can ask callers for a credential. **Nothing
+is required by default**, so upgrading an install changes nothing on the
+wire; each instead logs a warning at startup that its listener is plaintext
+and unauthenticated. What it authenticates is "a caller holding this
 deployment's credential" — there is still no per-caller authorization
 (Phase 5 of the design doc), so every authenticated caller reads every
 followed topic.
@@ -230,8 +239,25 @@ Health checks (and the TCP probes) stay open whatever is configured.
 
 Doing all three at once is fine for a new install; on a live one, each step
 breaks only the clients not yet moved, and those degrade to a scan.
-`k4a-mcp` cannot yet present index credentials, so keep its in-cluster hop
-to an unauthenticated listener until it can (#54).
+In-cluster `k4a-mcp` is one of those clients: move it with its `index.*`
+values (below) in the same step.
+
+`k4a-mcp` chart values have the same `listener.*` shape (Secrets mounted at
+`/etc/k4a/listener-tls` and `/etc/k4a/listener-token`; the HTTP probes
+switch to HTTPS when `listener.tls` is set), plus what it presents to
+`k4a-index`:
+
+| Value | Renders | Notes |
+|---|---|---|
+| `index.tls.enabled` | `K4A_MCP_INDEX_TLS` | Dial `k4a-index` over TLS. |
+| `index.tls.existingSecret` (`.caKey`, `.certKey`, `.keyKey`) | `K4A_MCP_INDEX_CA`, `_CERT`, `_KEY` | Mounted at `/etc/k4a/index-tls`; empty keys are skipped. `caKey` defaults to `ca.crt`; cert and key are for mTLS. |
+| `index.token.existingSecret` (`.key`) | `K4A_MCP_INDEX_TOKEN_FILE` | Mounted at `/etc/k4a/index-token`. The chart refuses to render it without `index.tls.enabled`. |
+
+`config.indexAddr` must then be a name on `k4a-index`'s certificate (the
+Service name, e.g. `k4a-index.<namespace>.svc`).
+
+MCP clients send the token as `Authorization: Bearer <token>`; for Claude
+Code, see [`mcp-setup.md`](mcp-setup.md).
 
 ## Networking
 
@@ -247,8 +273,8 @@ your private network / VPN, with DNS such as `k4a-index.example.com` and
   backend-protocol setting). Without it the TLS handshake fails and every
   client silently falls back to a broker scan.
 - **k4a-mcp** serves MCP streamable-HTTP on 9501 at `/mcp`, plus a plain
-  `/health`. Terminate TLS at the edge; the MCP client URL is then
-  `https://<k4a-mcp-host>/mcp`.
+  `/health`. Serve TLS from the pod (`listener.tls`) or terminate it at the
+  edge; the MCP client URL is then `https://<k4a-mcp-host>/mcp`.
 
 If you restrict ingress with a `NetworkPolicy`, note that a load balancer
 targeting pod IPs reaches the pod from addresses that are **not pods** (e.g.

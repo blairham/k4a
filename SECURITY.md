@@ -113,11 +113,21 @@ searches over gRPC for anyone who can reach it.
 ### `k4a-mcp`, the networked MCP server
 
 `k4a-mcp` exposes `search` and `coverage` over streamable HTTP
-(`--listen`, default `:9501`) and forwards them to `k4a-index` over
-**plaintext** gRPC. It holds no Kafka credentials of its own, has **no
-per-request authentication**, and serves anyone who can reach it whatever
-the index will answer. The same network rule applies: a private network
-only.
+(`--listen`, default `:9501`) and forwards them to `k4a-index`. It holds no
+Kafka credentials of its own.
+
+- **By default it is plaintext and unauthenticated** (and logs a warning
+  saying so): it serves anyone who can reach it whatever the index will
+  answer, so a private network only. It can serve HTTPS (`--tls-cert`),
+  require client certificates (`--tls-client-ca`) and require a bearer token
+  (`--token-file` / `K4A_MCP_TOKEN`), with the same guard and the same
+  limits as `k4a-index`: `/health` stays open, and authentication is not
+  per-caller authorization.
+- **Its hop to `k4a-index` is plaintext gRPC by default.** `--index-tls`,
+  `--index-ca`, `--index-cert`/`--index-key` and `--index-token-file` give
+  it what an authenticated `k4a-index` asks for; it refuses to start with an
+  index token and no TLS rather than send the token in the clear.
+- The tool's search query is logged at `debug` only.
 
 ## Supported versions
 
@@ -231,9 +241,9 @@ In scope, among others:
 - a crash or unbounded resource use in `k4a-index` or `k4a-mcp` caused by a
   request
 
-Also in scope: a `k4a-index` configured with a token or client CA answering
-a request that lacks it (other than a health check), or a k4a client sending
-an index token over plaintext.
+Also in scope: a `k4a-index` or `k4a-mcp` configured with a token or client
+CA answering a request that lacks it (other than a health check), or a k4a
+client or `k4a-mcp` sending an index token over plaintext.
 
 Out of scope: anything that follows from exposing an unauthenticated
 `k4a-index` or `k4a-mcp` to a network you do not trust, from running with
