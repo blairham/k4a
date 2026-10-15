@@ -17,10 +17,30 @@ import (
 	"github.com/blairham/k4a/internal/tui/style"
 )
 
+// Keys and actions for copying and exporting messages, shared by Messages,
+// Message Detail and Search.
+const (
+	KeyCopyValue   = "c"
+	KeyCopyRecord  = "C"
+	KeyCopyKey     = "K"
+	KeyExport      = "e"
+	KeyNextMessage = "n"
+	KeyPrevMessage = "N"
+
+	// ActionCopy's param is the key pressed, which names what to copy.
+	ActionCopy = "copy"
+	// ActionExport writes the view's messages to a JSONL file.
+	ActionExport = "export"
+)
+
 // MessageDetailView shows the full raw content of a single message.
 type MessageDetailView struct {
-	msg      *kafka.ConsumedMessage
+	msg *kafka.ConsumedMessage
+	// siblings is the list the message was opened from, in its order, for
+	// n/N; pos is msg's index in it.
+	siblings []kafka.ConsumedMessage
 	viewport viewport.Model
+	pos      int
 	width    int
 	height   int
 	ready    bool
@@ -83,9 +103,44 @@ func (v *MessageDetailView) HandleKey(key string) (string, string) {
 		return "save_message", ""
 	case KeyToggleRaw:
 		v.SetRaw(!v.raw)
+	case KeyCopyValue, KeyCopyKey, KeyCopyRecord:
+		return ActionCopy, key
+	case KeyNextMessage:
+		v.step(1)
+	case KeyPrevMessage:
+		v.step(-1)
 	}
 	return "", ""
 }
+
+// SetSiblings gives the view the list msg was opened from, as that list
+// showed it, so n and N can walk it without going back. pos is msg's index.
+func (v *MessageDetailView) SetSiblings(list []kafka.ConsumedMessage, pos int) {
+	if pos < 0 || pos >= len(list) {
+		return
+	}
+	v.siblings = list
+	v.pos = pos
+	v.msg = &list[pos]
+}
+
+// step moves to the message delta rows away in the list it was opened
+// from, staying put at either end.
+func (v *MessageDetailView) step(delta int) {
+	next := v.pos + delta
+	if v.siblings == nil || next < 0 || next >= len(v.siblings) {
+		return
+	}
+	v.pos = next
+	v.msg = &v.siblings[next]
+	if v.ready {
+		v.Resize(v.width, v.height)
+		v.viewport.GotoTop()
+	}
+}
+
+// Raw reports whether decoded fields are being shown raw.
+func (v *MessageDetailView) Raw() bool { return v.raw }
 
 // SetRaw shows a registry-decoded key and value raw (true) or decoded.
 func (v *MessageDetailView) SetRaw(raw bool) {
@@ -156,6 +211,10 @@ func (v *MessageDetailView) renderCards() string {
 	left.WriteString(label.Render("Topic:     ") + val.Render(truncate(m.Topic, leftValW)) + "\n")
 	left.WriteString(label.Render("Partition: ") + val.Render(fmt.Sprintf("%d", m.Partition)) + "\n")
 	left.WriteString(label.Render("Offset:    ") + val.Render(fmt.Sprintf("%d", m.Offset)) + "\n")
+	if len(v.siblings) > 1 {
+		left.WriteString(label.Render("Message:   ") +
+			val.Render(fmt.Sprintf("%d of %d", v.pos+1, len(v.siblings))) + dim.Render("  n/N") + "\n")
+	}
 	left.WriteString(label.Render("Timestamp: ") + val.Render(m.Time.Format("1/2/2006, 15:04:05.000")) + "\n")
 	left.WriteString(label.Render("Key:       ") +
 		val.Render(truncate(keyDisplay(m.KeyDecoding.Shown(m.Key, v.raw)), leftValW)) + "\n")

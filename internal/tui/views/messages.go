@@ -267,12 +267,17 @@ func (v *MessagesView) Filter() string { return v.filter }
 func (v *MessagesView) HandleKey(key string) (string, string) {
 	switch key {
 	case KeyEnter:
-		// Get selected message (rows are reversed, so cursor 0 = newest = last in v.messages).
-		idx := v.table.Cursor()
-		msgIdx := len(v.messages) - 1 - idx
-		if msgIdx >= 0 && msgIdx < len(v.messages) {
-			return "message_detail", fmt.Sprintf("%d", msgIdx)
+		// The param indexes VisibleMessages, the rows as shown: with a
+		// filter on, the cursor is not an index into v.messages.
+		if idx := v.table.Cursor(); idx >= 0 && idx < len(v.table.Rows()) {
+			return "message_detail", fmt.Sprintf("%d", idx)
 		}
+	case KeyCopyValue, KeyCopyKey, KeyCopyRecord:
+		if v.SelectedMessage() != nil {
+			return ActionCopy, key
+		}
+	case KeyExport:
+		return ActionExport, v.topic
 	case "s":
 		// In the messages list, `s` opens search. Saving a single
 		// message is available from the message-detail view (also
@@ -362,6 +367,37 @@ func (v *MessagesView) GetMessage(idx int) *kafka.ConsumedMessage {
 	return nil
 }
 
+// VisibleMessages returns the messages as the table shows them: newest
+// first, with the partition and / filters applied. It is a copy, so the
+// tail can keep appending while a caller holds it.
+func (v *MessagesView) VisibleMessages() []kafka.ConsumedMessage {
+	f := parseFilter(v.filter)
+	out := make([]kafka.ConsumedMessage, 0, len(v.messages))
+	for i := len(v.messages) - 1; i >= 0; i-- {
+		if v.shows(v.messages[i], f) {
+			out = append(out, v.messages[i])
+		}
+	}
+	return out
+}
+
+// SelectedMessage returns the message under the cursor, or nil.
+func (v *MessagesView) SelectedMessage() *kafka.ConsumedMessage {
+	visible := v.VisibleMessages()
+	if idx := v.table.Cursor(); idx >= 0 && idx < len(visible) {
+		return &visible[idx]
+	}
+	return nil
+}
+
+// shows reports whether m passes the partition and / filters.
+func (v *MessagesView) shows(m kafka.ConsumedMessage, f rowFilter) bool {
+	if v.partitionFilter >= 0 && m.Partition != v.partitionFilter {
+		return false
+	}
+	return f.Empty() || f.MatchesAny(m.KeyDecoding.Shown(m.Key, v.raw), m.ValueDecoding.Shown(m.Value, v.raw))
+}
+
 // Loading returns true until the first message is received.
 func (v *MessagesView) Loading() bool { return v.loading }
 
@@ -415,16 +451,11 @@ func (v *MessagesView) rebuildRows() {
 	// Reverse order: newest first.
 	for i := len(v.messages) - 1; i >= 0; i-- {
 		m := v.messages[i]
-		// Apply partition filter.
-		if v.partitionFilter >= 0 && m.Partition != v.partitionFilter {
+		if !v.shows(m, f) {
 			continue
 		}
-		// Apply regex filter across key and value. A leading "!" negates.
 		key := m.KeyDecoding.Shown(m.Key, v.raw)
 		shown := m.ValueDecoding.Shown(m.Value, v.raw)
-		if !f.Empty() && !f.MatchesAny(key, shown) {
-			continue
-		}
 		value := strings.ReplaceAll(shown, "\n", " ")
 		value = strings.ReplaceAll(value, "\t", " ")
 		// Apply value scroll offset.
