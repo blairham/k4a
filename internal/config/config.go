@@ -220,11 +220,9 @@ func (ctx *Context) ResolveBrokers() (string, error) {
 }
 
 func (ctx *Context) fetchSSMParameter(paramName string) (string, error) {
+	// An empty region is passed through so awscreds.Load can fall back to
+	// the env and the profile's region before its us-east-1 default (#102).
 	region := ctx.Region
-	if region == "" {
-		region = awscreds.DefaultRegion
-	}
-
 	// Resolution is in-process (internal/awscreds): the SDK reads the profile's SSO
 	// session from ~/.aws/config, invoking granted when it's the profile's
 	// credential_process — so `k4a -p <Profile>` needs no `assume --exec` wrapper.
