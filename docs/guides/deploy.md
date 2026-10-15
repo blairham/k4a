@@ -164,6 +164,7 @@ these via env vars, so in-cluster the env column is what you actually edit.
 | `--tls-client-ca` | `K4A_INDEX_TLS_CLIENT_CA` | *(empty)* | Require a client certificate signed by this CA on every RPC except health checks (mTLS). Needs `--tls-cert`. |
 | `--token-file` | `K4A_INDEX_TOKEN_FILE` (or the token itself in `K4A_INDEX_TOKEN`) | *(empty: no token)* | Bearer token every RPC except health checks must present. Read once at startup. |
 | `--max-search-limit` | `K4A_INDEX_MAX_SEARCH_LIMIT` | `10000` | Most matches one Search returns; a larger or missing request limit is lowered to it and the answer reports capped. |
+| `--admin-listen` | `K4A_INDEX_ADMIN_LISTEN` | *(empty: off; chart `:9502`)* | Plain-HTTP admin port: `/metrics` (Prometheus), `/healthz`, `/readyz`. Asks no credential; carries topic names and counters, never record content. |
 | `--data-dir` | `K4A_INDEX_DATA_DIR` | k4a's `~/.k4a` | Index storage root. |
 | `--log-level` | `K4A_INDEX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 
@@ -257,6 +258,43 @@ checks; admit the load balancer's subnets with an `ipBlock` instead. If you
 also restrict egress, the daemon needs the brokers plus, for IAM auth, STS
 and the node-local credential agent.
 
+## Metrics and probes
+
+`k4a-index` serves the standard `grpc.health.v1` service on its gRPC port
+(open whatever credentials the listener asks for). It reports `SERVING`
+once the listener is up, after the pinned pre-follow set is open, and
+`NOT_SERVING` from SIGTERM on, so endpoints drop before in-flight RPCs
+drain. The chart's probes are gRPC probes against it; a TLS listener is
+probed through the admin port's `/readyz` instead, since the kubelet's gRPC
+probe has no TLS (or by TCP when `metrics.enabled` is false). Readiness
+does not wait for topics to warm (a cold topic answers with no coverage and
+the client scans) and does not track Kafka reachability (a warm index stays
+useful while the brokers are away); a wedged indexing drain is the
+drain-stall watchdog's job, which exits the process.
+
+With `metrics.enabled` (default on in the chart, port `metrics.port`
+9502) the admin port also serves Prometheus metrics:
+
+| Metric | Type | What |
+|---|---|---|
+| `k4a_index_followed_topics` | gauge | Topics followed now. |
+| `k4a_index_topic_indexed_records_total{topic}` | counter | Records handed to the indexer since the topic was followed. |
+| `k4a_index_topic_dropped_records_total{topic}` | counter | Records dropped on a full buffer, each one a coverage gap. Alert on any increase. |
+| `k4a_index_topic_buffered_records{topic}` | gauge | Records waiting to be indexed. |
+| `k4a_index_topic_lag_records{topic}` | gauge | Broker records past the newest indexed offset (partitions with indexed records), sampled every 15s. |
+| `k4a_index_topic_newest_record_timestamp_seconds{topic}` | gauge | Newest indexed record; `time() -` this is staleness. |
+| `k4a_index_topic_stored_bytes{topic}` | gauge | Bytes the index holds (what `--topic-max-bytes` caps). |
+| `k4a_index_topic_pinned{topic}` | gauge | 1 for a `--topic` pin. |
+| `k4a_index_searches_total{outcome}` | counter | `served`, `warming`, `denied`, `error`. |
+| `k4a_index_search_duration_seconds` | histogram | Latency of searches served from an index. |
+| `k4a_index_evictions_total{reason}` | counter | `cap`, `idle`, `disk_budget`, `tail_exit`. |
+
+plus the Go runtime and process collectors. Per-topic series disappear
+when the topic leaves the follow-set. `metrics.serviceMonitor.enabled`
+renders a prometheus-operator `ServiceMonitor`, and
+`networkPolicy.metricsFrom` limits who may reach the port when the
+NetworkPolicy is on. There is still no pprof endpoint.
+
 ## Operating notes
 
 - **Restarting is cheap.** Storage is an `emptyDir` on purpose: the index
@@ -266,7 +304,10 @@ and the node-local credential agent.
   exists because a wedged drain serves *nothing*, silently, for as long as
   nobody notices. If the daemon exits with a goroutine dump on stderr, that
   dump is the artifact — the distroless image has no shell and no pprof,
-  so it's the only root-cause evidence you'll get.
+  so it's the only root-cause evidence you'll get. Before it fires,
+  `k4a_index_topic_buffered_records` climbing while
+  `k4a_index_topic_indexed_records_total` stands still is the same wedge
+  seen from the outside.
 - **Coverage is honest by contract.** A client only gets an index-served
   answer for a window the daemon actually covers; anything else falls back
   to a client-side scan. So a cold, lagging, or trimmed index degrades to

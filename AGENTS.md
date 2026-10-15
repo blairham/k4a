@@ -388,7 +388,8 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - `golang.org/x/oauth2` — the OAUTHBEARER client-credentials grant (`internal/kafka/oauth.go`)
 - `aws-sdk-go-v2` — AWS shared config and credentials for IAM auth, and SSM parameter resolution
 - `blevesearch/bleve/v2` — the local and shared index (scorch, pure Go)
-- `google.golang.org/grpc` + `protobuf` — the k4a-index wire contract
+- `google.golang.org/grpc` + `protobuf` — the k4a-index wire contract (and its `grpc.health.v1` service)
+- `prometheus/client_golang` — k4a-index's `/metrics` on the admin port (`cmd/k4a-index/metrics.go`)
 - `modelcontextprotocol/go-sdk` — `k4a mcp` (stdio) and `k4a-mcp` (HTTP)
 - `blairham/tuikit` — Shared Charm TUI widgets
 - `charm.land/bubbletea`, `bubbles`, `lipgloss`, `huh` — TUI framework, components, styling, forms

@@ -302,6 +302,7 @@ func (m *manager) register(topic string, pinned bool) {
 	m.mu.Unlock()
 
 	if victim != nil {
+		evictionsTotal.WithLabelValues(evictCap).Inc()
 		log.Warn("follow: at cap — evicting coldest topic to make room",
 			"evicted", victimTopic, "for", topic, "cap", m.maxFollowed)
 		m.teardown(victimTopic, victim)
@@ -331,6 +332,7 @@ func (m *manager) tailExited(topic string, e *followEntry) {
 	}
 	m.mu.Unlock()
 	if owned {
+		evictionsTotal.WithLabelValues(evictTailExit).Inc()
 		m.retire(topic, e)
 	}
 }
@@ -464,6 +466,7 @@ func (m *manager) enforceDiskBudget() {
 				"used_bytes", total, "budget_bytes", m.maxTotalBytes)
 			return
 		}
+		evictionsTotal.WithLabelValues(evictDiskBudget).Inc()
 		freed := entry.worker.async.Inner().DiskBytes()
 		log.Warn("disk budget: evicting coldest topic to reclaim disk",
 			"topic", topic, "frees_bytes", freed, "used_bytes", total, "budget_bytes", m.maxTotalBytes)
@@ -551,6 +554,7 @@ func (m *manager) evictIdle() {
 	m.mu.Unlock()
 
 	for _, v := range victims {
+		evictionsTotal.WithLabelValues(evictIdle).Inc()
 		log.Info("follow: evicting idle topic (LRU)", "topic", v.topic, "idle_after", m.evictAfter)
 		m.teardown(v.topic, v.entry)
 	}
@@ -637,6 +641,16 @@ func (m *manager) stopAll() {
 		}
 	}
 	m.wg.Wait()
+}
+
+// snapshot copies the follow-set for a metrics scrape, so the collector reads
+// worker counters without holding the lock the query path takes.
+func (m *manager) snapshot() map[string]*followEntry {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]*followEntry, len(m.set))
+	maps.Copy(out, m.set)
+	return out
 }
 
 // size returns the current followed-topic count.

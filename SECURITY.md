@@ -86,6 +86,10 @@ searches over gRPC for anyone who can reach it.
   `docs/design/shared-index-service.md`) does not exist yet. Without
   credentials configured, **the network is the boundary**: expose the port
   only on a private network.
+- **The admin port** (`--admin-listen`; the chart's `metrics.port`, 9502)
+  serves Prometheus metrics and plain-HTTP health with no credential. It
+  exposes followed topic names and counters, never record content; restrict
+  it to the scraper (`networkPolicy.metricsFrom`).
 - **A search is bounded.** `--max-search-limit` (default 10000) lowers any
   larger or missing request limit and reports the answer as capped. Search
   patterns, which can hold what a caller is looking for (an email address,

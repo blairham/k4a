@@ -160,7 +160,23 @@ storage:
   # The /tmp emptyDir that stands in for the read-only root filesystem.
   tmpSizeLimit: 64Mi
 
-# Optional NetworkPolicy, default off. Admits ingress to the gRPC port only.
+# Prometheus metrics and plain-HTTP health on a separate port
+# (K4A_INDEX_ADMIN_LISTEN): /metrics, /healthz, /readyz. It carries topic names
+# and counters, never record content, and asks no credential, so keep it to
+# the scraper with networkPolicy.metricsFrom.
+metrics:
+  enabled: true
+  port: 9502
+  # A prometheus-operator ServiceMonitor for the metrics port. Needs the
+  # monitoring.coreos.com CRDs; labels are added to match your Prometheus's
+  # serviceMonitorSelector.
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+# Optional NetworkPolicy, default off. Admits ingress to the gRPC port, and to
+# the metrics port when metrics are enabled.
 networkPolicy:
   enabled: false
   # NetworkPolicyPeer list allowed to reach the gRPC port; empty = any source
@@ -170,6 +186,9 @@ networkPolicy:
   #     - podSelector: {matchLabels: {app.kubernetes.io/name: k4a-mcp}}
   #     - ipBlock: {cidr: 10.0.0.0/16}
   ingressFrom: []
+  # NetworkPolicyPeer list allowed to reach the metrics port (the Prometheus
+  # pods); empty = any source, on that port only.
+  metricsFrom: []
   # NetworkPolicyEgressRule list. Empty = egress is not restricted. If you set
   # it, allow DNS, the brokers and, for IAM auth, STS and the credential agent.
   egress: []
