@@ -44,6 +44,9 @@ type View interface {
 type FormView interface {
 	View
 	HandleKeyMsg(tea.KeyMsg) tea.Cmd
+	// Editing reports whether the form is still taking input. While it is,
+	// printable keys belong to the focused field, not to global shortcuts.
+	Editing() bool
 }
 
 // Stoppable is an optional interface for views that manage background

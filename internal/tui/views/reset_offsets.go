@@ -153,6 +153,9 @@ func (v *ResetOffsetsView) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// Editing reports whether the form is still taking input.
+func (v *ResetOffsetsView) Editing() bool { return v.state == resetOffsetsStateForm }
+
 // HandleKeyMsg processes tea.KeyMsg for form interaction.
 func (v *ResetOffsetsView) HandleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	if v.state != resetOffsetsStateForm {
