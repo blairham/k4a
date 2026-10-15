@@ -77,9 +77,14 @@ actionable.
 
 IAM auth is the de facto MSK path. Three things happen:
 
-1. Default region is `awscreds.DefaultRegion` (`us-east-1`) if neither
-   flag nor config provides one (matches the AWS SDK default but explicit
-   so a misconfigured profile doesn't pick a surprising region).
+1. The region resolves as: `--region` / the context's `region:` (an
+   explicit value always wins), else `AWS_REGION` / `AWS_DEFAULT_REGION`
+   as the SDK reads them, else the shared-config profile's `region`, else
+   `awscreds.DefaultRegion` (`us-east-1`). Callers pass an empty region
+   through rather than pre-filling `us-east-1`; `awscreds.Load` applies the
+   fallback only after `LoadDefaultConfig` has resolved nothing. Until #102
+   the fallback was passed to the SDK as `WithRegion`, which overrode the
+   profile, so a profile's `region` was never used.
 2. AWS config loads via `internal/awscreds.Load` — `LoadDefaultConfig` with
    optional `WithSharedConfigProfile`. Credentials come from whatever
    `~/.aws/config`/`credentials`, env, or pod identity provides.
@@ -180,9 +185,10 @@ This is the kubectl-style flag-overrides-env-overrides-config pattern.
 Every connection flag takes part (`overlayAuth` in
 `internal/command/flags.go`, shared by the TUI and the headless
 commands): an empty value means "not set" and keeps the context's.
-`--region` therefore has no flag default — `us-east-1` is filled in only
-for a `--brokers` connection with no context behind it — so an explicit
-`--region us-east-1` still overrides a context in another region.
+`--region` therefore has no flag default — an unset region stays empty
+all the way to `awscreds.Load`, which consults the env and the profile
+before falling back to `us-east-1` — so an explicit `--region us-east-1`
+still overrides a context in another region.
 A `--brokers` connection without `--auth` infers the method
 (`kafka.InferAuthMethod`, used by the CLI, the TUI and `k4a-index` alike):
 credentials mean `scram`, any OAuth setting means

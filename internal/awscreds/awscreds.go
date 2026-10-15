@@ -13,23 +13,32 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 )
 
-// DefaultRegion is used when neither the caller nor the profile names one.
+// DefaultRegion is used when neither the caller, the environment, nor the
+// profile names one.
 const DefaultRegion = "us-east-1"
 
 // Load returns an AWS config for profile (empty means the SDK's default
-// chain) in region (empty means DefaultRegion). The SDK reads the profile's
-// SSO session or credential_process from ~/.aws/config itself.
+// chain). The SDK reads the profile's SSO session or credential_process from
+// ~/.aws/config itself.
+//
+// The region resolves as: region if non-empty, else whatever the SDK
+// resolves (AWS_REGION / AWS_DEFAULT_REGION, then the profile's region),
+// else DefaultRegion. Callers must pass "" rather than DefaultRegion when
+// nothing was configured, or the profile's region is overridden.
 func Load(ctx context.Context, profile, region string) (aws.Config, error) {
-	if region == "" {
-		region = DefaultRegion
+	var opts []func(*config.LoadOptions) error
+	if region != "" {
+		opts = append(opts, config.WithRegion(region))
 	}
-	opts := []func(*config.LoadOptions) error{config.WithRegion(region)}
 	if profile != "" {
 		opts = append(opts, config.WithSharedConfigProfile(profile))
 	}
 	cfg, err := config.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("loading AWS config (profile %q): %w", profile, err)
+	}
+	if cfg.Region == "" {
+		cfg.Region = DefaultRegion
 	}
 	return cfg, nil
 }
