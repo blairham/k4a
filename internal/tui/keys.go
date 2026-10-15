@@ -260,11 +260,7 @@ func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 		return "", c
 	case "search", "s":
 		// Open the search bar (same as pressing `s` in Messages).
-		topic := ""
-		if v := typedView[*views.MessagesView](a, style.ViewMessages); v != nil {
-			topic = v.Topic()
-		}
-		_, c := a.handleAction(actionSearch, topic)
+		_, c := a.handleAction(actionSearch, a.searchTopic())
 		return "", c
 	case "upgrade":
 		// Checked before quitting: the upgrade itself runs after the TUI
@@ -316,15 +312,28 @@ func (a *App) setLogoless(v bool) {
 	a.resizeActiveView()
 }
 
-// executeSearch dispatches the search action with the typed query for the
-// current Messages topic. Called from the search-mode Prompt dispatcher.
-func (a *App) executeSearch(query string) (tea.Model, tea.Cmd) {
+// searchTopic is the topic :search means: the one the active view is about.
+// It reads the active view only — viewMap keeps the last Messages view after
+// a tab switch, and searching that topic from Topics would surprise.
+func (a *App) searchTopic() string {
+	switch v := a.activeView().(type) {
+	case *views.MessagesView:
+		return v.Topic()
+	case *views.TopicDetailView:
+		return v.Topic()
+	case *views.TopicsView:
+		name, _ := v.SelectedTopic()
+		return name
+	}
+	return ""
+}
+
+// executeSearch dispatches the search action for topic with the typed query.
+// Called from the search-mode Prompt dispatcher, which captured topic when
+// the bar opened.
+func (a *App) executeSearch(topic, query string) (tea.Model, tea.Cmd) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return a, nil
-	}
-	v := typedView[*views.MessagesView](a, style.ViewMessages)
-	if v == nil {
 		return a, nil
 	}
 	// Tier 1 session: remember the query so we can offer it as a
@@ -333,7 +342,7 @@ func (a *App) executeSearch(query string) (tea.Model, tea.Cmd) {
 	if a.session != nil {
 		_ = a.session.AddRecentSearch(query) //nolint:errcheck // best-effort session persistence
 	}
-	return a.handleAction(actionSearch, v.Topic()+"\x00"+query)
+	return a.handleAction(actionSearch, topic+"\x00"+query)
 }
 
 // executeValueAction dispatches a value-prompt action (the non-confirm

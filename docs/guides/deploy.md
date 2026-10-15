@@ -63,15 +63,18 @@ both are installed in the same namespace.
 | Value | Env | Notes |
 |---|---|---|
 | `kafka.brokers` | `KAFKA_BROKERS` | Bootstrap servers, comma-separated. Required. |
-| `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram`, `mtls`, `iam`. Default `iam`. |
+| `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram` (SHA-512), `scram-sha-256`, `plain`, `oauthbearer`, `mtls`, `iam`. Default `iam`. |
 | `aws.region` | `AWS_REGION` | Region for IAM auth. Rendered only when set; the daemon defaults to `us-east-1`. |
 | `kafka.insecure` | `--insecure` | Skip TLS certificate verification. Passed as an argument (the flag has no env). Testing only. |
-| `kafka.credentials.existingSecret` (`.usernameKey`, `.passwordKey`) | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | SASL/SCRAM credentials from an existing Secret. Keys default to `username` / `password`. |
+| `kafka.noTLS` | `--no-tls` | Run a SASL method without TLS (`SASL_PLAINTEXT`); the password or token crosses the network in cleartext and the daemon logs a warning. Passed as an argument. Development brokers only. |
+| `kafka.credentials.existingSecret` (`.usernameKey`, `.passwordKey`) | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | SASL username/password (`scram`, `scram-sha-256`, `plain`) from an existing Secret. Keys default to `username` / `password`. |
+| `kafka.oauth.tokenUrl`, `.clientId`, `.scopes` | `KAFKA_OAUTH_TOKEN_URL`, `KAFKA_OAUTH_CLIENT_ID`, `KAFKA_OAUTH_SCOPES` | OAUTHBEARER client-credentials grant. The token URL must be `https`. |
+| `kafka.oauth.existingSecret` (`.clientSecretKey`, `.tokenKey`) | `KAFKA_OAUTH_CLIENT_SECRET`, `KAFKA_OAUTH_TOKEN` | The client secret for the grant, or instead a static token, from an existing Secret. Set one of the two keys. |
 | `kafka.tls.existingSecret` (`.caKey`, `.certKey`, `.keyKey`) | `KAFKA_TLS_CA`, `KAFKA_TLS_CERT`, `KAFKA_TLS_KEY` | Secret mounted read-only at `/etc/k4a/tls`; each non-empty key becomes the matching file path. Keys default to `ca.crt` / `tls.crt` / `tls.key`. `mtls` needs all three. |
 | `serviceAccount.name` / `.annotations` | — | The pod's identity (empty name = the release fullname). For `iam` on EKS, bind it to an IAM role with EKS Pod Identity, or annotate it with the role ARN for IRSA. |
 
 With `iam` the daemon picks up the pod's AWS credentials, so no SASL secret is
-involved; `scram`, `tls` and `mtls` take their material from the two
+involved; the SASL methods, `tls` and `mtls` take their material from the
 `existingSecret` values above, which the chart never creates.
 
 ### Release naming
@@ -168,7 +171,10 @@ Connection flags mirror the headless CLI (`--context`/`--config`, or
 `-b/--brokers` + `--auth`/`--region`/`--profile`/TLS files), with env
 equivalents `KAFKA_BROKERS`, `KAFKA_AUTH`, `AWS_REGION`, `AWS_PROFILE`,
 `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_TLS_CA`, `KAFKA_TLS_CERT`,
-`KAFKA_TLS_KEY`.
+`KAFKA_TLS_KEY`, and for OAUTHBEARER `KAFKA_OAUTH_TOKEN`,
+`KAFKA_OAUTH_TOKEN_FILE`, `KAFKA_OAUTH_TOKEN_URL`, `KAFKA_OAUTH_CLIENT_ID`,
+`KAFKA_OAUTH_CLIENT_SECRET`, `KAFKA_OAUTH_SCOPES`. `--insecure` and
+`--no-tls` have no env form.
 
 The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 (`kafka.auth`), `AWS_REGION` (`aws.region`, when set), `K4A_INDEX_ALLOW`,

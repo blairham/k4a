@@ -104,7 +104,7 @@ searches over gRPC for anyone who can reach it.
   index under `--data-dir`. Protect that volume as you would the topics, and
   bound it with `--topic-max-bytes` and `--max-total-bytes`.
 - Its Kafka credentials and TLS options are the CLI's (above), including
-  `--insecure`.
+  `--insecure` and `--no-tls`.
 
 ### `k4a-mcp`, the networked MCP server
 

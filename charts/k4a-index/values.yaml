@@ -60,19 +60,35 @@ listener:
 kafka:
   # Bootstrap servers, comma-separated. Required. Rendered as KAFKA_BROKERS.
   brokers: ""
-  # Auth method: plaintext, tls, scram, mtls, iam. Rendered as KAFKA_AUTH.
+  # Auth method: plaintext, tls, scram (SHA-512), scram-sha-256, plain,
+  # oauthbearer, mtls, iam. Rendered as KAFKA_AUTH.
   # With iam the daemon uses the pod's AWS credentials (Pod Identity / IRSA),
   # so no SASL secret is needed.
   auth: iam
   # Skip TLS certificate verification (--insecure). Testing only.
   insecure: false
-  # SASL/SCRAM credentials (auth: scram) from an existing Secret in the release
-  # namespace. Rendered as KAFKA_USERNAME / KAFKA_PASSWORD when set.
+  # Run a SASL method (scram, scram-sha-256, plain, oauthbearer) without TLS
+  # (--no-tls, SASL_PLAINTEXT). The password or token then crosses the network
+  # in cleartext; for an in-cluster development broker only.
+  noTLS: false
+  # SASL username/password (auth: scram, scram-sha-256, plain) from an existing
+  # Secret in the release namespace. Rendered as KAFKA_USERNAME / KAFKA_PASSWORD when set.
   credentials:
     existingSecret: ""
     usernameKey: username
     passwordKey: password
-  # TLS material (auth: tls, mtls, or scram over TLS) from an existing Secret,
+  # OAUTHBEARER (auth: oauthbearer). Either the client-credentials grant
+  # (tokenUrl + clientId, with the client secret under clientSecretKey in
+  # existingSecret), or a static token under tokenKey in existingSecret. Set
+  # one; the daemon refuses both. Rendered as KAFKA_OAUTH_*.
+  oauth:
+    tokenUrl: ""
+    clientId: ""
+    scopes: ""
+    existingSecret: ""
+    clientSecretKey: ""
+    tokenKey: ""
+  # TLS material (auth: tls, mtls, or a SASL method over TLS) from an existing Secret,
   # mounted read-only at /etc/k4a/tls. Each key that is non-empty becomes the
   # matching file env var: caKey -> KAFKA_TLS_CA, certKey -> KAFKA_TLS_CERT,
   # keyKey -> KAFKA_TLS_KEY. The defaults match a kubernetes.io/tls Secret with

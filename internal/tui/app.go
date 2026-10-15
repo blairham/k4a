@@ -116,12 +116,15 @@ type indexerEntry struct {
 
 // App is the root bubbletea model.
 type App struct {
-	filterBar        *chrome.FilterBar
-	client           *kafka.Client
-	viewMap          map[style.ViewType]views.View
-	promptDispatch   chrome.Dispatch
-	session          *state.Session
-	searchCache      *searchcache.Cache
+	filterBar      *chrome.FilterBar
+	client         *kafka.Client
+	viewMap        map[style.ViewType]views.View
+	promptDispatch chrome.Dispatch
+	session        *state.Session
+	searchCache    *searchcache.Cache
+	// searchFunc replaces searchRunner when set, so a test can open a
+	// search without scanning a broker.
+	searchFunc       views.SearchFunc
 	remoteIndex      *remoteindex.Client
 	commandBar       *chrome.CommandBar
 	stateRoot        *state.Root

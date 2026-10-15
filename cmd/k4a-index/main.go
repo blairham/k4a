@@ -55,9 +55,9 @@ type flags struct {
 	KeyFile       string        `long:"key"                     env:"KAFKA_TLS_KEY"                     description:"Client private key PEM file (mTLS)"`
 	Profile       string        `long:"profile"                 env:"AWS_PROFILE"                       description:"AWS profile (IAM auth)"                                                                                                                                                                                                                                                                                                       short:"p"`
 	Brokers       string        `long:"brokers"                 env:"KAFKA_BROKERS"                     description:"Bootstrap servers (comma-separated); overrides config"                                                                                                                                                                                                                                                                        short:"b"`
-	Auth          string        `long:"auth"                    env:"KAFKA_AUTH"                        description:"Auth method: plaintext, tls, scram, mtls, iam"                                                                                                                                                                                                                                                                                short:"a"`
-	Username      string        `long:"username"                env:"KAFKA_USERNAME"                    description:"SASL/SCRAM username"`
-	Password      string        `long:"password"                env:"KAFKA_PASSWORD"                    description:"SASL/SCRAM password"`
+	Auth          string        `long:"auth"                    env:"KAFKA_AUTH"                        description:"Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam"                                                                                                                                                                                                                                             short:"a"`
+	Username      string        `long:"username"                env:"KAFKA_USERNAME"                    description:"SASL username (scram, scram-sha-256, plain)"`
+	Password      string        `long:"password"                env:"KAFKA_PASSWORD"                    description:"SASL password (scram, scram-sha-256, plain)"`
 	ConfigFile    string        `long:"config"                                                          description:"Config file path (default: ~/.k4a/config.yaml)"`
 	CAFile        string        `long:"ca"                      env:"KAFKA_TLS_CA"                      description:"CA certificate PEM file"`
 	Region        string        `long:"region"                  env:"AWS_REGION"                        description:"AWS region (IAM auth)"                                                                                                                                                                                                                                                                                                        short:"r"`
@@ -82,6 +82,31 @@ type flags struct {
 	TokenFile     string        `long:"token-file"              env:"K4A_INDEX_TOKEN_FILE"              description:"File holding the bearer token every RPC except health checks must present. K4A_INDEX_TOKEN sets it directly."`
 	MaxLimit      int           `long:"max-search-limit"        env:"K4A_INDEX_MAX_SEARCH_LIMIT"        description:"Most matches one Search returns; a larger or unset request limit is lowered to this and the answer reports capped."                                                                                                                                                                                                                     default:"10000"`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
+	NoTLS         bool          `long:"no-tls"                                                          description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
+
+	OAuth oauthFlags
+}
+
+// oauthFlags configures OAUTHBEARER, mirroring the CLI's flags of the same
+// names: a static token, a token file, or the client-credentials grant.
+type oauthFlags struct {
+	Token        string `long:"oauth-token"         env:"KAFKA_OAUTH_TOKEN"         description:"OAUTHBEARER static bearer token"`
+	TokenFile    string `long:"oauth-token-file"    env:"KAFKA_OAUTH_TOKEN_FILE"    description:"OAUTHBEARER token file, re-read on every connection"`
+	TokenURL     string `long:"oauth-token-url"     env:"KAFKA_OAUTH_TOKEN_URL"     description:"OAUTHBEARER client-credentials token endpoint (https)"`
+	ClientID     string `long:"oauth-client-id"     env:"KAFKA_OAUTH_CLIENT_ID"     description:"OAUTHBEARER client ID"`
+	ClientSecret string `long:"oauth-client-secret" env:"KAFKA_OAUTH_CLIENT_SECRET" description:"OAUTHBEARER client secret"`
+	Scopes       string `long:"oauth-scopes"        env:"KAFKA_OAUTH_SCOPES"        description:"OAUTHBEARER scopes (comma-separated)"`
+}
+
+func (o oauthFlags) config() kafka.OAuthConfig {
+	return kafka.OAuthConfig{
+		Token:        o.Token,
+		TokenFile:    o.TokenFile,
+		TokenURL:     o.TokenURL,
+		ClientID:     o.ClientID,
+		ClientSecret: o.ClientSecret,
+		Scopes:       o.Scopes,
+	}
 }
 
 func main() {
@@ -123,6 +148,9 @@ func run(args []string) int {
 		return 1
 	}
 	log.Info("resolved connection", "brokers", brokers, "auth", authCfg.Method)
+	if w := kafka.CleartextWarning(authCfg); w != "" {
+		log.Warn(w)
+	}
 
 	client, err := kafka.NewClient(authCfg, brokers)
 	if err != nil {
@@ -449,7 +477,9 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 		CAFile:   f.CAFile,
 		Region:   f.Region,
 		Profile:  f.Profile,
+		OAuth:    f.OAuth.config(),
 		Insecure: f.Insecure,
+		NoTLS:    f.NoTLS,
 	}
 	if f.Brokers != "" {
 		// A direct connection has no context to inherit defaults from.
@@ -490,7 +520,7 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 // the daemon resolves its connection without importing the command package.
 // An empty value means "not set", which is why --region has no flag default:
 // an explicit --region us-east-1 must still override a context in another
-// region. --insecure can only turn verification off.
+// region. --insecure can only turn verification off, and --no-tls only TLS.
 func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
 	for _, f := range []struct{ dst, src *string }{
 		{&base.Username, &flags.Username},
@@ -500,6 +530,12 @@ func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
 		{&base.CAFile, &flags.CAFile},
 		{&base.Region, &flags.Region},
 		{&base.Profile, &flags.Profile},
+		{&base.OAuth.Token, &flags.OAuth.Token},
+		{&base.OAuth.TokenFile, &flags.OAuth.TokenFile},
+		{&base.OAuth.TokenURL, &flags.OAuth.TokenURL},
+		{&base.OAuth.ClientID, &flags.OAuth.ClientID},
+		{&base.OAuth.ClientSecret, &flags.OAuth.ClientSecret},
+		{&base.OAuth.Scopes, &flags.OAuth.Scopes},
 	} {
 		if *f.src != "" {
 			*f.dst = *f.src
@@ -510,6 +546,9 @@ func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
 	}
 	if flags.Insecure {
 		base.Insecure = true
+	}
+	if flags.NoTLS {
+		base.NoTLS = true
 	}
 	return base
 }
