@@ -53,21 +53,21 @@ func (r *Registry) DecodeMessage(ctx context.Context, m *kafka.ConsumedMessage) 
 	if r == nil {
 		return
 	}
-	m.KeyDecoding = r.decodeField(ctx, m.Topic, true, m.RawKey, &m.Key)
-	m.ValueDecoding = r.decodeField(ctx, m.Topic, false, m.RawValue, &m.Value)
+	m.KeyDecoding = r.decodeField(ctx, m.Topic, true, m.KeySchemaID, m.RawKey, &m.Key)
+	m.ValueDecoding = r.decodeField(ctx, m.Topic, false, m.ValueSchemaID, m.RawValue, &m.Value)
 }
 
 func (r *Registry) decodeField(
 	ctx context.Context,
 	topic string,
 	isKey bool,
-	raw []byte,
+	schemaID, raw []byte,
 	shown *string,
 ) kafka.Decoding {
 	if raw == nil {
 		return kafka.Decoding{}
 	}
-	d, err := r.Decode(ctx, topic, isKey, raw)
+	d, err := r.DecodeWithHeader(ctx, topic, isKey, schemaID, raw)
 	switch {
 	case errors.Is(err, ErrNotFramed):
 		return kafka.Decoding{}

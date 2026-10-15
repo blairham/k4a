@@ -38,16 +38,19 @@ func recordToConsumed(r *kgo.Record) ConsumedMessage {
 			Value: bytesToDisplay(h.Value),
 		})
 	}
+	keyID, valueID := schemaIDHeaders(r.Headers)
 	return ConsumedMessage{
-		Key:       bytesToDisplay(r.Key),
-		Value:     bytesToDisplay(r.Value),
-		RawKey:    framedCopy(r.Key),
-		RawValue:  framedCopy(r.Value),
-		Topic:     r.Topic,
-		Headers:   headers,
-		Partition: int(r.Partition),
-		Offset:    r.Offset,
-		Time:      r.Timestamp,
+		Key:           bytesToDisplay(r.Key),
+		Value:         bytesToDisplay(r.Value),
+		RawKey:        rawCopy(r.Key, keyID),
+		RawValue:      rawCopy(r.Value, valueID),
+		KeySchemaID:   keyID,
+		ValueSchemaID: valueID,
+		Topic:         r.Topic,
+		Headers:       headers,
+		Partition:     int(r.Partition),
+		Offset:        r.Offset,
+		Time:          r.Timestamp,
 	}
 }
 

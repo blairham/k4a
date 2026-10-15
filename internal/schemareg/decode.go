@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/sr"
-	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // maxReferenceDepth stops a reference cycle (which the registry should
@@ -25,22 +24,30 @@ type Decoded struct {
 	// subject version the ID belongs to.
 	Subject string
 	Format  string
+	// GUID is set when a record header named the schema by GUID; ID is then
+	// the registry's numeric ID for it, or 0 if it did not say.
+	GUID    string
 	ID      int
 	Version int
 }
 
 // Ref is a one-line description of the schema, for a metadata card.
 func (d Decoded) Ref() string {
-	if d.Subject == "" {
-		return fmt.Sprintf("id %d (%s)", d.ID, d.Format)
+	id := fmt.Sprintf("id %d", d.ID)
+	if d.GUID != "" {
+		id = "guid " + d.GUID
 	}
-	return fmt.Sprintf("%s v%d (id %d, %s)", d.Subject, d.Version, d.ID, d.Format)
+	if d.Subject == "" {
+		return fmt.Sprintf("%s (%s)", id, d.Format)
+	}
+	return fmt.Sprintf("%s v%d (%s, %s)", d.Subject, d.Version, id, d.Format)
 }
 
 // schema is one compiled registry schema.
 type schema struct {
 	avro     *avroSchema
-	proto    protoreflect.FileDescriptor
+	proto    *protoSchema
+	guid     string
 	versions []sr.SubjectVersion
 	typ      sr.SchemaType
 	id       int
@@ -51,11 +58,23 @@ type schema struct {
 // default TopicNameStrategy subject, <topic>-key or <topic>-value, wins).
 // A payload without the wire-format header returns ErrNotFramed.
 func (r *Registry) Decode(ctx context.Context, topic string, isKey bool, payload []byte) (Decoded, error) {
-	id, body, ok := ParseHeader(payload)
-	if !ok {
-		return Decoded{}, ErrNotFramed
+	return r.DecodeWithHeader(ctx, topic, isKey, nil, payload)
+}
+
+// DecodeWithHeader is Decode for a record that may carry its schema ID in a
+// __key_schema_id / __value_schema_id header (schemaID, nil when absent) and
+// the payload unprefixed, as Confluent Platform 8 serializers write it. Like
+// Confluent's own deserializer, a header wins over the payload prefix; one
+// that cannot be parsed falls back to the prefix, and is reported only when
+// the payload is not framed either.
+func (r *Registry) DecodeWithHeader(
+	ctx context.Context, topic string, isKey bool, schemaID, payload []byte,
+) (Decoded, error) {
+	ref, body, protoIdx, err := locateSchema(schemaID, payload)
+	if err != nil {
+		return Decoded{}, err
 	}
-	sch, err := r.lookup(ctx, id)
+	sch, err := r.lookup(ctx, ref)
 	if err != nil {
 		return Decoded{}, err
 	}
@@ -64,18 +83,54 @@ func (r *Registry) Decode(ctx context.Context, topic string, isKey bool, payload
 	case sr.TypeAvro:
 		out, err = decodeAvro(sch.avro, body)
 	case sr.TypeProtobuf:
-		out, err = decodeProtobuf(sch.proto, body)
+		out, err = decodeProtobuf(sch.proto, protoIdx, body)
 	case sr.TypeJSON:
 		out, err = decodeJSON(body)
 	default:
 		err = fmt.Errorf("unsupported schema type %s", sch.typ)
 	}
 	if err != nil {
-		return Decoded{}, fmt.Errorf("schema id %d (%s): %w", id, sch.typ, err)
+		return Decoded{}, fmt.Errorf("%s (%s): %w", refLabel(ref), sch.typ, err)
 	}
-	d := Decoded{JSON: out, ID: id, Format: sch.typ.String()}
+	d := Decoded{JSON: out, ID: sch.id, GUID: sch.guid, Format: sch.typ.String()}
 	d.Subject, d.Version = pickSubject(sch.versions, topic, isKey)
 	return d, nil
+}
+
+// locateSchema finds which schema a payload names and where its encoded body
+// starts. protoIdx is the bytes holding the Protobuf message-index path: the
+// body itself for a prefixed payload, the header's tail for a header (empty
+// there meaning [0]).
+func locateSchema(schemaID, payload []byte) (ref schemaRef, body, protoIdx []byte, err error) {
+	if schemaID != nil {
+		if id, guid, rest, ok := ParseSchemaIDHeader(schemaID); ok {
+			return schemaRef{id: id, guid: guid}, payload, headerIndexes(rest), nil
+		}
+	}
+	id, body, ok := ParseHeader(payload)
+	if !ok {
+		if schemaID != nil {
+			return schemaRef{}, nil, nil, fmt.Errorf("schema ID header %x is neither a GUID nor an ID", schemaID)
+		}
+		return schemaRef{}, nil, nil, ErrNotFramed
+	}
+	return schemaRef{id: id}, body, nil, nil
+}
+
+// headerIndexes marks a header's message-index tail as separate from the body
+// even when empty, which Confluent writes for the default path [0].
+func headerIndexes(rest []byte) []byte {
+	if len(rest) == 0 {
+		return []byte{0}
+	}
+	return rest
+}
+
+func refLabel(ref schemaRef) string {
+	if ref.guid != "" {
+		return "schema guid " + ref.guid
+	}
+	return fmt.Sprintf("schema id %d", ref.id)
 }
 
 func pickSubject(versions []sr.SubjectVersion, topic string, isKey bool) (string, int) {
@@ -109,7 +164,7 @@ func compile(ctx context.Context, r *Registry, s sr.Schema) (*schema, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &schema{typ: s.Type, proto: fd}, nil
+		return &schema{typ: s.Type, proto: newProtoSchema(fd)}, nil
 	case sr.TypeJSON:
 		// The payload is JSON already; the schema adds nothing to display.
 		return &schema{typ: s.Type}, nil
