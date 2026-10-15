@@ -70,7 +70,7 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 `ui` (default), `produce`, `consume`, `verify`, `create-topic`, `create-acl`,
 `delete-topic`, `describe-topic`, `topic-size`, `list-acls`, `alter-config`,
 `alter-replication`, `contexts`, `use-context`, `version`, `upgrade`, `state`,
-`config`, `search`, `mcp`.
+`index`, `config`, `search`, `mcp`.
 
 An unrecognized first argument is treated as flags for `ui`, so `k4a --context
 staging` still opens the TUI.

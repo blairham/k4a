@@ -8,7 +8,7 @@ unbuilt. The shared deployment of the same machinery is
 **Depends on:** [`state-management.md`](state-management.md) — this design
 adds Tier 3 state per that doc's tiering model.
 **Code:** `internal/index/` (`index.go`, `query.go`, `pattern.go`,
-`async.go`, `catchup.go`, `inventory.go`); dispatch from
+`async.go`, `catchup.go`, `inventory.go`, `clear.go`); dispatch from
 `internal/tui/actions.go` and `internal/searchcache/wrap.go`; the scan
 floor in `internal/kafka/deep_search.go`.
 
@@ -276,11 +276,16 @@ sees that their k4a isn't the active indexer.
 
 > **Not shipped locally.** The only config key that exists today is
 > `index.enabled` (`internal/config.Index`) — there are no
-> `max_per_topic_gb` / `max_age_days` / per-topic override keys, and no
-> `k4a index status` / `k4a index clear` subcommands. The **local** index
-> is uncapped: `index.NewAsync` deliberately wires no trim cap, so it grows
-> until the user clears it with `k4a state clear index` (`k4a state status`
-> reports its size). The byte-cap trimmer described below **is**
+> `max_per_topic_gb` / `max_age_days` / per-topic override keys. The
+> **local** index is uncapped: `index.NewAsync` deliberately wires no trim
+> cap, so it grows until the user clears it. `k4a index status` lists each
+> topic index with its size and coverage; `k4a index clear <topic>...
+> [--cluster ID]` and `k4a index clear --all` remove them
+> (`internal/command/index.go`, `internal/index/clear.go`). A clear takes
+> each topic's writer lock first and leaves any index another k4a process
+> is writing in place, reporting it and exiting non-zero; a topic clear
+> also removes that topic's `.bak.*` copies. `k4a state clear index`
+> still removes the whole tier without checking locks. The byte-cap trimmer described below **is**
 > implemented (`(*Indexer).Trim`, driven by `AsyncOptions.TrimBytes`) but
 > only the shared daemon sets it — see
 > [`shared-index-service.md`](shared-index-service.md) §Per-topic
@@ -394,7 +399,9 @@ behavior at any step.
 ### Tier 4 — Retention & disk management (≈ 1 week)
 - Background trimmer enforces per-topic caps
 - `k4a index status` CLI command lists topic indexes, sizes, ages
-- `k4a index clear <topic>` and `k4a index clear --all` for explicit cleanup
+  (shipped)
+- `k4a index clear <topic>` and `k4a index clear --all` for explicit
+  cleanup (shipped; refuses a topic whose writer lock is held)
 - Bookkeeper exposes age + size via UI (Topics view gains an "indexed?"
   column maybe)
 - **Ships:** users have control of disk usage; index isn't a runaway
