@@ -194,8 +194,14 @@ the same change.
   a framed payload was not decoded
 
 Copy and export take what is on screen, decoded or raw, and say which. Copy
-is OSC 52 (`internal/tui/clipboard.go`; under tmux it is also sent through
-the DCS passthrough), so it works over SSH; export (`internal/tui/export.go`)
+(`internal/tui/clipboard.go`, `clipboard_native.go`) follows `ui.clipboard`:
+`auto` (default) runs a native tool on a local session — `pbcopy`, else
+`wl-copy` under Wayland, `xclip` / `xsel` under X, found at runtime — and
+sends OSC 52 over SSH (`SSH_CONNECTION` / `SSH_TTY`), where only the
+terminal reaches the user's clipboard; `osc52` and `native` force one, and a
+tool that fails or is missing falls back to OSC 52. Under tmux OSC 52 is
+also sent through the DCS passthrough. The command runner is a field so
+tests never touch the real clipboard (`fakeClipboard`). Export (`internal/tui/export.go`)
 writes one JSON record per line with topic, partition, offset, timestamp,
 key, value, headers and a `decoding` block, never under `~/.k4a`, and asks
 before overwriting.
@@ -208,6 +214,8 @@ before overwriting.
 - `/` — filter the matches locally (key/value); enter, export and
   Message Detail's n/N follow the filtered list
 - `e` — export the matches so far (as filtered) to JSONL
+- `c` / `K` / `C` — copy the selected match's value / key / whole record as
+  JSON (the same copy action as Messages)
 
 ### ACLs View
 
@@ -362,6 +370,7 @@ contexts:
 ui:
   logoless: true    # Hide ASCII logo (like k9s ui.logoless)
   readonly: false   # true blocks every mutating operation
+  clipboard: auto   # auto | osc52 | native — how TUI copy reaches the clipboard
 index:
   enabled: false    # true opts in to the local Tier 3 rolling index
 ```
@@ -377,7 +386,7 @@ overridden by `--schema-registry-*` on `ui` and `consume` (see
 
 The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,
-`index.enabled`.
+`ui.clipboard`, `index.enabled`.
 
 SSM parameter resolution for broker endpoints. Env var expansion: `brokers`
 expands `$VAR` anywhere; credentials, cert paths and other string flags only

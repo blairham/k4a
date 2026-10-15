@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -70,8 +69,9 @@ func (a *App) copyMessage(what string) tea.Cmd {
 	if dec.Decoded() {
 		label += map[bool]string{true: " (raw)", false: " (decoded)"}[raw]
 	}
-	a.flash = fmt.Sprintf("copied %s, %s, to the clipboard", label, formatSize(len(text)))
-	return tea.Raw(osc52(text, os.Getenv("TMUX") != ""))
+	via, cmd := a.clip.write(text)
+	a.flash = fmt.Sprintf("copied %s, %s, to the clipboard%s", label, formatSize(len(text)), via)
+	return cmd
 }
 
 // displayedMessage is the message the active view shows or has selected,
@@ -82,6 +82,11 @@ func (a *App) displayedMessage() (*kafka.ConsumedMessage, bool) {
 		return v.GetMessage(), v.Raw()
 	case *views.MessagesView:
 		return v.SelectedMessage(), v.Raw()
+	case *views.SearchView:
+		// Search shows what was consumed; it has no raw toggle.
+		if m, ok := v.SelectedMessage(); ok {
+			return &m, false
+		}
 	}
 	return nil, false
 }

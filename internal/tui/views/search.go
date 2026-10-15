@@ -279,6 +279,10 @@ func (v *SearchView) HandleKey(key string) (string, string) {
 		}
 	case KeyExport:
 		return ActionExport, v.topic
+	case KeyCopyValue, KeyCopyKey, KeyCopyRecord:
+		if _, ok := v.SelectedMessage(); ok {
+			return ActionCopy, key
+		}
 	case KeyRerunSearch:
 		return ActionRerunSearch, v.topic
 	case KeyEditSearch:

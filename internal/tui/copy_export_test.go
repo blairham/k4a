@@ -79,6 +79,9 @@ func testApp(t *testing.T) *App {
 	app := NewApp(nil, ConnInfo{}, nil, "", "dev")
 	app.width, app.height = 120, 40
 	app.stateRoot = state.NewRoot(filepath.Join(t.TempDir(), ".k4a"))
+	// OSC 52 only, and a runner that fails the test: a test must never
+	// reach the real clipboard.
+	app.clip = fakeClipboard(t, ClipboardOSC52, nil, nil)
 	return app
 }
 

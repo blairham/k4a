@@ -95,3 +95,21 @@ func TestConfigSet(t *testing.T) {
 		t.Error("unknown key should error")
 	}
 }
+
+func TestConfigClipboard(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	if got, _ := configGet(cfg, "ui.clipboard"); got != "auto" { //nolint:errcheck // known key
+		t.Errorf("unset ui.clipboard = %q, want auto", got)
+	}
+	if err := configSet(cfg, "ui.clipboard", " Native "); err != nil {
+		t.Fatalf("set ui.clipboard: %v", err)
+	}
+	if cfg.UI.Clipboard != "native" {
+		t.Errorf("ui.clipboard = %q, want native", cfg.UI.Clipboard)
+	}
+	if err := configSet(cfg, "ui.clipboard", "pbcopy"); err == nil {
+		t.Error("an unknown clipboard mode was accepted")
+	}
+}

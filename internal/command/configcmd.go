@@ -38,6 +38,9 @@ Subcommands:
 Supported keys:
   ui.logoless        bool — hide the ASCII logo in the TUI
   ui.readonly        bool — block destructive operations
+  ui.clipboard       auto|osc52|native — how TUI copy reaches the clipboard:
+                            auto uses pbcopy, wl-copy, xclip or xsel on a
+                            local session and OSC 52 over SSH (default)
   index.enabled      bool — enable the local Tier 3 index (populated by
                             the live tail when a topic is open)
 
@@ -134,6 +137,11 @@ func runConfigSet(key, value string) int {
 	return 0
 }
 
+const (
+	keyUIClipboard = "ui.clipboard"
+	clipboardAuto  = "auto"
+)
+
 // configGet looks up the value at the dotted key. Returns a stringified
 // representation suitable for shell consumption.
 func configGet(cfg *config.Config, key string) (string, error) {
@@ -142,6 +150,11 @@ func configGet(cfg *config.Config, key string) (string, error) {
 		return fmt.Sprintf("%t", cfg.UI.Logoless), nil
 	case "ui.readonly":
 		return fmt.Sprintf("%t", cfg.UI.Readonly), nil
+	case keyUIClipboard:
+		if cfg.UI.Clipboard == "" {
+			return clipboardAuto, nil
+		}
+		return cfg.UI.Clipboard, nil
 	case "index.enabled":
 		return fmt.Sprintf("%t", cfg.Index.Enabled), nil
 	default:
@@ -165,6 +178,14 @@ func configSet(cfg *config.Config, key, value string) error {
 			return fmt.Errorf("ui.readonly: %w", err)
 		}
 		cfg.UI.Readonly = b
+	case keyUIClipboard:
+		v := strings.ToLower(strings.TrimSpace(value))
+		switch v {
+		case clipboardAuto, "osc52", "native":
+		default:
+			return fmt.Errorf("ui.clipboard: expected auto, osc52 or native, got %q", value)
+		}
+		cfg.UI.Clipboard = v
 	case "index.enabled":
 		b, err := parseBool(value)
 		if err != nil {
