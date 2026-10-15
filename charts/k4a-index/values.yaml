@@ -7,6 +7,12 @@
 # Bumping replicaCount is the whole HA story; no leadership to elect.
 replicaCount: 1
 
+# Resource names default to "<release>-k4a-index", or just the release name
+# when it already contains "k4a-index" (so `helm install k4a-index` keeps the
+# bare name "k4a-index"). fullnameOverride pins the name outright.
+nameOverride: ""
+fullnameOverride: ""
+
 image:
   repository: ""
   tag: ""
@@ -14,9 +20,9 @@ image:
 
 # The ServiceAccount the pod runs as. If the daemon authenticates to Kafka with
 # IAM (MSK), bind this name to an IAM role via EKS Pod Identity or IRSA (for
-# IRSA, add the role ARN under annotations).
+# IRSA, add the role ARN under annotations). Empty name = the chart fullname.
 serviceAccount:
-  name: k4a-index
+  name: ""
   annotations: {}
 
 service:
@@ -32,11 +38,55 @@ kafka:
   # With iam the daemon uses the pod's AWS credentials (Pod Identity / IRSA),
   # so no SASL secret is needed.
   auth: iam
+  # Skip TLS certificate verification (--insecure). Testing only.
+  insecure: false
+  # SASL/SCRAM credentials (auth: scram) from an existing Secret in the release
+  # namespace. Rendered as KAFKA_USERNAME / KAFKA_PASSWORD when set.
+  credentials:
+    existingSecret: ""
+    usernameKey: username
+    passwordKey: password
+  # TLS material (auth: tls, mtls, or scram over TLS) from an existing Secret,
+  # mounted read-only at /etc/k4a/tls. Each key that is non-empty becomes the
+  # matching file env var: caKey -> KAFKA_TLS_CA, certKey -> KAFKA_TLS_CERT,
+  # keyKey -> KAFKA_TLS_KEY. The defaults match a kubernetes.io/tls Secret with
+  # a ca.crt added; mtls needs all three, tls needs only a CA (and none at all
+  # if the brokers' certificates chain to the system roots — then leave
+  # existingSecret empty).
+  tls:
+    existingSecret: ""
+    caKey: ca.crt
+    certKey: tls.crt
+    keyKey: tls.key
 
 aws:
   # Region for IAM auth. Rendered as AWS_REGION when set; the daemon defaults
   # to us-east-1 otherwise.
   region: ""
+
+# Rendered as K4A_INDEX_LOG_LEVEL: debug, info, warn, error.
+logLevel: info
+
+# On SIGTERM the daemon stops accepting RPCs and drains in-flight ones
+# (gRPC GracefulStop); the kubelet kills it after this many seconds.
+terminationGracePeriodSeconds: 30
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532        # distroless nonroot
+  runAsGroup: 65532
+  fsGroup: 65532          # so the nonroot process can write the emptyDir index
+  seccompProfile:
+    type: RuntimeDefault
+
+# The root filesystem is read-only: the daemon writes only to the index
+# emptyDir (/data) and a small /tmp emptyDir.
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
 
 resources:
   requests:
@@ -65,6 +115,31 @@ resources:
 # the volume; keep it at/under the ephemeral-storage limit above.
 storage:
   sizeLimit: 10Gi
+  # The /tmp emptyDir that stands in for the read-only root filesystem.
+  tmpSizeLimit: 64Mi
+
+# Optional NetworkPolicy, default off. Admits ingress to the gRPC port only.
+networkPolicy:
+  enabled: false
+  # NetworkPolicyPeer list allowed to reach the gRPC port; empty = any source
+  # (still only on that port). A load balancer that targets pod IPs reaches
+  # the pod from non-pod addresses, so admit its subnets with an ipBlock, e.g.
+  #   ingressFrom:
+  #     - podSelector: {matchLabels: {app.kubernetes.io/name: k4a-mcp}}
+  #     - ipBlock: {cidr: 10.0.0.0/16}
+  ingressFrom: []
+  # NetworkPolicyEgressRule list. Empty = egress is not restricted. If you set
+  # it, allow DNS, the brokers and, for IAM auth, STS and the credential agent.
+  egress: []
+
+# Optional PodDisruptionBudget, default off. With replicaCount 1 and
+# minAvailable 1 a node drain blocks until you intervene; that is usually not
+# what you want for a disposable index, so raise replicaCount first or use
+# maxUnavailable. maxUnavailable wins when set.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  maxUnavailable: ""
 
 config:
   # Follow allowlist — the v1 authorization boundary (design doc §Security).
