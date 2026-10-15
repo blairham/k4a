@@ -71,11 +71,12 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 ### Subcommands (`internal/app/app.go`)
 
 `ui` (default), `produce`, `consume`, `verify`, `create-topic`, `create-acl`,
-`delete-topic`, `describe-topic`, `topic-size`, `list-topics`, `list-acls`,
-`list-groups`, `describe-group`, `reset-offsets`, `delete-offsets`,
-`delete-group`, `describe-broker-config`, `alter-config`,
-`alter-replication`, `contexts`, `use-context`, `version`, `upgrade`, `state`,
-`index`, `config`, `search`, `mcp`.
+`delete-topic`, `describe-topic`, `topic-size`, `list-topics`,
+`add-partitions`, `purge-topic`, `list-acls`, `delete-acl`, `list-groups`,
+`describe-group`, `reset-offsets`, `delete-offsets`, `delete-group`,
+`describe-broker-config`, `alter-config`, `alter-replication`, `contexts`,
+`use-context`, `version`, `upgrade`, `state`, `index`, `config`, `search`,
+`mcp`. Every TUI operation has a headless command (#52).
 
 Headless commands are flat `verb-noun` names (no `groups list` subcommand
 tree), and the ones that print records take `--format text|json`
