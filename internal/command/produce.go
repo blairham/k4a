@@ -48,7 +48,7 @@ Options:
   -b, --brokers=BROKERS   Bootstrap servers, comma-separated
   -t, --topic=TOPIC       Target topic (overrides the schema's topic if both are given)
   -s, --schema=FILE       YAML schema file for realistic message generation
-  -a, --auth=METHOD       Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD       Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
   -c, --count=N           Number of messages (default: 10)
   -i, --interval=DUR      Delay between messages (default: 1s)
       --username=USER     SASL/SCRAM username
@@ -59,6 +59,9 @@ Options:
   -r, --region=REGION     AWS region for IAM auth (default: us-east-1)
   -p, --profile=PROFILE   AWS profile for IAM auth
   -k, --insecure          Skip TLS certificate verification
+      --no-tls            Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                          with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
   -v, --verbose           Verbose output
 
 Examples:

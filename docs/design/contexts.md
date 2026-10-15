@@ -49,7 +49,11 @@ Each `Context` is a flat struct mapping 1:1 to YAML fields. There's no
 nested `auth:` object — auth fields are siblings of `brokers`. We
 considered nesting (`auth: { method: iam, region: us-east-1 }`) but the
 flat form reads better at the YAML level and keeps the Go struct
-trivially serializable.
+trivially serializable. The OAUTHBEARER settings follow the same rule:
+they are a Go sub-struct (`config.OAuth`, inlined) but flat `oauth-token`,
+`oauth-token-file`, `oauth-token-url`, `oauth-client-id`,
+`oauth-client-secret` and `oauth-scopes` keys in YAML, and `no-tls: true`
+sits beside `insecure`. See `docs/design/auth.md`.
 
 ## Brokers vs SSM-brokers
 
@@ -109,8 +113,8 @@ Two rules, the same for a context field and for the matching CLI flag
 
 - **`brokers`** gets full `os.ExpandEnv`, so `$KAFKA_HOST:9092` works
   for per-host overrides. A host list never holds a literal `$`.
-- **`username`, `password`, `cert`, `key`, `ca`** (and every other
-  string flag) expand only a *whole-value* reference
+- **`username`, `password`, `cert`, `key`, `ca`, the `oauth-*` fields**
+  (and every other string flag) expand only a *whole-value* reference
   (`config.ExpandRef`): a value that is exactly `$NAME` or `${NAME}` is
   replaced with that variable (empty when unset); anything else is used
   literally. `password: ${SCRAM_PASSWORD}` keeps working, and

@@ -70,8 +70,25 @@ type Context struct {
 	KeyFile       string `yaml:"key,omitempty"`
 	CAFile        string `yaml:"ca,omitempty"`
 	IndexEndpoint string `yaml:"index-endpoint,omitempty"`
+	OAuth         OAuth  `yaml:",inline"`
 	Insecure      bool   `yaml:"insecure,omitempty"`
 	IndexInsecure bool   `yaml:"index-insecure,omitempty"`
+	// NoTLS runs a SASL auth method without TLS. There is no "tls: false"
+	// form because a false that means "off" and a missing key that means
+	// "default on" are indistinguishable once a context is re-saved.
+	NoTLS bool `yaml:"no-tls,omitempty"`
+}
+
+// OAuth holds a context's OAUTHBEARER settings. The fields sit flat beside
+// the others in YAML (oauth-token, oauth-token-url, ...), like every other
+// auth field. Secrets take the same whole-value $VAR form as password.
+type OAuth struct {
+	Token        string `yaml:"oauth-token,omitempty"`
+	TokenFile    string `yaml:"oauth-token-file,omitempty"`
+	TokenURL     string `yaml:"oauth-token-url,omitempty"`
+	ClientID     string `yaml:"oauth-client-id,omitempty"`
+	ClientSecret string `yaml:"oauth-client-secret,omitempty"`
+	Scopes       string `yaml:"oauth-scopes,omitempty"`
 }
 
 // Load reads the config from disk. Returns a zero config (no error) if the file doesn't exist.
@@ -263,6 +280,15 @@ func (ctx *Context) ToAuthConfig() kafka.AuthConfig {
 		CAFile:   ExpandRef(ctx.CAFile),
 		Region:   ctx.Region,
 		Profile:  ctx.Profile,
+		OAuth: kafka.OAuthConfig{
+			Token:        ExpandRef(ctx.OAuth.Token),
+			TokenFile:    ExpandRef(ctx.OAuth.TokenFile),
+			TokenURL:     ExpandRef(ctx.OAuth.TokenURL),
+			ClientID:     ExpandRef(ctx.OAuth.ClientID),
+			ClientSecret: ExpandRef(ctx.OAuth.ClientSecret),
+			Scopes:       ExpandRef(ctx.OAuth.Scopes),
+		},
 		Insecure: ctx.Insecure,
+		NoTLS:    ctx.NoTLS,
 	}
 }
