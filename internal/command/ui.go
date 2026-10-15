@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -172,7 +173,8 @@ func (c *UICommand) Run(args []string) int {
 
 	if appModel, ok := model.(*tui.App); ok && appModel.UpgradeRequested() {
 		resetTerminalBg()
-		return c.upgradeAndRestart(appModel.UpgradeContext())
+		argv, env := restartCommand(os.Args, os.Environ(), &flags, ctxName, appModel.UpgradeContext())
+		return c.upgradeAndRestart(argv, env)
 	}
 
 	return 0
@@ -198,7 +200,7 @@ func loadUIConfig(flags *UIFlags) (cfg *config.Config, cfgPath string) {
 	return cfg, cfgPath
 }
 
-func (c *UICommand) upgradeAndRestart(ctxName string) int {
+func (c *UICommand) upgradeAndRestart(argv, env []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -213,16 +215,42 @@ func (c *UICommand) upgradeAndRestart(ctxName string) int {
 		return 0
 	}
 
-	args := []string{"k4a"}
-	if ctxName != "" && ctxName != "direct" {
-		args = append(args, "--context", ctxName)
-	}
-
 	fmt.Println("Restarting...")
-	if err := reexec(exe, args, os.Environ()); err != nil {
+	if err := reexec(exe, argv, env); err != nil {
 		fmt.Printf("Upgraded successfully but restart failed: %v\nPlease restart k4a manually.\n", err)
 	}
 	return 0
+}
+
+// restartCommand is the argv and environment the TUI re-execs with after an
+// in-TUI upgrade. Restarting with only --context dropped a direct -b/--auth
+// connection (landing on the picker or an error) and every other flag,
+// --readonly included. So while the session is still on the connection it
+// started with, the original command line is replayed verbatim. After a
+// switch in the context picker that command line describes the wrong
+// cluster, so the restart names the active context and keeps only the flags
+// that are not about the connection; KAFKA_BROKERS is dropped from the
+// environment because it would otherwise win over --context again.
+func restartCommand(argv, env []string, flags *UIFlags, startCtx, activeCtx string) (newArgv, newEnv []string) {
+	if activeCtx == startCtx || activeCtx == "" {
+		return argv, env
+	}
+	newArgv = []string{argv[0], "--context", activeCtx}
+	if flags.ConfigFile != "" {
+		newArgv = append(newArgv, "--config", flags.ConfigFile)
+	}
+	if flags.Readonly {
+		newArgv = append(newArgv, "--readonly")
+	}
+	if flags.Logoless {
+		newArgv = append(newArgv, "--logoless")
+	}
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "KAFKA_BROKERS=") {
+			newEnv = append(newEnv, kv)
+		}
+	}
+	return newArgv, newEnv
 }
 
 // authConfig is the connection the flags alone describe; empty fields are
