@@ -115,6 +115,7 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 
 	cov := indexwire.CoverageFromBookkeeper(book)
 	cov.Following = true
+	cov.Backfilling = w.backfilling()
 	// A plain assignment rather than an if-init: an `err :=` there would
 	// shadow the err the query below reuses.
 	err = sendCoverage(stream, cov)
@@ -167,6 +168,7 @@ func (s *indexServer) Coverage(_ context.Context, req *indexv1.CoverageRequest) 
 	book := w.coverage()
 	cov := indexwire.CoverageFromBookkeeper(book)
 	cov.Following = true
+	cov.Backfilling = w.backfilling()
 	log.Info("coverage", "topic", topic, "following", true, "partitions", len(book.NewestOffsetPerPartition))
 	return &indexv1.CoverageResponse{Coverage: cov}, nil
 }
