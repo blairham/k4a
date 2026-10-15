@@ -412,6 +412,13 @@ Live message tail from a topic (newest first).
 | `h` / `l` | Scroll the table horizontally / pan the value column |
 | `ctrl+d` | Purge the topic's messages (same prompt as Topic Detail) |
 | `x` | Show schema-registry decoded keys and values raw / decoded (with a registry configured) |
+| `c` / `K` / `C` | Copy the selected row's value / key / whole record as JSON to the clipboard |
+| `e` | Export the rows as shown (partition and `/` filters applied) to a JSONL file |
+
+Copy uses OSC 52, so the terminal sets the clipboard and it works over SSH
+and in tmux; both copy and export take what is on screen, decoded or raw.
+An export suggests a file in the working directory and asks before
+overwriting one.
 
 Saving a single message is in **Message Detail** (`enter`, then `s`) —
 in this list `s` opens search.
@@ -423,6 +430,8 @@ Full message content with metadata cards, headers, and scrollable pretty-printed
 | Key | Action |
 |-----|--------|
 | `s` | Save message to file |
+| `c` / `K` / `C` | Copy the value / key / whole record as JSON to the clipboard |
+| `n` / `N` | Next / previous message in the list it was opened from |
 | `x` | Raw / decoded key and value; the cards name the schema (subject, version, ID) or why it was not decoded |
 | `j` / `k` | Scroll message body |
 | `ctrl+f` / `ctrl+b` | Page the message body down / up |
@@ -434,6 +443,7 @@ Matches from a whole-topic search (`s` in Messages, or `:search`), streamed as t
 | Key | Action |
 |-----|--------|
 | `enter` | View the matched message |
+| `e` | Export the matches so far to a JSONL file |
 
 ### Context Selector
 
