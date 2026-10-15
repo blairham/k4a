@@ -57,7 +57,7 @@ deletion policy, and rebuild cost.
 |---|---|---|---|---|
 | **0 — Config** | `~/.k4a/config.yaml` | Contexts, auth references, UI prefs (`logoless`, default cluster, etc.) | No, but losing it loses user preferences | User |
 | **1 — Session** | `~/.k4a/state.json` | Last active context, recent searches, recent topics, window prefs, splash skip | No | k4a (rebuilds trivially on next interaction) |
-| **2 — Cache** | `~/.k4a/cache/` | Query results, scan byte cache, topic metadata snapshots, schema discovery | No | k4a (purgeable any time, automatic eviction) |
+| **2 — Cache** | `~/.k4a/cache/` | Query results (`cache/searches/`); scan byte cache, metadata snapshots and schema discovery are not built | No | k4a (purgeable any time; size- and age-bounded, see Layout) |
 | **3 — Index** | `~/.k4a/index/<cluster>/<topic>/` | Full-text Bleve index for fast search (see `local-index.md`) | No | k4a (rebuildable from broker via catch-up scan) |
 | **4 — External refs** | Config-only (no local data) | Athena workgroup names, ELK endpoints, S3-sink topic mappings | No | External system |
 
@@ -79,8 +79,9 @@ A few invariants follow from this table:
 ### 1. Schema versioning per subsystem
 
 Each state subsystem stores its own `schema_version` in its top-level
-file (`state.json`, `cache/manifest.json`, `index/<topic>/state.json`,
-etc.). On startup the loader checks the version:
+file (`state.json`, `index/<topic>/state.json`, etc.). The search cache
+has no manifest: each entry file carries its own `schema_version`. On
+startup the loader checks the version:
 
 - **Same version** → use as-is
 - **Newer version** (downgrade case, e.g. user reverted to an older k4a) →
@@ -239,8 +240,8 @@ This rule keeps the index small, predictable, and debuggable.
 ├── config.yaml                              # Tier 0
 ├── state.json                               # Tier 1
 ├── cache/                                   # Tier 2
-│   ├── manifest.json                        # version + entries index
-│   └── <hash>.lz4                           # serialized entries
+│   └── searches/
+│       └── <hash>.json                      # one search result, versioned
 └── index/                                   # Tier 3
     ├── <cluster_id>/
     │   ├── <topic_name>/
@@ -253,9 +254,26 @@ This rule keeps the index small, predictable, and debuggable.
 
 Notes:
 
-- All Tier 0/1 files are JSON for human inspectability. The cache and
-  index serialize via library-native formats (lz4 for cache entries,
-  Bleve's mixed format for the index).
+- All Tier 0/1 files are JSON for human inspectability, and so are cache
+  entries (uncompressed). The index uses Bleve's own format.
+- **The search cache writes through on every `Put`** — each completed,
+  uncapped search writes its entry file immediately (temp file + rename),
+  not on quit. Its disk directory is bounded two ways
+  (`internal/searchcache/evict.go`):
+  - **Age**: an entry not written or served for 7 days
+    (`DefaultMaxAge`) is removed, and is refused on read if it has not
+    been pruned yet. A disk hit bumps the file's mtime.
+  - **Size**: the directory is held under 256 MiB
+    (`DefaultMaxDiskBytes`), evicting the least recently used entry
+    (oldest mtime) first. An entry bigger than the whole cap is kept in
+    memory only.
+
+  Pruning runs when a cache is opened and after every write, so a process
+  that only reads still retires what earlier ones left. It also removes
+  temp files older than an hour, left by a write that crashed before its
+  rename. Two processes pruning at once is harmless: a file the other one
+  removed first is the same outcome. The 32-entry in-memory LRU is
+  separate and per-process.
 - The lock file is empty; only its presence and flock status matter.
 - Tier 4 doesn't appear in the layout because it has no on-disk
   presence beyond references in `config.yaml`.
@@ -267,7 +285,7 @@ Notes:
 | `~/.k4a/` doesn't exist | Create on first write; behave as on fresh install for reads |
 | `config.yaml` corrupt | Show error on startup, refuse to launch until the user fixes or removes it |
 | `state.json` corrupt | Rename to `.state.json.bak.<ts>`, start fresh |
-| `cache/manifest.json` corrupt | Wipe the cache dir entirely, start fresh |
+| Cache entry file corrupt or wrong `schema_version` | Remove that one file and treat it as a miss |
 | Index `state.json` corrupt | Rebuild from the Bleve index directly (Bleve is the data, state.json is the cache of bookkeeping) |
 | Bleve index corrupt | Rename the topic's index dir to `.bak.<ts>`, fall back to scan, schedule a re-index |
 | Disk full | Refuse new writes; existing reads continue working; UI surfaces a clear error and offers `state clear` |
@@ -313,7 +331,8 @@ relevant directory to undo).
 
 ### Phase B — Query cache (≈ half a week, builds on A)
 - Tier 2 cache for completed deep-search results
-- 32-entry in-memory LRU; flushes to disk on quit
+- 32-entry in-memory LRU; writes through to disk on every `Put`
+  (originally planned as a flush on quit)
 - Search header annotates "from cache" when hit
 - First chance to validate the lock/version/wipe machinery in practice
 
