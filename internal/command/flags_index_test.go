@@ -82,7 +82,7 @@ func TestResolveIndexEnvTokenOverridesContext(t *testing.T) {
 // A context's token must never be sent to an endpoint named on the command
 // line: that host is not the context's daemon.
 func TestResolveIndexFlagEndpointIgnoresContextCredentials(t *testing.T) {
-	t.Setenv("K4A_INDEX_TOKEN", "")
+	t.Setenv("K4A_INDEX_TOKEN", "env-token")
 	t.Setenv("CTX_INDEX_TOKEN", "ctx-token")
 	f := &ConnectionFlags{ConfigFile: writeIndexConfig(t, ""), IndexEndpoint: "other:9500", IndexInsecure: true}
 

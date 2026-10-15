@@ -101,6 +101,9 @@ spec:
               value: {{ .Values.config.drainStall.wipeAfter | quote }}
             - name: K4A_INDEX_MAX_SEARCH_LIMIT
               value: {{ .Values.config.maxSearchLimit | quote }}
+            {{- if and .Values.listener.tls.clientCAKey (not .Values.listener.tls.existingSecret) }}
+            {{- fail "listener.tls.clientCAKey needs listener.tls.existingSecret: mTLS runs over the listener's TLS" }}
+            {{- end }}
             {{- with .Values.listener.tls.existingSecret }}
             # gRPC listener TLS (and mTLS when clientCAKey is set).
             - name: K4A_INDEX_TLS_CERT

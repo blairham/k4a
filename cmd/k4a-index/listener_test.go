@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 
 	"github.com/blairham/k4a/internal/endpointauth"
@@ -71,6 +72,22 @@ func TestListenerFlagsGuardTheServer(t *testing.T) {
 	}
 	if got := code(endpointauth.ClientOptions{CAFile: pki.CA}); got != codes.Unauthenticated {
 		t.Errorf("without the token: %v, want Unauthenticated", got)
+	}
+
+	// The health service is registered and answers without the token.
+	dial, err := endpointauth.ClientOptions{CAFile: pki.CA}.GRPCDialOptions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := grpc.NewClient(lis.Addr().String(), dial...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close() //nolint:errcheck // test cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
+		t.Errorf("health check without the token: %v, want SERVING", err)
 	}
 }
 

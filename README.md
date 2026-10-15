@@ -502,7 +502,7 @@ Shared index:
                                   (a local or port-forwarded daemon)
       --index-ca FILE             CA for the daemon's TLS certificate
       --index-cert / --index-key  Client certificate (a daemon requiring mTLS)
-      --index-token-file FILE     Bearer token (or env K4A_INDEX_TOKEN)
+      --index-token-file FILE     Bearer token file (K4A_INDEX_TOKEN applies to a context's endpoint only)
 ```
 
 Each falls back to the resolved context's `index-endpoint`,

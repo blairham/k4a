@@ -126,8 +126,8 @@ stale results as complete.
 > ```
 >
 > or per invocation `--index-ca`, `--index-cert`/`--index-key`,
-> `--index-token-file`, and `K4A_INDEX_TOKEN`, which overrides a context's
-> `index-token`. k4a refuses to send a token with `index-insecure` (a
+> `--index-token-file`. `K4A_INDEX_TOKEN` overrides a context's `index-token`
+> and is never sent to an endpoint named with `--index-endpoint`. k4a refuses to send a token with `index-insecure` (a
 > plaintext dial), and a context's credentials are never sent to an endpoint
 > named with `--index-endpoint`. A refused or misconfigured daemon still
 > degrades to a local scan, with a warning naming the reason.

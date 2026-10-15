@@ -35,6 +35,8 @@ import (
 	goflags "github.com/jessevdk/go-flags"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
@@ -336,7 +338,11 @@ func newGRPCServer(lim startupLimits) *grpc.Server {
 	if lim.tls != nil {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(lim.tls)))
 	}
-	return grpc.NewServer(opts...)
+	srv := grpc.NewServer(opts...)
+	// The standard health service, open whatever credentials the listener
+	// asks for, so a probe never needs the deployment's token.
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	return srv
 }
 
 // grpcStopper is the slice of *grpc.Server stopServer needs.

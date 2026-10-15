@@ -248,7 +248,7 @@ above:
                                   context   (env: K4A_INDEX_ENDPOINT)
       --index-insecure            Dial the shared index over plaintext gRPC
       --index-ca / --index-cert / --index-key   TLS and mTLS to the daemon
-      --index-token-file FILE     Bearer token (or env K4A_INDEX_TOKEN)
+      --index-token-file FILE     Bearer token file (K4A_INDEX_TOKEN applies to a context's endpoint only)
 ```
 
 They fall back to the resolved context's `index-*` fields, except that a

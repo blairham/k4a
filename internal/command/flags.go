@@ -71,11 +71,14 @@ func (o OAuthFlags) config() kafka.OAuthConfig {
 //
 // A flag endpoint takes only the flags' credentials, never a context's: the
 // context's token belongs to the context's daemon, not to whatever host was
-// named on the command line. A context endpoint takes the context's values
+// named on the command line, and K4A_INDEX_TOKEN is treated as the context's. A context endpoint takes the context's values
 // with any flag that was set laid over them.
 func (f *ConnectionFlags) ResolveIndex() (string, endpointauth.ClientOptions, error) {
 	if f.IndexEndpoint != "" {
-		token, err := endpointauth.LoadToken(f.IndexToken, os.Getenv(remoteindex.TokenEnv))
+		// Not K4A_INDEX_TOKEN either: the docs suggest a context reference it
+		// as index-token: $K4A_INDEX_TOKEN, which would make it the context's
+		// credential sent to an ad hoc host. Only an explicit file counts here.
+		token, err := endpointauth.LoadToken(f.IndexToken, "")
 		if err != nil {
 			return "", endpointauth.ClientOptions{}, err
 		}
