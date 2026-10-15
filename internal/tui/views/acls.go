@@ -106,11 +106,23 @@ func (v *ACLsView) Resize(width, height int) {
 // Count returns the visible row count.
 func (v *ACLsView) Count() int { return len(v.table.Rows()) }
 
+// KeyEditACL opens the selected binding in the ACL form; ActionEditACL is
+// what it asks the App to do.
+const (
+	KeyEditACL    = "e"
+	ActionEditACL = "edit_acl"
+)
+
 // HandleKey processes non-table keys.
 func (v *ACLsView) HandleKey(key string) (action, param string) {
 	switch key {
 	case "a":
 		return "create_acl", ""
+	case KeyEditACL:
+		idx := v.table.Cursor()
+		if idx >= 0 && idx < len(v.visible) {
+			return ActionEditACL, aclKey(v.visible[idx])
+		}
 	case keyCtrlD:
 		idx := v.table.Cursor()
 		if idx >= 0 && idx < len(v.visible) {
