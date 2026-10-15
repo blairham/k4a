@@ -33,6 +33,7 @@ import (
 	goflags "github.com/jessevdk/go-flags"
 	"google.golang.org/grpc"
 
+	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
@@ -53,7 +54,7 @@ type flags struct {
 	Password      string        `long:"password"                env:"KAFKA_PASSWORD"                    description:"SASL/SCRAM password"`
 	ConfigFile    string        `long:"config"                                                          description:"Config file path (default: ~/.k4a/config.yaml)"`
 	CAFile        string        `long:"ca"                      env:"KAFKA_TLS_CA"                      description:"CA certificate PEM file"`
-	Region        string        `long:"region"                  env:"AWS_REGION"                        description:"AWS region (IAM auth)"                                                                                                                                                                                                                                                                                                        short:"r" default:"us-east-1"`
+	Region        string        `long:"region"                  env:"AWS_REGION"                        description:"AWS region (IAM auth)"                                                                                                                                                                                                                                                                                                        short:"r"`
 	Context       string        `long:"context"                                                         description:"Named context from ~/.k4a/config.yaml"`
 	Listen        string        `long:"listen"                  env:"K4A_INDEX_LISTEN"                  description:"gRPC listen address"                                                                                                                                                                                                                                                                                                          short:"l" default:":9500"`
 	DataDir       string        `long:"data-dir"                env:"K4A_INDEX_DATA_DIR"                description:"Index storage root (default: k4a's ~/.k4a)"`
@@ -61,8 +62,8 @@ type flags struct {
 	LogLevel      string        `long:"log-level"               env:"K4A_INDEX_LOG_LEVEL"               description:"Log level: debug, info, warn, error"                                                                                                                                                                                                                                                                                                    default:"info"`
 	TopicMaxBytes string        `long:"topic-max-bytes"         env:"K4A_INDEX_TOPIC_MAX_BYTES"         description:"Per-topic index byte cap; the oldest records are trimmed once a topic's index exceeds it. Human size (e.g. 1GiB, 512MB); 0 disables. Total disk ≈ hot-set × this, so keep it under the volume sizeLimit."                                                                                                                               default:"1GiB"`
 	MaxTotalBytes string        `long:"max-total-bytes"         env:"K4A_INDEX_MAX_TOTAL_BYTES"         description:"Disk budget for the WHOLE index root, measured on disk. Over budget the daemon deletes orphaned index dirs, then evicts the coldest non-pinned topics until it fits — turning an abrupt volume-full pod eviction into a graceful loss of the coldest coverage. Set it below the volume's size limit. Human size; 0 disables."           default:"0"`
-	Prefollow     []string      `long:"topic"                   env:"K4A_INDEX_TOPIC"                   description:"Topics to pre-follow (warm + pinned) at startup; each must match --allow. Repeatable / comma-separated."                                                                                                                                                                                                                      short:"t"                     env-delim:","`
-	Allow         []string      `long:"allow"                   env:"K4A_INDEX_ALLOW"                   description:"Follow allowlist: glob patterns of topics the daemon may auto-follow (default-deny; MUST mirror the cluster-side topic grants (IAM policy or ACLs)). Repeatable / comma-separated."                                                                                                                                                                         env-delim:"," required:"true"`
+	Prefollow     []string      `long:"topic"                   env:"K4A_INDEX_TOPIC"                   description:"Topics to pre-follow (warm + pinned) at startup; each must match --allow. Repeatable / comma-separated."                                                                                                                                                                                                                      short:"t"                 env-delim:","`
+	Allow         []string      `long:"allow"                   env:"K4A_INDEX_ALLOW"                   description:"Follow allowlist: glob patterns of topics the daemon may auto-follow (default-deny; MUST mirror the cluster-side topic grants (IAM policy or ACLs)). Repeatable / comma-separated."                                                                                                                                                                     env-delim:"," required:"true"`
 	MaxFollow     int           `long:"max-followed"            env:"K4A_INDEX_MAX_FOLLOWED"            description:"Hard cap on concurrently-followed topics; at the cap a new follow evicts the coldest."                                                                                                                                                                                                                                                  default:"256"`
 	EvictAfter    time.Duration `long:"evict-after"             env:"K4A_INDEX_EVICT_AFTER"             description:"Drop a topic not searched within this idle window (LRU). Pinned pre-follow topics are exempt."                                                                                                                                                                                                                                          default:"168h"`
 	DrainStall    time.Duration `long:"drain-stall-timeout"     env:"K4A_INDEX_DRAIN_STALL_TIMEOUT"     description:"Fail fast if a topic's indexing drain makes no progress for this long while records are queued: dump all goroutine stacks to stderr and exit, so the pod restarts and re-warms instead of serving nothing silently. 0 disables."                                                                                                        default:"5m"`
@@ -357,22 +358,26 @@ func (f *flags) dataRoot() string {
 // the same ones the headless CLI ConnectionFlags.Resolve uses — rather than
 // importing the whole command package into the daemon binary.
 func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
+	flagAuth := kafka.AuthConfig{
+		Method:   kafka.AuthMethod(f.Auth),
+		Username: f.Username,
+		Password: f.Password,
+		CertFile: f.CertFile,
+		KeyFile:  f.KeyFile,
+		CAFile:   f.CAFile,
+		Region:   f.Region,
+		Profile:  f.Profile,
+		Insecure: f.Insecure,
+	}
 	if f.Brokers != "" {
-		auth := f.Auth
-		if auth == "" {
-			auth = "scram"
+		// A direct connection has no context to inherit defaults from.
+		if flagAuth.Method == "" {
+			flagAuth.Method = kafka.AuthSCRAM
 		}
-		return f.Brokers, kafka.AuthConfig{
-			Method:   kafka.AuthMethod(auth),
-			Username: f.Username,
-			Password: f.Password,
-			CertFile: f.CertFile,
-			KeyFile:  f.KeyFile,
-			CAFile:   f.CAFile,
-			Region:   f.Region,
-			Profile:  f.Profile,
-			Insecure: f.Insecure,
-		}, nil
+		if flagAuth.Region == "" {
+			flagAuth.Region = awscreds.DefaultRegion
+		}
+		return f.Brokers, flagAuth, nil
 	}
 
 	cfgPath := f.ConfigFile
@@ -395,15 +400,34 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 	if err != nil {
 		return "", kafka.AuthConfig{}, err
 	}
-	authCfg := cctx.ToAuthConfig()
-	if f.Auth != "" {
-		authCfg.Method = kafka.AuthMethod(f.Auth)
+	return brokers, overlayAuth(cctx.ToAuthConfig(), flagAuth), nil
+}
+
+// overlayAuth applies every connection flag that was set over the context's
+// values — the same rule as internal/command's overlayAuth, kept here because
+// the daemon resolves its connection without importing the command package.
+// An empty value means "not set", which is why --region has no flag default:
+// an explicit --region us-east-1 must still override a context in another
+// region. --insecure can only turn verification off.
+func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
+	for _, f := range []struct{ dst, src *string }{
+		{&base.Username, &flags.Username},
+		{&base.Password, &flags.Password},
+		{&base.CertFile, &flags.CertFile},
+		{&base.KeyFile, &flags.KeyFile},
+		{&base.CAFile, &flags.CAFile},
+		{&base.Region, &flags.Region},
+		{&base.Profile, &flags.Profile},
+	} {
+		if *f.src != "" {
+			*f.dst = *f.src
+		}
 	}
-	if f.Profile != "" {
-		authCfg.Profile = f.Profile
+	if flags.Method != "" {
+		base.Method = flags.Method
 	}
-	if f.Region != "" && f.Region != "us-east-1" {
-		authCfg.Region = f.Region
+	if flags.Insecure {
+		base.Insecure = true
 	}
-	return brokers, authCfg, nil
+	return base
 }
