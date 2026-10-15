@@ -252,7 +252,7 @@ func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 		return "", tea.Quit
 	case "reset":
 		if a.readonly {
-			return "readonly mode", nil
+			return msgReadonly, nil
 		}
 		return a.promptDeleteOffset()
 	case "reconnect":

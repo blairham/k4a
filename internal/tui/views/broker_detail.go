@@ -96,12 +96,32 @@ func (v *BrokerDetailView) Count() int { return len(v.table.Rows()) }
 
 // HandleKey processes non-table keys.
 func (v *BrokerDetailView) HandleKey(key string) (string, string) {
-	if key == "d" {
+	switch key {
+	case KeyEnter:
+		// A sensitive value is never sent back, so there is nothing to
+		// pre-fill and editing it blind would overwrite a secret.
+		if e := v.Selected(); e != nil && !e.ReadOnly && !e.Sensitive {
+			return "edit_broker_config", e.Name
+		}
+	case "d":
 		v.showDefaults = !v.showDefaults
 		v.rebuildRows()
 	}
 	return "", ""
 }
+
+// Selected returns the config entry under the cursor, or nil.
+func (v *BrokerDetailView) Selected() *kafka.ConfigEntry {
+	idx := v.table.Cursor()
+	if idx < 0 || idx >= len(v.visible) {
+		return nil
+	}
+	return &v.visible[idx]
+}
+
+// BrokerID is the broker whose configs this view shows, as the admin API
+// names it.
+func (v *BrokerDetailView) BrokerID() string { return fmt.Sprintf("%d", v.broker.ID) }
 
 // SetFilter sets the filter and rebuilds rows.
 func (v *BrokerDetailView) SetFilter(filter string) {
@@ -238,7 +258,7 @@ func (v *BrokerDetailView) Loading() bool { return v.loading }
 func (v *BrokerDetailView) Refresh() tea.Cmd { return v.refresh() }
 
 func (v *BrokerDetailView) refresh() tea.Cmd {
-	brokerID := fmt.Sprintf("%d", v.broker.ID)
+	brokerID := v.BrokerID()
 	return func() tea.Msg {
 		configs, err := v.client.FetchBrokerConfigs(context.Background(), brokerID)
 		return BrokerDetailRefreshMsg{Configs: configs, Err: err}
