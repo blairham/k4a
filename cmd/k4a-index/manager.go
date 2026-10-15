@@ -468,6 +468,11 @@ func (m *manager) teardown(topic string, e *followEntry) {
 	if err := e.worker.stop(); err != nil {
 		log.Error("follow: stopping evicted worker", "topic", topic, "err", err)
 	}
+	if !index.IsTopicDir(m.root, m.cluster, dir) {
+		log.Error("follow: refusing to delete an index dir outside the cluster directory",
+			"topic", topic, "dir", dir)
+		return
+	}
 	if err := os.RemoveAll(dir); err != nil {
 		log.Error("follow: deleting evicted index dir", "topic", topic, "dir", dir, "err", err)
 	}

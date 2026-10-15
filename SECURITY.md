@@ -65,7 +65,9 @@ searches over gRPC for anyone who can reach it.
   coverage and never starts a follow. A search for an allowed topic *does*
   start one. Keep the allowlist no wider than what you would let every client
   read, and give the daemon's Kafka principal no more than the allowlist
-  needs.
+  needs. A name Kafka itself would reject (`.`, `..`, anything outside
+  `[a-zA-Z0-9._-]` or over 249 characters) is never followed, whatever the
+  patterns say, since the topic name becomes a directory under `--data-dir`.
 - **It persists payloads to disk.** Followed topics' keys, values and headers
   are written, as the consumer received them (after TLS, so decrypted), to an
   index under `--data-dir`. Protect that volume as you would the topics, and

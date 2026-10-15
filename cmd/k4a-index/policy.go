@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"github.com/blairham/k4a/internal/index"
 )
 
 // allowPolicy is the v1 authorization boundary for demand-driven follow
@@ -53,8 +55,13 @@ func newAllowPolicy(patterns []string) (allowPolicy, error) {
 }
 
 // allowed reports whether the topic may be followed. Default-deny: an empty
-// policy, or a topic matching no pattern, returns false.
+// policy, or a topic matching no pattern, returns false. A name Kafka itself
+// would reject is never allowed, whatever the patterns say: "*" matches "."
+// and "..", and the topic name becomes a directory under the index root.
 func (p allowPolicy) allowed(topic string) bool {
+	if index.ValidateTopicName(topic) != nil {
+		return false
+	}
 	for _, pat := range p.patterns {
 		if pat == topic {
 			return true
