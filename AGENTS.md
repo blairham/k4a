@@ -72,14 +72,18 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 
 `ui` (default), `produce`, `consume`, `verify`, `create-topic`, `create-acl`,
 `delete-topic`, `describe-topic`, `topic-size`, `list-topics`, `list-acls`,
-`list-groups`, `describe-group`, `describe-broker-config`, `alter-config`,
+`list-groups`, `describe-group`, `reset-offsets`, `delete-offsets`,
+`delete-group`, `describe-broker-config`, `alter-config`,
 `alter-replication`, `contexts`, `use-context`, `version`, `upgrade`, `state`,
 `index`, `config`, `search`, `mcp`.
 
 Headless commands are flat `verb-noun` names (no `groups list` subcommand
 tree), and the ones that print records take `--format text|json`
 (`FormatFlag`, `internal/command/cli_common.go`); the older `describe-topic`
-and `topic-size` keep their `--json`.
+and `topic-size` keep their `--json`. Every mutating command calls
+`checkWritable` (`ui.readonly`) first; the destructive ones then confirm
+unless `--yes` (`guardMutation`, `internal/command/group_admin.go`), and
+refuse a non-terminal stdin without it.
 
 An unrecognized first argument is treated as flags for `ui`, so `k4a --context
 staging` still opens the TUI.

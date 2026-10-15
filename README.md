@@ -261,6 +261,18 @@ k4a describe-broker-config 1             # non-default broker configs (--all for
 k4a describe-broker-config --config-key log.retention.hours   # one key on every broker
 ```
 
+Consumer-group changes take the TUI's Reset Offsets modes, need the group to
+be Empty, ask for confirmation unless `--yes`, and are refused under
+`ui.readonly`:
+
+```bash
+k4a reset-offsets -g orders-consumer -t orders --to earliest
+k4a reset-offsets -g orders-consumer -t orders --to offset --value 1200
+k4a reset-offsets -g orders-consumer -t orders --to shift --value=-100 --yes
+k4a delete-offsets -g orders-consumer -t orders -P 0 -P 3
+k4a delete-group -g old-consumer
+```
+
 ## Search
 
 `k4a search` runs a deep search against a topic without opening the TUI —
