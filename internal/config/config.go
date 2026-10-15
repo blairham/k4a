@@ -256,11 +256,11 @@ func classifySSMError(paramName, profile string, err error) error {
 func (ctx *Context) ToAuthConfig() kafka.AuthConfig {
 	return kafka.AuthConfig{
 		Method:   kafka.AuthMethod(ctx.Auth),
-		Username: os.ExpandEnv(ctx.Username),
-		Password: os.ExpandEnv(ctx.Password),
-		CertFile: ctx.CertFile,
-		KeyFile:  ctx.KeyFile,
-		CAFile:   ctx.CAFile,
+		Username: ExpandRef(ctx.Username),
+		Password: ExpandRef(ctx.Password),
+		CertFile: ExpandRef(ctx.CertFile),
+		KeyFile:  ExpandRef(ctx.KeyFile),
+		CAFile:   ExpandRef(ctx.CAFile),
 		Region:   ctx.Region,
 		Profile:  ctx.Profile,
 		Insecure: ctx.Insecure,
