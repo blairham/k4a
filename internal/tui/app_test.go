@@ -14,6 +14,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/blairham/tuikit/loading"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/kafka"
@@ -3034,5 +3035,39 @@ func TestUpdatePasteMsg(t *testing.T) {
 	val := app.commandBar.Input().Value()
 	if !strings.Contains(val, "hello") {
 		t.Errorf("commandBar value = %q, expected to contain 'hello'", val)
+	}
+}
+
+// TestFormFieldTakesGlobalShortcutKeys types a topic name made of keys that
+// are global shortcuts elsewhere (r refreshes, 1 switches view, : / ? open
+// bars). In a form being filled in they must reach the field.
+func TestFormFieldTakesGlobalShortcutKeys(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+	app.width = 80
+	app.height = 40
+	app.handleAction(actionCreateTopic, "") //nolint:errcheck
+
+	const name = "orders-1:/?"
+	for _, r := range name {
+		app.handleKey(keyPress(r)) //nolint:errcheck
+	}
+
+	if app.view != style.ViewCreateTopic {
+		t.Fatalf("view = %d, want ViewCreateTopic", app.view)
+	}
+	if app.commandBar.Active() || app.filterBar.Active() || app.showHelp {
+		t.Error("a key typed into the form opened a bar or the help overlay")
+	}
+	v := typedView[*views.CreateTopicView](app, style.ViewCreateTopic)
+	if got := ansi.Strip(v.View()); !strings.Contains(got, name) {
+		t.Errorf("form does not show %q; rendered:\n%s", name, got)
+	}
+
+	// esc still leaves the form.
+	app.handleKey(escKey()) //nolint:errcheck
+	if app.view == style.ViewCreateTopic {
+		t.Error("esc did not leave the form")
 	}
 }
