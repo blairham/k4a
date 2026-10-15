@@ -3234,3 +3234,47 @@ func TestShortcutsAdvertiseOnlyWorkingActions(t *testing.T) {
 		}
 	}
 }
+
+// TestResetCommandSaysWhyNot: :reset used to return silently outside Group
+// Detail and with nothing selected, which reads as a broken command.
+func TestResetCommandSaysWhyNot(t *testing.T) {
+	t.Parallel()
+
+	app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+	app.width = 80
+	app.height = 40
+	if msg, _ := app.dispatchCommand("reset"); !strings.Contains(msg, "Group Detail") {
+		t.Errorf(":reset from Topics: errMsg = %q, want it to point at Group Detail", msg)
+	}
+
+	app.setView(style.ViewGroupDetail, views.NewGroupDetailView(nil, "g"))
+	app.view = style.ViewGroupDetail
+	if msg, _ := app.dispatchCommand("reset"); msg != "no offset selected" {
+		t.Errorf(":reset with nothing selected: errMsg = %q, want %q", msg, "no offset selected")
+	}
+}
+
+// TestSwitchContextFlashesSaveFailure: the switch succeeds, but if the new
+// current-context cannot be written the user must hear that the next launch
+// will not start there.
+func TestSwitchContextFlashesSaveFailure(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // NewApp opens the ~/.k4a state root
+
+	// A regular file where the config's directory should be makes Save fail.
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{Contexts: map[string]config.Context{"prod": {}}}
+	app := NewApp(nil, ConnInfo{}, cfg, filepath.Join(blocker, "config.yaml"), "dev")
+	app.width = 80
+	app.height = 40
+
+	app.applySwitchContext(switchContextMsg{name: "prod"}) //nolint:errcheck
+	if !strings.Contains(app.errFlash, "saving current context failed") {
+		t.Errorf("errFlash = %q, want the save failure", app.errFlash)
+	}
+	if app.view != style.ViewTopics {
+		t.Errorf("view = %d, want ViewTopics: the switch itself succeeded", app.view)
+	}
+}
