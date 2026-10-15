@@ -293,8 +293,10 @@ shelling out to a local scan. This ships as a **separate deployment**,
   no Bleve index, and no AWS creds — it dials the daemon's in-cluster gRPC
   (`k4a-index.k4a.svc:9500`) and re-exposes `Search`/`Coverage`
   as MCP tools. Keeping it separate means the index daemon stays a pure
-  index server and the MCP surface scales/deploys independently (it is
-  stateless; add replicas freely).
+  index server and the MCP surface scales/deploys independently. It is
+  stateless, including at the MCP layer: it serves the go-sdk's `Stateless`
+  streamable-HTTP mode, so no `Mcp-Session-Id` lives in pod memory and any
+  replica answers any request without sticky routing (#33).
 - **Transport: streamable-HTTP** on `:9501` behind its own internal load
   balancer, network-gated the same way as the gRPC port (private network /
   VPN). Register

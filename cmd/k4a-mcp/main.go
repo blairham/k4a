@@ -41,6 +41,23 @@ type flags struct {
 
 func main() { os.Exit(run(os.Args[1:])) }
 
+// newMCPHandler serves srv over streamable HTTP in Stateless mode.
+//
+// The go-sdk default is stateful: every initialize creates a session held in
+// this process's memory, keyed by Mcp-Session-Id, with no idle timeout. That
+// grows without bound, and behind a Service with replicaCount > 1 a follow-up
+// request routed to another pod is answered "session not found". None of the
+// tools needs a session — search and coverage are pure request/response
+// proxies to k4a-index that never send server->client requests, progress
+// notifications or log messages — so each POST gets a throwaway session
+// instead, and any replica can answer any request.
+func newMCPHandler(srv *mcp.Server) http.Handler {
+	return mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return srv },
+		&mcp.StreamableHTTPOptions{Stateless: true},
+	)
+}
+
 func run(args []string) int {
 	var f flags
 	parser := goflags.NewParser(&f, goflags.Default)
@@ -82,10 +99,8 @@ func run(args []string) int {
 	defer func() { _ = conn.Close() }() //nolint:errcheck // best-effort close on shutdown
 
 	srv := newMCPServer(indexv1.NewIndexClient(conn), version.String())
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
-
 	mux := http.NewServeMux()
-	mux.Handle(f.Path, mcpHandler)
+	mux.Handle(f.Path, newMCPHandler(srv))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	httpSrv := &http.Server{
