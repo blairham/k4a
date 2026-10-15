@@ -273,6 +273,17 @@ k4a delete-offsets -g orders-consumer -t orders -P 0 -P 3
 k4a delete-group -g old-consumer
 ```
 
+Topic and ACL changes work the same way (confirmation unless `--yes`,
+refused under `ui.readonly`):
+
+```bash
+k4a add-partitions -t orders -n 12               # cannot be lowered again
+k4a purge-topic -t orders.dlq --all              # DeleteRecords up to the high watermark
+k4a purge-topic -t orders --older-than 7d        # only what is older than 7 days
+k4a delete-acl --resource-type topic --resource-name orders \
+  --principal User:alice --operation read        # exactly one binding, as create-acl names it
+```
+
 ## Search
 
 `k4a search` runs a deep search against a topic without opening the TUI —
