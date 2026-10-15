@@ -76,6 +76,18 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"list-acls": func() (cli.Command, error) {
 			return &command.ListACLsCmd{}, nil
 		},
+		"list-topics": func() (cli.Command, error) {
+			return &command.ListTopicsCmd{}, nil
+		},
+		"list-groups": func() (cli.Command, error) {
+			return &command.ListGroupsCmd{}, nil
+		},
+		"describe-group": func() (cli.Command, error) {
+			return &command.DescribeGroupCmd{}, nil
+		},
+		"describe-broker-config": func() (cli.Command, error) {
+			return &command.DescribeBrokerConfigCmd{}, nil
+		},
 		"alter-config": func() (cli.Command, error) {
 			return &command.AlterConfigCmd{}, nil
 		},
