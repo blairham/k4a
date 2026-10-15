@@ -19,7 +19,7 @@ import (
 // TestKnownCommandsDispatch keeps it in step with dispatchCommand.
 var knownCommands = []string{
 	"q", "q!", "quit", "exit",
-	"topics", "topic", "groups", "group", "cluster", "brokers", "acls",
+	"topics", "topic", "groups", "group", "cluster", "brokers", "acls", "quotas",
 	"produce", "create-topic", "ct", "create-acl", "acl",
 	"context", "ctx", "reconnect", "reset",
 	"search", "s",
@@ -287,6 +287,7 @@ var commandViews = map[string]style.ViewType{
 	"cluster": style.ViewCluster,
 	"brokers": style.ViewCluster,
 	"acls":    style.ViewACLs,
+	"quotas":  style.ViewQuotas,
 }
 
 // commandActions are the commands that run an action with no parameter.
