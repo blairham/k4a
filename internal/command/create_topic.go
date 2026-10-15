@@ -91,6 +91,11 @@ func (c *CreateTopicCmd) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	if err := flags.checkWritable("create-topic"); err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+
 	topicCfg := kafka.CreateTopicConfig{
 		Topic:             flags.Topic,
 		NumPartitions:     flags.Partitions,
