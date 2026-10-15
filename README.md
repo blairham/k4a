@@ -97,6 +97,11 @@ Context management stays in `k4a contexts` / `k4a use-context`.
 | `mtls` | Mutual TLS with client certificate | `--cert`, `--key`, `--ca` |
 | `iam` | AWS MSK IAM authentication | `--region` (default: us-east-1) |
 
+With `--brokers` and no `--auth`, k4a infers the method from the flags you pass:
+`--username`/`--password` mean `scram`, `--cert`/`--key` mean `mtls`, and
+anything else connects over `plaintext`, so `k4a -b localhost:9092` reaches a
+local broker. A context without `auth:` is `plaintext`.
+
 ### SSM parameter resolution
 
 Broker endpoints can be fetched from AWS SSM Parameter Store using the `ssm-brokers` field. This is useful for MSK clusters where bootstrap brokers are stored in SSM.

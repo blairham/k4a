@@ -84,24 +84,48 @@ func TestConnectionFlagsResolve_DirectBrokers(t *testing.T) {
 	}
 }
 
+// Without --auth the method follows what was supplied. It used to be scram
+// unconditionally, so a bare `-b localhost:9092` failed for want of a password.
 func TestConnectionFlagsResolve_DirectBrokers_DefaultAuth(t *testing.T) {
 	t.Parallel()
 
-	flags := &ConnectionFlags{
-		Brokers: "localhost:9092",
+	tests := []struct {
+		name  string
+		want  kafka.AuthMethod
+		flags ConnectionFlags
+	}{
+		{name: "nothing", want: kafka.AuthPlaintext},
+		{name: "credentials", flags: ConnectionFlags{Username: "u", Password: "p"}, want: kafka.AuthSCRAM},
+		{name: "username only", flags: ConnectionFlags{Username: "u"}, want: kafka.AuthSCRAM},
+		{name: "client cert", flags: ConnectionFlags{CertFile: "c", KeyFile: "k", CAFile: "ca"}, want: kafka.AuthMTLS},
+		{name: "ca only", flags: ConnectionFlags{CAFile: "ca"}, want: kafka.AuthPlaintext},
+		{name: "explicit wins", flags: ConnectionFlags{Auth: "tls", Username: "u"}, want: kafka.AuthTLS},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			f := tt.flags
+			f.Brokers = "localhost:9092"
+			_, auth, err := f.Resolve()
+			if err != nil {
+				t.Fatalf("Resolve() error: %v", err)
+			}
+			if auth.Method != tt.want {
+				t.Errorf("auth.Method = %q, want %q", auth.Method, tt.want)
+			}
+		})
+	}
+}
 
-	brokers, auth, err := flags.Resolve()
+// The TUI's direct path shares the default.
+func TestResolveConnection_DirectBrokersDefaultsToPlaintext(t *testing.T) {
+	t.Parallel()
+	_, auth, _, err := resolveConnection(UIFlags{Brokers: "localhost:9092"})
 	if err != nil {
-		t.Fatalf("Resolve() error: %v", err)
+		t.Fatal(err)
 	}
-
-	if brokers != "localhost:9092" {
-		t.Errorf("brokers = %q, want %q", brokers, "localhost:9092")
-	}
-
-	if auth.Method != kafka.AuthMethod("scram") {
-		t.Errorf("auth.Method = %q, want %q (default)", auth.Method, "scram")
+	if auth.Method != kafka.AuthPlaintext {
+		t.Errorf("auth.Method = %q, want plaintext", auth.Method)
 	}
 }
 
