@@ -26,7 +26,7 @@ func TestParseReplicaList(t *testing.T) {
 			t.Errorf("ParseReplicaList(%q) = %v, %v; want %v", in, got, err, want)
 		}
 	}
-	for _, in := range []string{"1,1", "a", "-1", "1;2"} {
+	for _, in := range []string{"1,1", "a", "-1", "1;2", "4294967296"} {
 		if got, err := ParseReplicaList(in); err == nil {
 			t.Errorf("ParseReplicaList(%q) = %v, want an error", in, got)
 		}

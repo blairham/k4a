@@ -23,10 +23,11 @@ func ParseReplicaList(s string) ([]int, error) {
 	fields := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' })
 	out := make([]int, 0, len(fields))
 	for _, f := range fields {
-		id, err := strconv.Atoi(f)
-		if err != nil || id < 0 {
+		n, err := strconv.ParseInt(f, 10, 32)
+		if err != nil || n < 0 {
 			return nil, fmt.Errorf("replica %q is not a broker ID", f)
 		}
+		id := int(n)
 		if slices.Contains(out, id) {
 			return nil, fmt.Errorf("broker %d is listed twice", id)
 		}
@@ -79,10 +80,11 @@ func (c *Client) knownBrokers(ctx context.Context, replicas []int) ([]int32, err
 	}
 	ids := make([]int32, 0, len(replicas))
 	for _, r := range replicas {
-		if !slices.ContainsFunc(brokers, func(b kadm.BrokerDetail) bool { return int(b.NodeID) == r }) {
+		i := slices.IndexFunc(brokers, func(b kadm.BrokerDetail) bool { return int(b.NodeID) == r })
+		if i < 0 {
 			return nil, fmt.Errorf("broker %d is not in the cluster (brokers: %s)", r, brokerList(brokers))
 		}
-		ids = append(ids, int32(r)) //nolint:gosec // r matched a broker's int32 NodeID above
+		ids = append(ids, brokers[i].NodeID) // the broker's own ID: no narrowing of r
 	}
 	return ids, nil
 }
@@ -121,7 +123,11 @@ func (c *Client) applyReassignments(ctx context.Context, detail *TopicDetail) {
 	}
 	for i := range detail.Partitions {
 		p := &detail.Partitions[i]
-		r, ok := listed[detail.Name][int32(p.ID)] //nolint:gosec // ID came from an int32 partition
+		n, err := narrowPartition(p.ID)
+		if err != nil {
+			continue
+		}
+		r, ok := listed[detail.Name][n]
 		if !ok || len(r.AddingReplicas)+len(r.RemovingReplicas) == 0 {
 			continue
 		}
