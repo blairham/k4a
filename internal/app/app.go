@@ -85,6 +85,15 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"describe-group": func() (cli.Command, error) {
 			return &command.DescribeGroupCmd{}, nil
 		},
+		"reset-offsets": func() (cli.Command, error) {
+			return &command.ResetOffsetsCmd{}, nil
+		},
+		"delete-offsets": func() (cli.Command, error) {
+			return &command.DeleteOffsetsCmd{}, nil
+		},
+		"delete-group": func() (cli.Command, error) {
+			return &command.DeleteGroupCmd{}, nil
+		},
 		"describe-broker-config": func() (cli.Command, error) {
 			return &command.DescribeBrokerConfigCmd{}, nil
 		},
