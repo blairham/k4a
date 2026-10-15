@@ -41,6 +41,8 @@ func recordToConsumed(r *kgo.Record) ConsumedMessage {
 	return ConsumedMessage{
 		Key:       bytesToDisplay(r.Key),
 		Value:     bytesToDisplay(r.Value),
+		RawKey:    framedCopy(r.Key),
+		RawValue:  framedCopy(r.Value),
 		Topic:     r.Topic,
 		Headers:   headers,
 		Partition: int(r.Partition),

@@ -18,6 +18,7 @@ import (
 
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/kafka"
+	"github.com/blairham/k4a/internal/schemareg"
 	"github.com/blairham/k4a/internal/tui"
 	"github.com/blairham/k4a/internal/upgrade"
 )
@@ -38,6 +39,8 @@ type UIFlags struct {
 
 	// OAUTHBEARER
 	OAuth OAuthFlags
+
+	SchemaRegistry SchemaRegistryFlags
 
 	// mTLS
 	CertFile string `long:"cert" env:"KAFKA_TLS_CERT" description:"Client certificate PEM file (mTLS)"`
@@ -87,6 +90,8 @@ Direct Connection:
       --no-tls            Run a SASL method without TLS (credentials in cleartext)
       --oauth-token=TOKEN OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
                           with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
+      --schema-registry-url=URL  Confluent Schema Registry for decoding messages
+                          (with --schema-registry-username/-password, -token, -ca)
       --logoless          Hide the ASCII logo from the header
       --readonly          Disable all mutating operations (read-only mode)
 
@@ -162,8 +167,22 @@ func (c *UICommand) Run(args []string) int {
 		}
 	}
 
+	// The context picker has not chosen yet, so there is no context to
+	// read a registry from; a switch builds one from the chosen context.
+	var registry *schemareg.Registry
+	if !pickContext {
+		registry, err = schemareg.NewIfSet(
+			registryConfig(flags.SchemaRegistry, flags.ConfigFile, flags.Context, flags.Brokers != ""),
+		)
+		if err != nil {
+			log.Error("schema registry setup failed", "err", err)
+			return 1
+		}
+	}
+
 	cfg, cfgPath := loadUIConfig(&flags)
 	app := tui.NewApp(client, connInfo, cfg, cfgPath, c.Version)
+	app.SetSchemaRegistry(registry, flags.SchemaRegistry.config())
 	if pickContext {
 		app.SetAwaitingContext()
 	} else if flags.Context != "" || flags.Brokers != "" {
