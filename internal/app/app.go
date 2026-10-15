@@ -76,6 +76,15 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"list-acls": func() (cli.Command, error) {
 			return &command.ListACLsCmd{}, nil
 		},
+		"delete-acl": func() (cli.Command, error) {
+			return &command.DeleteACLCmd{}, nil
+		},
+		"add-partitions": func() (cli.Command, error) {
+			return &command.AddPartitionsCmd{}, nil
+		},
+		"purge-topic": func() (cli.Command, error) {
+			return &command.PurgeTopicCmd{}, nil
+		},
 		"list-topics": func() (cli.Command, error) {
 			return &command.ListTopicsCmd{}, nil
 		},
