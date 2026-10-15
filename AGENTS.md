@@ -4,7 +4,7 @@ Guidance for AI coding agents (Claude Code, Cursor, Copilot, Codex, OpenCode, �
 
 ## Project Overview
 
-**k4a** is an interactive terminal UI for Kafka clusters — like k9s, but for Kafka — plus headless subcommands for the same operations. Built with Charm (bubbletea, bubbles, lipgloss) on franz-go. Connects over plaintext, TLS, SASL/SCRAM, mTLS and MSK IAM.
+**k4a** is an interactive terminal UI for Kafka clusters — like k9s, but for Kafka — plus headless subcommands for the same operations. Built with Charm (bubbletea, bubbles, lipgloss) on franz-go. Connects over plaintext, TLS, SASL (SCRAM-SHA-512/256, PLAIN, OAUTHBEARER; over TLS, or without it by explicit `--no-tls`), mTLS and MSK IAM.
 
 Two optional daemons share one search index across a team: **`k4a-index`** tails an allowlisted set of topics and answers coverage-reporting searches over gRPC, and **`k4a-mcp`** puts a Model Context Protocol server in front of it. Both ship as container images with Helm charts; the CLI ships as release archives and a Homebrew formula.
 
@@ -205,11 +205,22 @@ Connection:
   -c, --context NAME      Named context from config
       --config FILE       Config file path (default: ~/.k4a/config.yaml)
   -b, --brokers BROKERS   Bootstrap servers (comma-separated)
-  -a, --auth METHOD       Auth: plaintext, tls, scram, mtls, iam
+  -a, --auth METHOD       Auth: plaintext, tls, scram, scram-sha-256, plain,
+                          oauthbearer, mtls, iam
 
-SASL/SCRAM:
-      --username USER     SASL/SCRAM username  (env: KAFKA_USERNAME)
-      --password PASS     SASL/SCRAM password  (env: KAFKA_PASSWORD)
+SASL (scram, scram-sha-256, plain):
+      --username USER     SASL username        (env: KAFKA_USERNAME)
+      --password PASS     SASL password        (env: KAFKA_PASSWORD)
+      --no-tls            Run a SASL method without TLS (SASL_PLAINTEXT);
+                          credentials cross the network in cleartext
+
+OAUTHBEARER (one source):
+      --oauth-token TOKEN        Static token          (env: KAFKA_OAUTH_TOKEN)
+      --oauth-token-file FILE    Token file, re-read   (env: KAFKA_OAUTH_TOKEN_FILE)
+      --oauth-token-url URL      Client-credentials endpoint (env: KAFKA_OAUTH_TOKEN_URL)
+      --oauth-client-id ID       Client ID             (env: KAFKA_OAUTH_CLIENT_ID)
+      --oauth-client-secret S    Client secret         (env: KAFKA_OAUTH_CLIENT_SECRET)
+      --oauth-scopes A,B         Scopes                (env: KAFKA_OAUTH_SCOPES)
 
 mTLS:
       --cert FILE         Client certificate   (env: KAFKA_TLS_CERT)
@@ -272,7 +283,9 @@ index:
 
 Full context field set (`internal/config.Context`): `brokers`, `ssm-brokers`,
 `auth`, `region`, `profile`, `username`, `password`, `cert`, `key`, `ca`,
-`insecure`, `index-endpoint`, `index-insecure`.
+`insecure`, `no-tls`, `oauth-token`, `oauth-token-file`, `oauth-token-url`,
+`oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `index-endpoint`,
+`index-insecure`.
 
 The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,
@@ -363,7 +376,8 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 
 ## Key Dependencies
 
-- `twmb/franz-go` — Pure Go Kafka client (`kgo`/`kadm`/`kmsg`; no CGO), including its SASL/SCRAM and MSK IAM mechanisms
+- `twmb/franz-go` — Pure Go Kafka client (`kgo`/`kadm`/`kmsg`; no CGO), including its SASL (SCRAM, PLAIN, OAUTHBEARER) and MSK IAM mechanisms
+- `golang.org/x/oauth2` — the OAUTHBEARER client-credentials grant (`internal/kafka/oauth.go`)
 - `aws-sdk-go-v2` — AWS shared config and credentials for IAM auth, and SSM parameter resolution
 - `blevesearch/bleve/v2` — the local and shared index (scorch, pure Go)
 - `google.golang.org/grpc` + `protobuf` — the k4a-index wire contract

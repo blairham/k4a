@@ -9,7 +9,7 @@
 
 Interactive TUI for exploring Kafka clusters — like [k9s](https://k9scli.io), but for Kafka.
 
-Built with [Charm](https://charm.sh) (bubbletea, bubbles, lipgloss). Supports SASL/SCRAM, mTLS, and IAM authentication for AWS MSK.
+Built with [Charm](https://charm.sh) (bubbletea, bubbles, lipgloss). Supports SASL (SCRAM-SHA-512, SCRAM-SHA-256, PLAIN, OAUTHBEARER), mTLS, and IAM authentication for AWS MSK.
 
 ## Install
 
@@ -93,14 +93,41 @@ Context management stays in `k4a contexts` / `k4a use-context`.
 |--------|-------------|----------------|
 | `plaintext` | No auth, no TLS | |
 | `tls` | TLS only (no client cert) | |
-| `scram` | SASL/SCRAM-SHA-512 over TLS | `--username`, `--password` |
+| `scram` | SASL/SCRAM-SHA-512 over TLS (also spelled `scram-sha-512`) | `--username`, `--password` |
+| `scram-sha-256` | SASL/SCRAM-SHA-256 over TLS | `--username`, `--password` |
+| `plain` | SASL/PLAIN over TLS | `--username`, `--password` |
+| `oauthbearer` | SASL/OAUTHBEARER over TLS | `--oauth-token`, `--oauth-token-file`, or `--oauth-token-url` + `--oauth-client-id` + `--oauth-client-secret` |
 | `mtls` | Mutual TLS with client certificate | `--cert`, `--key`, `--ca` |
 | `iam` | AWS MSK IAM authentication | `--region` (default: us-east-1) |
 
 With `--brokers` and no `--auth`, k4a infers the method from the flags you pass:
-`--username`/`--password` mean `scram`, `--cert`/`--key` mean `mtls`, and
-anything else connects over `plaintext`, so `k4a -b localhost:9092` reaches a
+`--username`/`--password` mean `scram`, any `--oauth-*` flag means
+`oauthbearer`, `--cert`/`--key` mean `mtls`, and anything else connects over
+`plaintext`, so `k4a -b localhost:9092` reaches a
 local broker. A context without `auth:` is `plaintext`.
+
+The SASL methods always use TLS unless you pass `--no-tls` (or set
+`no-tls: true` on the context), which runs them over a plaintext connection
+(`SASL_PLAINTEXT`) for a local or dev cluster. k4a warns before connecting,
+since the password (PLAIN) or token (OAUTHBEARER) then crosses the network
+in cleartext:
+
+```yaml
+contexts:
+  local:
+    brokers: localhost:9092
+    auth: scram-sha-256
+    username: dev
+    password: ${KAFKA_DEV_PASSWORD}
+    no-tls: true
+  confluent:
+    brokers: pkc-xxxx.us-east-1.aws.confluent.cloud:9092
+    auth: oauthbearer
+    oauth-token-url: https://idp.example.com/oauth2/token
+    oauth-client-id: k4a
+    oauth-client-secret: ${K4A_OAUTH_SECRET}
+    oauth-scopes: kafka
+```
 
 ### SSM parameter resolution
 
@@ -432,11 +459,22 @@ Connection:
   -c, --context NAME      Named context from config
       --config FILE       Config file path (default: ~/.k4a/config.yaml)
   -b, --brokers BROKERS   Bootstrap servers (comma-separated)
-  -a, --auth METHOD       Auth: plaintext, tls, scram, mtls, iam
+  -a, --auth METHOD       Auth: plaintext, tls, scram, scram-sha-256, plain,
+                          oauthbearer, mtls, iam
 
-SASL/SCRAM:
-      --username USER     SASL/SCRAM username  (env: KAFKA_USERNAME)
-      --password PASS     SASL/SCRAM password  (env: KAFKA_PASSWORD)
+SASL (scram, scram-sha-256, plain):
+      --username USER     SASL username        (env: KAFKA_USERNAME)
+      --password PASS     SASL password        (env: KAFKA_PASSWORD)
+      --no-tls            Run a SASL method without TLS (SASL_PLAINTEXT);
+                          credentials cross the network in cleartext
+
+OAUTHBEARER (one source):
+      --oauth-token TOKEN        Static token          (env: KAFKA_OAUTH_TOKEN)
+      --oauth-token-file FILE    Token file, re-read   (env: KAFKA_OAUTH_TOKEN_FILE)
+      --oauth-token-url URL      Client-credentials endpoint (env: KAFKA_OAUTH_TOKEN_URL)
+      --oauth-client-id ID       Client ID             (env: KAFKA_OAUTH_CLIENT_ID)
+      --oauth-client-secret S    Client secret         (env: KAFKA_OAUTH_CLIENT_SECRET)
+      --oauth-scopes A,B         Scopes                (env: KAFKA_OAUTH_SCOPES)
 
 mTLS:
       --cert FILE         Client certificate   (env: KAFKA_TLS_CERT)

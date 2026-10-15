@@ -47,7 +47,7 @@ Options:
   -t, --topic=TOPIC           Topic name to create (required)
   -n, --partitions=N          Number of partitions (default: 3)
       --replication-factor=N  Replication factor (default: 3)
-  -a, --auth=METHOD           Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD           Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
       --username=USER         SASL/SCRAM username
       --password=PASS         SASL/SCRAM password # pragma: allowlist secret
       --cert=FILE             Client certificate PEM (mTLS)
@@ -56,6 +56,9 @@ Options:
   -r, --region=REGION         AWS region for IAM auth (default: us-east-1)
   -p, --profile=PROFILE       AWS profile for IAM auth
   -k, --insecure              Skip TLS certificate verification
+      --no-tls                Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN     OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                              with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
 
 Examples:
   # Use current-context from config
