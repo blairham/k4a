@@ -6,6 +6,7 @@ package command
 import (
 	"fmt"
 
+	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/remoteindex"
@@ -24,7 +25,7 @@ type ConnectionFlags struct {
 	CAFile        string `long:"ca"             env:"KAFKA_TLS_CA"       description:"CA certificate PEM file"`
 	Context       string `long:"context"                                 description:"Named context from ~/.k4a/config.yaml"`
 	ConfigFile    string `long:"config"                                  description:"Config file path (default: ~/.k4a/config.yaml)"`
-	Region        string `long:"region"         env:"AWS_REGION"         description:"AWS region (IAM auth)"                                                short:"r" default:"us-east-1"`
+	Region        string `long:"region"         env:"AWS_REGION"         description:"AWS region (IAM auth)"                                                short:"r"`
 	Profile       string `long:"profile"        env:"AWS_PROFILE"        description:"AWS profile (IAM auth)"                                               short:"p"`
 	KeyFile       string `long:"key"            env:"KAFKA_TLS_KEY"      description:"Client private key PEM file (mTLS)"`
 	Insecure      bool   `long:"insecure"                                description:"Skip TLS certificate verification"                                    short:"k"`
@@ -89,21 +90,7 @@ func (f *ConnectionFlags) AuthConfig() kafka.AuthConfig {
 // and the specified (or current) context is resolved.
 func (f *ConnectionFlags) Resolve() (string, kafka.AuthConfig, error) {
 	if f.Brokers != "" {
-		auth := f.Auth
-		if auth == "" {
-			auth = "scram"
-		}
-		return f.Brokers, kafka.AuthConfig{
-			Method:   kafka.AuthMethod(auth),
-			Username: f.Username,
-			Password: f.Password,
-			CertFile: f.CertFile,
-			KeyFile:  f.KeyFile,
-			CAFile:   f.CAFile,
-			Region:   f.Region,
-			Profile:  f.Profile,
-			Insecure: f.Insecure,
-		}, nil
+		return f.Brokers, directAuthConfig(f.AuthConfig()), nil
 	}
 
 	cfgPath := f.ConfigFile
@@ -128,20 +115,7 @@ func (f *ConnectionFlags) Resolve() (string, kafka.AuthConfig, error) {
 		return "", kafka.AuthConfig{}, err
 	}
 
-	authCfg := ctx.ToAuthConfig()
-
-	// Allow flags to override config values.
-	if f.Auth != "" {
-		authCfg.Method = kafka.AuthMethod(f.Auth)
-	}
-	if f.Profile != "" {
-		authCfg.Profile = f.Profile
-	}
-	if f.Region != "" && f.Region != "us-east-1" {
-		authCfg.Region = f.Region
-	}
-
-	return brokers, authCfg, nil
+	return brokers, overlayAuth(ctx.ToAuthConfig(), f.AuthConfig()), nil
 }
 
 // BuildClient resolves connection details and builds a Kafka client.
@@ -156,4 +130,46 @@ func (f *ConnectionFlags) BuildClient() (*kafka.Client, error) {
 		return nil, fmt.Errorf("client setup failed: %w", err)
 	}
 	return client, nil
+}
+
+// directAuthConfig fills the defaults for a --brokers connection, which has no
+// context to inherit them from.
+func directAuthConfig(auth kafka.AuthConfig) kafka.AuthConfig {
+	if auth.Method == "" {
+		auth.Method = kafka.AuthSCRAM
+	}
+	if auth.Region == "" {
+		auth.Region = awscreds.DefaultRegion
+	}
+	return auth
+}
+
+// overlayAuth applies every connection flag the user set over a context's
+// values, so "flags override config" holds for all of them rather than only
+// the few that used to be copied across. An empty string means "not set":
+// the region flag deliberately has no default, so an explicit
+// --region us-east-1 is distinguishable from no flag at all. --insecure can
+// only turn verification off; a context that skips it cannot be re-enabled
+// from the command line.
+func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
+	for _, f := range []struct{ dst, src *string }{
+		{&base.Username, &flags.Username},
+		{&base.Password, &flags.Password},
+		{&base.CertFile, &flags.CertFile},
+		{&base.KeyFile, &flags.KeyFile},
+		{&base.CAFile, &flags.CAFile},
+		{&base.Region, &flags.Region},
+		{&base.Profile, &flags.Profile},
+	} {
+		if *f.src != "" {
+			*f.dst = *f.src
+		}
+	}
+	if flags.Method != "" {
+		base.Method = flags.Method
+	}
+	if flags.Insecure {
+		base.Insecure = true
+	}
+	return base
 }
