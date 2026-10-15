@@ -68,6 +68,7 @@ type flags struct {
 	DrainStall    time.Duration `long:"drain-stall-timeout"     env:"K4A_INDEX_DRAIN_STALL_TIMEOUT"     description:"Fail fast if a topic's indexing drain makes no progress for this long while records are queued: dump all goroutine stacks to stderr and exit, so the pod restarts and re-warms instead of serving nothing silently. 0 disables."                                                                                                        default:"5m"`
 	MergeGrace    time.Duration `long:"drain-stall-merge-grace" env:"K4A_INDEX_DRAIN_STALL_MERGE_GRACE" description:"Tolerate a drain stall up to this long while a scorch file merge is in flight: the merger is working, and killing it restarts the merge from scratch on the same volume — a restart livelock. 0 disables the grace."                                                                                                                    default:"30m"`
 	WipeStrikes   int           `long:"drain-stall-wipe-after"  env:"K4A_INDEX_DRAIN_STALL_WIPE_AFTER"  description:"On the Nth consecutive drain-stall exit for the same topic index (counted in the index dir, so the count survives container restarts), quarantine the index before exiting so the next boot re-warms fresh. 0 disables."                                                                                                                default:"3"`
+	ShutdownGrace time.Duration `long:"shutdown-timeout"        env:"K4A_INDEX_SHUTDOWN_TIMEOUT"        description:"On SIGTERM, how long in-flight RPCs may run before the server stops them. Keep it under the pod's terminationGracePeriodSeconds, leaving room to flush every index. 0 stops them at once."                                                                                                                                              default:"15s"`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
 }
 
@@ -191,6 +192,7 @@ func logStartup(f *flags, lim startupLimits) {
 		"drain_stall_timeout", f.DrainStall,
 		"drain_stall_merge_grace", f.MergeGrace,
 		"drain_stall_wipe_after", f.WipeStrikes,
+		"shutdown_timeout", f.ShutdownGrace,
 		"listen", f.Listen,
 		"data_dir", f.dataRoot(),
 		"auth", f.Auth,
@@ -248,8 +250,8 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	// Stop the gRPC server when the process is signaled.
 	go func() {
 		<-ctx.Done()
-		log.Info("shutting down")
-		srv.GracefulStop()
+		log.Info("shutting down", "grace", f.ShutdownGrace)
+		stopServer(srv, f.ShutdownGrace)
 	}()
 
 	log.Info("k4a-index serving", "addr", f.Listen, "version", version.String())
@@ -258,6 +260,39 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 		return 1
 	}
 	return 0
+}
+
+// grpcStopper is the slice of *grpc.Server stopServer needs.
+type grpcStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+// stopServer drains in-flight RPCs for up to grace, then cuts off whatever is
+// left. GracefulStop alone waits for every stream to finish, so one stalled
+// Search could hold shutdown open until the kubelet's SIGKILL — which skips
+// the deferred stopAll, so no index gets its final flush. Stop is safe to call
+// while GracefulStop is still waiting; it makes GracefulStop return.
+func stopServer(srv grpcStopper, grace time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		srv.GracefulStop()
+		close(done)
+	}()
+	if grace <= 0 {
+		srv.Stop()
+		<-done
+		return
+	}
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		log.Warn("shutdown: in-flight RPCs outlived the grace period — stopping them", "grace", grace)
+		srv.Stop()
+		<-done
+	}
 }
 
 // byteSuffixes are tried in order; the first suffix that matches wins, so a
