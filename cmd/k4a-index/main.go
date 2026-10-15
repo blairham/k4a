@@ -38,7 +38,6 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
-	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/index"
@@ -531,9 +530,6 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 		// method is inferred exactly as the CLI infers it (#97).
 		if flagAuth.Method == "" {
 			flagAuth.Method = kafka.InferAuthMethod(flagAuth)
-		}
-		if flagAuth.Region == "" {
-			flagAuth.Region = awscreds.DefaultRegion
 		}
 		return f.Brokers, flagAuth, nil
 	}

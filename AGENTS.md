@@ -278,7 +278,7 @@ mTLS:
       --ca FILE           CA certificate        (env: KAFKA_TLS_CA)
 
 IAM:
-  -r, --region REGION     AWS region            (env: AWS_REGION, default: us-east-1)
+  -r, --region REGION     AWS region            (env: AWS_REGION, default: profile region, else us-east-1)
   -p, --profile PROFILE   AWS profile           (env: AWS_PROFILE)
 
 Display:

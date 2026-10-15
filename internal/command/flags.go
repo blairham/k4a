@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/kafka"
@@ -217,9 +216,8 @@ func directAuthConfig(auth kafka.AuthConfig) kafka.AuthConfig {
 	if auth.Method == "" {
 		auth.Method = kafka.InferAuthMethod(auth)
 	}
-	if auth.Region == "" {
-		auth.Region = awscreds.DefaultRegion
-	}
+	// Region stays empty when unset: awscreds.Load resolves it from the env
+	// and the profile before falling back to us-east-1 (#102).
 	return auth
 }
 

@@ -120,15 +120,23 @@ func TestResolve_NoFlagsKeepContext(t *testing.T) {
 	assertAuth(t, got, want)
 }
 
-// A direct connection has no context to inherit a region from, so it still
-// gets the IAM default.
-func TestResolve_DirectDefaultsRegion(t *testing.T) {
+// A direct connection without --region leaves the region empty, so
+// awscreds.Load can take it from the env or the profile before falling back
+// to us-east-1 (#102). Filling us-east-1 here overrode the profile's region.
+func TestResolve_DirectLeavesRegionUnset(t *testing.T) {
 	t.Parallel()
 	_, got, err := (&ConnectionFlags{Brokers: "b:9092"}).Resolve()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Region != "us-east-1" {
-		t.Errorf("Region = %q, want us-east-1", got.Region)
+	if got.Region != "" {
+		t.Errorf("Region = %q, want empty", got.Region)
+	}
+	_, got, err = (&ConnectionFlags{Brokers: "b:9092", Region: "eu-west-1"}).Resolve()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Region != "eu-west-1" {
+		t.Errorf("Region = %q, want eu-west-1", got.Region)
 	}
 }
