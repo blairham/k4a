@@ -284,6 +284,30 @@ k4a delete-acl --resource-type topic --resource-name orders \
   --principal User:alice --operation read        # exactly one binding, as create-acl names it
 ```
 
+### Producing records
+
+`k4a produce` generates test messages by default (random, or from a
+`--schema` YAML file). To send your own records instead:
+
+```bash
+k4a produce -t orders --record-key order-42 --value '{"id":42}' -H source=cli
+k4a produce -t orders --value ping -c 5            # the same record five times
+
+# one record per line; the whole line is the value...
+cat values.txt | k4a produce -t orders --stdin
+# ...or KEY<SEP>VALUE, split at the first separator
+printf 'order-1\t{"id":1}\norder-2\t{"id":2}\n' | \
+  k4a produce -t orders --stdin --key-separator "$(printf '\t')"
+```
+
+`--record-key` is spelled out because `--key` is the mTLS key file. Empty
+lines are skipped, a line may be up to 1 MiB, and a line without the
+separator is an error rather than a record with a guessed key. `-H
+name=value` repeats and applies to every record, generated ones too. Your
+own records go out without a delay unless `--interval` is given. The TUI's
+Produce form (`p`) has the same Value, Key and Headers fields (headers as
+`a=1, b=2`).
+
 ## Search
 
 `k4a search` runs a deep search against a topic without opening the TUI —

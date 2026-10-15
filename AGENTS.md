@@ -103,7 +103,7 @@ staging` still opens the TUI.
 - **ACLs** — access control list bindings with create/edit/delete
 - **Search** — streamed matches from a whole-topic search (`s` in Messages, `:search`)
 - **Context** — context selector for switching clusters
-- **Produce** — interactive message production with progress tracking
+- **Produce** — generated or custom (value, key, headers) messages with progress tracking
 - **Create Topic** — topic creation form (name, partitions, replication)
 - **Create ACL** — ACL binding creation form
 - **Reset Offsets** — consumer group offset reset (earliest/latest/specific/shift)
