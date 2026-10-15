@@ -30,11 +30,14 @@ type UIFlags struct {
 
 	// Direct connection (overrides config).
 	Brokers string `short:"b" long:"brokers" env:"KAFKA_BROKERS" description:"Bootstrap servers (comma-separated)"`
-	Auth    string `short:"a" long:"auth"    env:"KAFKA_AUTH"    description:"Auth method: plaintext, tls, scram, mtls, iam" default:""`
+	Auth    string `short:"a" long:"auth"    env:"KAFKA_AUTH"    description:"Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam" default:""`
 
-	// SASL/SCRAM
-	Username string `long:"username" env:"KAFKA_USERNAME" description:"SASL/SCRAM username"`
-	Password string `long:"password" env:"KAFKA_PASSWORD" description:"SASL/SCRAM password"` // pragma: allowlist secret
+	// SASL: scram (SHA-512), scram-sha-256, plain
+	Username string `long:"username" env:"KAFKA_USERNAME" description:"SASL username (scram, scram-sha-256, plain)"`
+	Password string `long:"password" env:"KAFKA_PASSWORD" description:"SASL password (scram, scram-sha-256, plain)"` // pragma: allowlist secret
+
+	// OAUTHBEARER
+	OAuth OAuthFlags
 
 	// mTLS
 	CertFile string `long:"cert" env:"KAFKA_TLS_CERT" description:"Client certificate PEM file (mTLS)"`
@@ -46,6 +49,7 @@ type UIFlags struct {
 	Profile string `short:"p" long:"profile" env:"AWS_PROFILE" description:"AWS profile (IAM auth)"`
 
 	Insecure bool `short:"k" long:"insecure" description:"Skip TLS certificate verification"`
+	NoTLS    bool `          long:"no-tls"   description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
 	Logoless bool `          long:"logoless" description:"Hide the ASCII logo from the header"`
 	Readonly bool `          long:"readonly" description:"Disable all mutating operations (read-only mode)"`
 }
@@ -70,7 +74,7 @@ Config:
 
 Direct Connection:
   -b, --brokers=BROKERS   Bootstrap servers, comma-separated
-  -a, --auth=METHOD       Auth method: plaintext, tls, scram, mtls, iam
+  -a, --auth=METHOD       Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam
       --username=USER     SASL/SCRAM username
       --password=PASS     SASL/SCRAM password` + // pragma: allowlist secret
 		`
@@ -80,6 +84,9 @@ Direct Connection:
   -r, --region=REGION     AWS region for IAM auth (default: us-east-1)
   -p, --profile=PROFILE   AWS profile for IAM auth
   -k, --insecure          Skip TLS certificate verification
+      --no-tls            Run a SASL method without TLS (credentials in cleartext)
+      --oauth-token=TOKEN OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
+                          with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
       --logoless          Hide the ASCII logo from the header
       --readonly          Disable all mutating operations (read-only mode)
 
@@ -139,6 +146,7 @@ func (c *UICommand) Run(args []string) int {
 	var client *kafka.Client
 	var connInfo tui.ConnInfo
 	if !pickContext {
+		warnCleartext(authCfg) // before the TUI owns the screen
 		client, err = kafka.NewClient(authCfg, brokers)
 		if err != nil {
 			log.Error("client setup failed", "err", err)
@@ -265,7 +273,9 @@ func (flags *UIFlags) authConfig() kafka.AuthConfig {
 		CAFile:   flags.CAFile,
 		Region:   flags.Region,
 		Profile:  flags.Profile,
+		OAuth:    flags.OAuth.config(),
 		Insecure: flags.Insecure,
+		NoTLS:    flags.NoTLS,
 	}
 }
 
