@@ -45,7 +45,9 @@ including deleting topics, consumer groups, ACLs and records.
   verification off**: anyone on the network path can then impersonate the
   broker and, under PLAIN or OAUTHBEARER, receive the password or token (or,
   under SCRAM, an exchange to guess it from). Use it only against a
-  cluster you can reach no other way. `--auth plaintext` uses no TLS at all.
+  cluster you can reach no other way. `--auth mtls` **refuses** `--insecure`
+  with an error rather than present the client certificate to an unverified
+  broker; fix the `--ca` bundle instead. `--auth plaintext` uses no TLS at all.
 - **SASL without TLS** is opt-in only: `--no-tls` (or `no-tls: true` on a
   context) runs `scram`, `scram-sha-256`, `plain` or `oauthbearer` over a
   plaintext connection, and k4a warns before connecting. Under PLAIN the

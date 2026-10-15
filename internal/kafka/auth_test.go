@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -132,6 +133,34 @@ func TestNewClientOpts_MTLSValid(t *testing.T) {
 	}, testBrokers)
 	if err != nil {
 		t.Fatalf("NewClientOpts mTLS: %v", err)
+	}
+}
+
+// TestMTLSRefusesInsecure pins docs/design/auth.md's rule (#91): mtls refuses
+// --insecure with an error, while the other TLS methods still honor it.
+// NewClient is the one constructor the CLI, the TUI and k4a-index all call.
+func TestMTLSRefusesInsecure(t *testing.T) {
+	t.Parallel()
+
+	certFile, keyFile, caFile := writeTestCerts(t)
+	cfg := AuthConfig{Method: AuthMTLS, CertFile: certFile, KeyFile: keyFile, CAFile: caFile, Insecure: true}
+
+	if _, err := NewClientOpts(cfg, testBrokers); !errors.Is(err, errMTLSInsecure) {
+		t.Fatalf("NewClientOpts(mtls, insecure) error = %v, want errMTLSInsecure", err)
+	}
+	if c, err := NewClient(cfg, testBrokers); !errors.Is(err, errMTLSInsecure) {
+		if c != nil {
+			c.Close()
+		}
+		t.Fatalf("NewClient(mtls, insecure) error = %v, want errMTLSInsecure", err)
+	}
+
+	tlsCfg, err := newTLSConfig(AuthConfig{Method: AuthTLS, Insecure: true})
+	if err != nil {
+		t.Fatalf("newTLSConfig(tls, insecure): %v", err)
+	}
+	if !tlsCfg.InsecureSkipVerify {
+		t.Fatal("tls with --insecure must skip verification")
 	}
 }
 

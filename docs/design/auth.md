@@ -58,11 +58,14 @@ Every TLS config (`newTLSConfig`, which `newMTLSConfig` builds on) sets
 suite knobs — Go's defaults are fine and any cluster requiring weaker than
 1.2 isn't a cluster we want to make easy to connect to.
 
-`--insecure` (`InsecureSkipVerify`) is honored by every TLS method. The
-intent was that mTLS would not honor it — authenticating with a client
-certificate while not verifying the server makes little sense — but
-`newMTLSConfig` inherits it from `newTLSConfig`, and always has; #91
-decides which way to settle it.
+`--insecure` (`InsecureSkipVerify`) is honored by every TLS method except
+mTLS. Authenticating with a client certificate while not verifying the
+server makes little sense, and mTLS already requires the CA bundle that
+fixes the verification failure, so `newMTLSConfig` **refuses** `Insecure`
+with an error (`errMTLSInsecure`) rather than ignoring it: a context that
+says `insecure: true` and `auth: mtls` fails to connect instead of quietly
+verifying anyway. Every surface (CLI, TUI, `k4a-index`) builds its client
+through `NewClient`, so the one check covers them all (#91).
 
 The CA bundle is read in `newTLSConfig`: optional for every TLS method,
 required for mTLS. When given it is the whole root set — the system roots
@@ -229,5 +232,6 @@ the command line).
 - **Debugging an auth failure:** the failure mode is always a hang or a
   cryptic franz-go error. Try `verify` subcommand (`internal/command`)
   which exercises just the handshake — it's the smallest reproducer.
-- **Don't add `Insecure` to mTLS.** It's been requested. The answer is
+- **Don't add `Insecure` to mTLS.** It's been requested, and
+  `newMTLSConfig` refuses it (`TestMTLSRefusesInsecure`). The answer is
   always to fix the CA bundle.
