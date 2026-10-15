@@ -60,7 +60,7 @@ internal/
     style/           # Colors, styles, view types
     views/           # Topics, TopicDetail, Groups, GroupDetail, Cluster, Messages,
                      # MessageDetail, Search, Produce, CreateTopic, CreateACL,
-                     # Context, ACLs, TopicConfig, ResetOffsets, BrokerDetail
+                     # Context, ACLs, TopicConfig, ResetOffsets, BrokerDetail, Quotas
 proto/               # Protobuf source for internal/indexwire/indexv1 (buf)
 schemas/             # Example `k4a produce --schema` files
 charts/              # Helm charts: k4a-index, k4a-mcp
@@ -101,6 +101,7 @@ staging` still opens the TUI.
 - **Messages** — live message tail (newest first) with follow mode
 - **Message Detail** — sticky metadata/header cards + scrollable pretty-printed JSON
 - **ACLs** — access control list bindings with create/edit/delete
+- **Client Quotas** — `:quotas`; client quotas per entity with add/edit/remove
 - **Search** — streamed matches from a whole-topic search (`s` in Messages, `:search`)
 - **Context** — context selector for switching clusters
 - **Produce** — interactive message production with progress tracking
@@ -206,6 +207,15 @@ before overwriting.
   binding, then delete the old, so a failure leaves both rather than neither
 - `ctrl+d` — delete selected ACL
 
+### Client Quotas View (`:quotas`)
+
+- `enter` — edit the value (empty removes); `a` — add (`ENTITY KEY=VALUE`,
+  `kafka.ParseQuotaEntity`); `ctrl+d` — remove. Each asks y/n, then
+  `kafka.Client.AlterClientQuota`
+- ACLs and Client Quotas are built on first switch (`lazyTopLevelViews`,
+  `internal/tui/quotas.go`); `TestTopLevelViewsExist` checks every tab key
+  and view command reaches a view
+
 ### Cluster View
 
 - `enter` — view broker detail/configuration
@@ -238,6 +248,7 @@ Enter with `:`, supports autocomplete:
 :q, :q!, :quit, :exit          Quit
 :topics, :groups, :cluster     Switch views (also :topic, :group, :brokers)
 :acls                          Switch to ACLs view
+:quotas                        Switch to Client Quotas view
 :context, :ctx                 Open context selector
 :produce [TOPIC]               Produce messages
 :create-topic, :ct             Create topic
@@ -254,7 +265,7 @@ Enter with `:`, supports autocomplete:
 - `/pattern` — case-insensitive regex filter across visible columns
 - `!/pattern` or `/!pattern` — negated filter (exclude matches)
 - Invalid regex falls back to literal match
-- Available in: Topics, Groups, Messages, ACLs, TopicConfig, BrokerDetail, Search
+- Available in: Topics, Groups, Messages, ACLs, TopicConfig, BrokerDetail, Search, Quotas
 
 ## CLI Flags
 

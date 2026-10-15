@@ -143,6 +143,7 @@ const (
 	ViewResetOffsets
 	ViewBrokerDetail
 	ViewSearch
+	ViewQuotas
 )
 
 // viewInfo is each view's display name and the resource tag its bottom
@@ -164,6 +165,7 @@ var viewInfo = map[ViewType]struct{ name, resource string }{
 	ViewResetOffsets:  {"Reset Offsets", "offset"},
 	ViewBrokerDetail:  {"Broker Detail", "config"},
 	ViewSearch:        {"Search", "match"},
+	ViewQuotas:        {"Client Quotas", "quota"},
 }
 
 // ViewName returns the display name for a view.

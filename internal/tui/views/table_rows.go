@@ -7,7 +7,10 @@ import "charm.land/bubbles/v2/table"
 
 // colName is the title of the name column the topics, topic-config and ACL
 // tables share.
-const colName = "NAME"
+const (
+	colName  = "NAME"
+	colValue = "VALUE"
+)
 
 // setTableRows replaces a table's rows and repairs the cursor.
 //
