@@ -45,6 +45,8 @@ internal/
   kafka/             # Kafka client: auth/TLS, metadata, offsets, consumer, admin, deep search
   index/             # Local Bleve index: indexer, analyzer, query/coverage, pattern rewrite,
                      # async intake, catch-up backfill, inventory
+  endpointauth/      # TLS/mTLS + bearer-token auth for the k4a-index and k4a-mcp
+                     # listeners and the clients that dial them
   indexwire/         # gRPC contract for the shared index (generated indexv1 + conversions)
   remoteindex/       # Client backend that dials a shared k4a-index daemon
   searchcache/       # On-disk query-result cache (Tier 2) + the search wrapper
@@ -238,16 +240,21 @@ Display:
 ```
 
 The headless subcommands share a `ConnectionFlags` struct
-(`internal/command/flags.go`) that adds two shared-index flags on top of the
+(`internal/command/flags.go`) that adds the shared-index flags on top of the
 above:
 
 ```
       --index-endpoint HOST:PORT  Shared k4a-index daemon; overrides the
                                   context   (env: K4A_INDEX_ENDPOINT)
       --index-insecure            Dial the shared index over plaintext gRPC
+      --index-ca / --index-cert / --index-key   TLS and mTLS to the daemon
+      --index-token-file FILE     Bearer token (or env K4A_INDEX_TOKEN)
 ```
 
-Both fall back to the resolved context's `index-endpoint` / `index-insecure`.
+They fall back to the resolved context's `index-*` fields, except that a
+`--index-endpoint` takes no credential from the context (its token belongs to
+the context's daemon). A token is never sent over plaintext
+(`internal/endpointauth`).
 Config-resolution failures deliberately degrade to "no endpoint": a missing or
 broken config must never turn a search into a hard error over an optional
 accelerator.
@@ -285,7 +292,7 @@ Full context field set (`internal/config.Context`): `brokers`, `ssm-brokers`,
 `auth`, `region`, `profile`, `username`, `password`, `cert`, `key`, `ca`,
 `insecure`, `no-tls`, `oauth-token`, `oauth-token-file`, `oauth-token-url`,
 `oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `index-endpoint`,
-`index-insecure`.
+`index-insecure`, `index-ca`, `index-cert`, `index-key`, `index-token`.
 
 The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,

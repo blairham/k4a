@@ -99,6 +99,23 @@ spec:
               value: {{ .Values.config.drainStall.mergeGrace | quote }}
             - name: K4A_INDEX_DRAIN_STALL_WIPE_AFTER
               value: {{ .Values.config.drainStall.wipeAfter | quote }}
+            - name: K4A_INDEX_MAX_SEARCH_LIMIT
+              value: {{ .Values.config.maxSearchLimit | quote }}
+            {{- with .Values.listener.tls.existingSecret }}
+            # gRPC listener TLS (and mTLS when clientCAKey is set).
+            - name: K4A_INDEX_TLS_CERT
+              value: /etc/k4a/listener-tls/{{ $.Values.listener.tls.certKey }}
+            - name: K4A_INDEX_TLS_KEY
+              value: /etc/k4a/listener-tls/{{ $.Values.listener.tls.keyKey }}
+            {{- with $.Values.listener.tls.clientCAKey }}
+            - name: K4A_INDEX_TLS_CLIENT_CA
+              value: /etc/k4a/listener-tls/{{ . }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.listener.token.existingSecret }}
+            - name: K4A_INDEX_TOKEN_FILE
+              value: /etc/k4a/listener-token/{{ $.Values.listener.token.key }}
+            {{- end }}
             - name: K4A_INDEX_LISTEN
               value: ":{{ .Values.service.port }}"
             - name: K4A_INDEX_DATA_DIR
@@ -110,7 +127,8 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           # No HTTP health endpoint yet — the daemon exposes only gRPC. A TCP
-          # probe on the gRPC port is the honest readiness signal: it can accept
+          # probe on the gRPC port (which works whether or not it serves TLS)
+          # is the honest readiness signal: it can accept
           # queries as soon as it's listening (a query for a cold topic returns
           # NONE coverage and the client scans), so warmth is not a gate here.
           startupProbe:
@@ -137,6 +155,16 @@ spec:
               mountPath: /etc/k4a/tls
               readOnly: true
             {{- end }}
+            {{- if .Values.listener.tls.existingSecret }}
+            - name: listener-tls
+              mountPath: /etc/k4a/listener-tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.listener.token.existingSecret }}
+            - name: listener-token
+              mountPath: /etc/k4a/listener-token
+              readOnly: true
+            {{- end }}
       volumes:
         # Disposable index storage — rebuilt from the broker on restart.
         - name: index
@@ -147,6 +175,18 @@ spec:
             sizeLimit: {{ .Values.storage.tmpSizeLimit }}
         {{- with .Values.kafka.tls.existingSecret }}
         - name: kafka-tls
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0440
+        {{- end }}
+        {{- with .Values.listener.tls.existingSecret }}
+        - name: listener-tls
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0440
+        {{- end }}
+        {{- with .Values.listener.token.existingSecret }}
+        - name: listener-token
           secret:
             secretName: {{ . }}
             defaultMode: 0440

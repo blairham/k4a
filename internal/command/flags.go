@@ -9,6 +9,7 @@ import (
 
 	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/config"
+	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/remoteindex"
 )
@@ -17,21 +18,25 @@ import (
 // Connection can be specified via config file or direct flags; when both are present,
 // flags override config values.
 type ConnectionFlags struct {
-	CertFile      string `long:"cert"           env:"KAFKA_TLS_CERT"     description:"Client certificate PEM file (mTLS)"`
-	IndexEndpoint string `long:"index-endpoint" env:"K4A_INDEX_ENDPOINT" description:"Shared k4a-index daemon (host:port); overrides the context"`
-	Brokers       string `long:"brokers"        env:"KAFKA_BROKERS"      description:"Bootstrap servers (comma-separated)"                                                        short:"b"`
-	Auth          string `long:"auth"           env:"KAFKA_AUTH"         description:"Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam"           short:"a"`
-	Username      string `long:"username"       env:"KAFKA_USERNAME"     description:"SASL username (scram, scram-sha-256, plain)"`
-	Password      string `long:"password"       env:"KAFKA_PASSWORD"     description:"SASL password (scram, scram-sha-256, plain)"`
-	CAFile        string `long:"ca"             env:"KAFKA_TLS_CA"       description:"CA certificate PEM file"`
-	Context       string `long:"context"                                 description:"Named context from ~/.k4a/config.yaml"`
-	ConfigFile    string `long:"config"                                  description:"Config file path (default: ~/.k4a/config.yaml)"`
-	Region        string `long:"region"         env:"AWS_REGION"         description:"AWS region (IAM auth)"                                                                      short:"r"`
-	Profile       string `long:"profile"        env:"AWS_PROFILE"        description:"AWS profile (IAM auth)"                                                                     short:"p"`
-	KeyFile       string `long:"key"            env:"KAFKA_TLS_KEY"      description:"Client private key PEM file (mTLS)"`
-	Insecure      bool   `long:"insecure"                                description:"Skip TLS certificate verification"                                                          short:"k"`
-	NoTLS         bool   `long:"no-tls"                                  description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
-	IndexInsecure bool   `long:"index-insecure"                          description:"Dial the shared index over plaintext (a local/port-forwarded daemon)"`
+	CertFile      string `long:"cert"             env:"KAFKA_TLS_CERT"       description:"Client certificate PEM file (mTLS)"`
+	IndexEndpoint string `long:"index-endpoint"   env:"K4A_INDEX_ENDPOINT"   description:"Shared k4a-index daemon (host:port); overrides the context"`
+	Brokers       string `long:"brokers"          env:"KAFKA_BROKERS"        description:"Bootstrap servers (comma-separated)"                                                                     short:"b"`
+	Auth          string `long:"auth"             env:"KAFKA_AUTH"           description:"Auth method: plaintext, tls, scram, scram-sha-256, plain, oauthbearer, mtls, iam"                        short:"a"`
+	Username      string `long:"username"         env:"KAFKA_USERNAME"       description:"SASL username (scram, scram-sha-256, plain)"`
+	Password      string `long:"password"         env:"KAFKA_PASSWORD"       description:"SASL password (scram, scram-sha-256, plain)"`
+	CAFile        string `long:"ca"               env:"KAFKA_TLS_CA"         description:"CA certificate PEM file"`
+	Context       string `long:"context"                                     description:"Named context from ~/.k4a/config.yaml"`
+	ConfigFile    string `long:"config"                                      description:"Config file path (default: ~/.k4a/config.yaml)"`
+	Region        string `long:"region"           env:"AWS_REGION"           description:"AWS region (IAM auth)"                                                                                   short:"r"`
+	Profile       string `long:"profile"          env:"AWS_PROFILE"          description:"AWS profile (IAM auth)"                                                                                  short:"p"`
+	KeyFile       string `long:"key"              env:"KAFKA_TLS_KEY"        description:"Client private key PEM file (mTLS)"`
+	IndexCA       string `long:"index-ca"         env:"K4A_INDEX_CA"         description:"CA PEM file that verifies the shared index's TLS certificate (added to the system roots)"`
+	IndexCert     string `long:"index-cert"       env:"K4A_INDEX_CERT"       description:"Client certificate PEM file for a shared index that requires mTLS"`
+	IndexKey      string `long:"index-key"        env:"K4A_INDEX_KEY"        description:"Client private key PEM file for --index-cert"`
+	IndexToken    string `long:"index-token-file" env:"K4A_INDEX_TOKEN_FILE" description:"File holding the shared index's bearer token (or set K4A_INDEX_TOKEN); never sent over plaintext"`
+	Insecure      bool   `long:"insecure"                                    description:"Skip TLS certificate verification"                                                                       short:"k"`
+	NoTLS         bool   `long:"no-tls"                                      description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
+	IndexInsecure bool   `long:"index-insecure"                              description:"Dial the shared index over plaintext (a local/port-forwarded daemon); refused with a token or TLS files"`
 
 	OAuth OAuthFlags
 }
@@ -58,17 +63,32 @@ func (o OAuthFlags) config() kafka.OAuthConfig {
 	}
 }
 
-// ResolveIndexEndpoint returns the shared-index endpoint and whether to dial it
-// plaintext. Priority: --index-endpoint flag, else the resolved context's
-// index-endpoint. An empty result means local-only search. Config errors are
-// swallowed (returned as "no endpoint") — a missing/broken config must never
-// turn a search into a hard error over an optional accelerator.
-func (f *ConnectionFlags) ResolveIndexEndpoint() (endpoint string, plaintext bool) {
+// ResolveIndex returns the shared-index endpoint and what to present to it.
+// Priority: --index-endpoint, else the resolved context's index-endpoint. An
+// empty endpoint means local-only search. Config errors are swallowed
+// (returned as "no endpoint") — a missing/broken config must never turn a
+// search into a hard error over an optional accelerator.
+//
+// A flag endpoint takes only the flags' credentials, never a context's: the
+// context's token belongs to the context's daemon, not to whatever host was
+// named on the command line. A context endpoint takes the context's values
+// with any flag that was set laid over them.
+func (f *ConnectionFlags) ResolveIndex() (string, endpointauth.ClientOptions, error) {
 	if f.IndexEndpoint != "" {
-		return f.IndexEndpoint, f.IndexInsecure
+		token, err := endpointauth.LoadToken(f.IndexToken, os.Getenv(remoteindex.TokenEnv))
+		if err != nil {
+			return "", endpointauth.ClientOptions{}, err
+		}
+		return f.IndexEndpoint, endpointauth.ClientOptions{
+			CAFile:    f.IndexCA,
+			CertFile:  f.IndexCert,
+			KeyFile:   f.IndexKey,
+			Token:     token,
+			Plaintext: f.IndexInsecure,
+		}, nil
 	}
 	if f.Brokers != "" {
-		return "", false // direct connection, no context to read an endpoint from
+		return "", endpointauth.ClientOptions{}, nil // direct connection, no context to read an endpoint from
 	}
 	cfgPath := f.ConfigFile
 	if cfgPath == "" {
@@ -76,24 +96,43 @@ func (f *ConnectionFlags) ResolveIndexEndpoint() (endpoint string, plaintext boo
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
-		return "", false
+		return "", endpointauth.ClientOptions{}, nil //nolint:nilerr // a broken config means local-only search
 	}
 	ctx, err := cfg.Resolve(f.Context)
-	if err != nil {
-		return "", false
+	if err != nil || ctx.IndexEndpoint == "" {
+		return "", endpointauth.ClientOptions{}, nil //nolint:nilerr // as above
 	}
-	return ctx.IndexEndpoint, ctx.IndexInsecure || f.IndexInsecure
+	opts := remoteindex.ContextOptions(ctx)
+	for _, o := range []struct{ dst, src *string }{
+		{&opts.CAFile, &f.IndexCA},
+		{&opts.CertFile, &f.IndexCert},
+		{&opts.KeyFile, &f.IndexKey},
+	} {
+		if *o.src != "" {
+			*o.dst = *o.src
+		}
+	}
+	if f.IndexToken != "" {
+		if opts.Token, err = endpointauth.LoadToken(f.IndexToken, ""); err != nil {
+			return "", endpointauth.ClientOptions{}, err
+		}
+	}
+	opts.Plaintext = opts.Plaintext || f.IndexInsecure
+	return ctx.IndexEndpoint, opts, nil
 }
 
 // BuildRemoteIndex dials the shared index if one is configured. Returns
 // (nil, nil) when no endpoint is set (local-only search). Callers must Close
 // the returned client when non-nil.
 func (f *ConnectionFlags) BuildRemoteIndex() (*remoteindex.Client, error) {
-	endpoint, plaintext := f.ResolveIndexEndpoint()
+	endpoint, opts, err := f.ResolveIndex()
+	if err != nil {
+		return nil, err
+	}
 	if endpoint == "" {
 		return nil, nil //nolint:nilnil // (nil client, nil error) is the "no shared index configured" signal
 	}
-	return remoteindex.Dial(endpoint, plaintext)
+	return remoteindex.Dial(endpoint, opts)
 }
 
 // AuthConfig converts connection flags to a kafka.AuthConfig.

@@ -108,6 +108,9 @@ contexts:
     # …the usual connection fields…
     index-endpoint: k4a-index.example.com:9500  # unset → local-only
     index-insecure: true    # plaintext gRPC; the port is network-gated
+    # or, against a daemon serving TLS with a token (see Security):
+    # index-ca: /path/to/ca.crt
+    # index-token: $K4A_INDEX_TOKEN
 ```
 
 The endpoint is a **per-context** field, not a nested `index.service` block
@@ -340,9 +343,20 @@ The v1 stance:
   *not* per-caller authorize by mirroring each user's MSK ACLs (real
   engineering, deferred). Instead it treats daemon access as a single
   trust boundary: locked behind a `NetworkPolicy` (ingress only from k4a
-  clients), authenticated (mTLS / the same auth references k4a already
-  resolves), and — critically — only ever following allowlisted,
-  non-sensitive topics. The allowlist *is* the authorization model in v1.
+  clients), authenticated at the transport, and — critically — only ever
+  following allowlisted, non-sensitive topics. The allowlist *is* the
+  authorization model in v1.
+- **Transport authentication, not authorization (#54).** The gRPC listener
+  can serve TLS, require a client certificate from a CA (mTLS) and require
+  a shared bearer token (`internal/endpointauth`; `--tls-cert`,
+  `--tls-client-ca`, `--token-file`). All are opt-in so an upgrade changes
+  nothing on the wire; an unauthenticated listener says so at startup. This
+  answers "is the caller part of this deployment?", not "may this caller
+  read this topic?" — that is Phase 5. Health checks stay open. Clients
+  (`internal/remoteindex`) send a token only over TLS, and a context's
+  credentials only to that context's endpoint. A server-side
+  `--max-search-limit` bounds one Search, and search patterns are logged at
+  debug, since a pattern is often the sensitive value being looked for.
 - **Same model in every environment.** Staging and production run the same
   v1 model — network-gated plus a non-sensitive topic allowlist as the
   authorization boundary — so production is in scope for **non-sensitive**

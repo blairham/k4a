@@ -264,7 +264,9 @@ func runSearch(
 	// and any dial error is non-fatal — search always has the scan floor.
 	remote, err := flags.BuildRemoteIndex()
 	if err != nil {
-		log.Debug("shared index unavailable, using local search", "err", err)
+		// A configured endpoint that cannot be dialed is a configuration
+		// mistake (a token over plaintext, an unreadable CA), so say so.
+		log.Warn("shared index not used; searching locally", "err", err)
 	}
 	if remote != nil {
 		defer remote.Close() //nolint:errcheck // best-effort close

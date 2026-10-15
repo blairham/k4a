@@ -12,16 +12,16 @@ package remoteindex
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/blairham/k4a/internal/config"
+	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
@@ -45,21 +45,42 @@ type Client struct {
 	idx  indexv1.IndexClient
 }
 
+// TokenEnv names the environment variable holding the shared index's bearer
+// token. It is the same variable the daemon reads, since it is the same secret.
+const TokenEnv = "K4A_INDEX_TOKEN"
+
+// ContextOptions is what a context says to present to its index-endpoint.
+// K4A_INDEX_TOKEN, when set, overrides the context's index-token.
+func ContextOptions(c *config.Context) endpointauth.ClientOptions {
+	token := os.Getenv(TokenEnv)
+	if token == "" {
+		token = config.ExpandRef(c.IndexToken)
+	}
+	return endpointauth.ClientOptions{
+		CAFile:    config.ExpandRef(c.IndexCA),
+		CertFile:  config.ExpandRef(c.IndexCert),
+		KeyFile:   config.ExpandRef(c.IndexKey),
+		Token:     token,
+		Plaintext: c.IndexInsecure,
+	}
+}
+
 // Dial opens a lazy gRPC connection to endpoint (host:port). By default it uses
-// TLS verified against the system roots — the daemon serves plaintext gRPC and
-// is expected behind a TLS-terminating load balancer. insecureTLS uses a plaintext
-// connection instead (a local/port-forwarded daemon on its plaintext gRPC
-// port). grpc.NewClient is lazy: it does not block on connectivity here; the
-// first RPC connects (and times out fast via coverageTimeout if it can't).
-func Dial(endpoint string, insecureTLS bool) (*Client, error) {
+// TLS verified against the system roots plus opts.CAFile — the daemon serves
+// TLS itself, or sits behind a TLS-terminating load balancer. opts.Plaintext
+// dials h2c instead (a local or port-forwarded daemon), and is refused
+// alongside a token, which would otherwise cross the network in the clear.
+// grpc.NewClient is lazy: it does not block on connectivity here; the first
+// RPC connects (and times out fast via coverageTimeout if it can't).
+func Dial(endpoint string, opts endpointauth.ClientOptions) (*Client, error) {
 	if endpoint == "" {
 		return nil, errors.New("remoteindex: empty endpoint")
 	}
-	creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
-	if insecureTLS {
-		creds = insecure.NewCredentials()
+	dial, err := opts.GRPCDialOptions()
+	if err != nil {
+		return nil, fmt.Errorf("remoteindex: %s: %w", endpoint, err)
 	}
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds))
+	conn, err := grpc.NewClient(endpoint, dial...)
 	if err != nil {
 		return nil, fmt.Errorf("remoteindex: dial %q: %w", endpoint, err)
 	}

@@ -500,10 +500,15 @@ Shared index:
                                   context   (env: K4A_INDEX_ENDPOINT)
       --index-insecure            Dial the shared index over plaintext
                                   (a local or port-forwarded daemon)
+      --index-ca FILE             CA for the daemon's TLS certificate
+      --index-cert / --index-key  Client certificate (a daemon requiring mTLS)
+      --index-token-file FILE     Bearer token (or env K4A_INDEX_TOKEN)
 ```
 
-Both fall back to the resolved context's `index-endpoint` / `index-insecure`
-when unset. See [Shared index](#shared-index).
+Each falls back to the resolved context's `index-endpoint`,
+`index-insecure`, `index-ca`, `index-cert`, `index-key` and `index-token`
+when unset; a context's credentials are never sent to an endpoint given
+with `--index-endpoint`, and a token is never sent over plaintext. See [Shared index](#shared-index).
 
 ## Development
 
