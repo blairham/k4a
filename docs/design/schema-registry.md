@@ -1,8 +1,10 @@
 # Design: Schema Registry decoding
 
-**Status:** living document. The decoder package is built; wiring it into the
-TUI and `k4a consume` is in progress (#48).
-**Code:** `internal/schemareg/`
+**Status:** living document. Decoding is wired into Messages, Message Detail
+and `k4a consume`; search and the indexes still see the bytes as consumed (#48).
+**Code:** `internal/schemareg/`, `internal/command/schemareg.go`,
+`internal/tui/schemareg.go`, `internal/tui/views/messages.go`,
+`internal/tui/views/message_detail.go`
 
 ## Purpose
 
@@ -82,6 +84,58 @@ Not supported yet: Confluent Platform 8's schema GUID carried in a record
 header instead of the payload prefix, `google/type/*` imports (which
 Confluent also treats as built in), and `google.protobuf.Any` fields that
 name types outside the schema.
+
+## Configuration
+
+A context's nested `schema-registry:` block (`url`, `username`, `password`,
+`token`, `ca`; secrets in the whole-value `$VAR` form) names the registry.
+`--schema-registry-url`, `-username`, `-password`, `-token` and `-ca` on `k4a`
+and `k4a consume`, each with a `K4A_SCHEMA_REGISTRY_*` environment variable,
+override it field by field: flag, then environment, then config, the order
+every other connection setting follows. Setting a token drops the context's
+username and password and vice versa, so an override never leaves both for
+the client to refuse. A `--brokers` connection has no context and takes the
+flags alone. In the TUI, a context switch builds the next context's registry
+with the same flags over it; a registry that cannot be built (a bad URL, an
+unreadable CA) flashes an error and costs decoding, not the switch.
+
+## Display
+
+`kafka.ConsumedMessage` keeps a copy of the key and value bytes only when they
+could be framed (at least five bytes, leading zero): a record's slices pin its
+whole fetch buffer, and nothing else needs them. The copies, and the
+`KeyDecoding` / `ValueDecoding` that record what the decoder did, are tagged
+`json:"-"`, so the search cache's on-disk shape does not change.
+
+`Registry.DecodeMessage` replaces `Key` / `Value` with the decoded JSON and
+keeps the old rendering in `Decoding.Raw`; a framed field it cannot decode
+keeps its rendering and gets `Decoding.Reason`. A nil `*Registry` is decoding
+off, so no caller checks.
+
+- **Messages** decodes on a goroutine between the consumer channel and the
+  view (`decodeStream`), never on the UI loop. Each record waits at most 3 s
+  for a schema the registry has not answered yet; past that it shows raw with
+  "did not answer in time", and because the lookup carries on detached, the
+  next record with that schema decodes. The `/` filter matches what is shown.
+- **Message Detail** names each field's schema (`subject vN (id N, FORMAT)`)
+  or why it was not decoded, in the metadata card.
+- **`x`** toggles raw and decoded on both views, and drilling in keeps the
+  Messages view's mode. It was free on every view; the hint bar shows it only
+  with a registry configured, where it does something.
+- **`k4a consume --decode auto|raw`**: `auto` (the default) decodes when a
+  registry is configured. `--verbose` adds `key-schema="..."` /
+  `value-schema="..."`. Each distinct failure is reported once on stderr (at
+  most 20), so stdout stays the messages.
+
+### Not wired: search and the indexes
+
+Deep search, the local index and `k4a-index` still match and store the
+bytes as consumed. Decoding them is not a display change: the index is an
+accelerator whose answers must equal a scan's (`AGENTS.md`, *coverage
+parity*), so a client that decodes and a shared daemon that does not (or
+uses another registry) would disagree about the same query. Decoded search
+needs the decoder on both sides of that contract and a `SchemaVersion` bump
+for the indexes; it is tracked on #48 / #59.
 
 ## Credentials and transport
 

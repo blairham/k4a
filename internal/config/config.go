@@ -20,6 +20,7 @@ import (
 
 	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/kafka"
+	"github.com/blairham/k4a/internal/schemareg"
 )
 
 // DefaultConfigDir returns the default config directory.
@@ -71,6 +72,8 @@ type Context struct {
 	CAFile        string `yaml:"ca,omitempty"`
 	IndexEndpoint string `yaml:"index-endpoint,omitempty"`
 	OAuth         OAuth  `yaml:",inline"`
+	// SchemaRegistry decodes registry-framed keys and values for display.
+	SchemaRegistry SchemaRegistry `yaml:"schema-registry,omitempty"`
 	// IndexCA, IndexCert and IndexKey verify the shared index's TLS listener
 	// and present a client certificate to it; IndexToken is its bearer token,
 	// best written as $VAR so the file does not hold it.
@@ -84,6 +87,28 @@ type Context struct {
 	// form because a false that means "off" and a missing key that means
 	// "default on" are indistinguishable once a context is re-saved.
 	NoTLS bool `yaml:"no-tls,omitempty"`
+}
+
+// SchemaRegistry is a context's Confluent Schema Registry. Username and
+// password (HTTP basic) or token (bearer) authenticate; secrets take the
+// whole-value $VAR form, like password.
+type SchemaRegistry struct {
+	URL      string `yaml:"url,omitempty"`
+	Username string `yaml:"username,omitempty"`
+	Password string `yaml:"password,omitempty"`
+	Token    string `yaml:"token,omitempty"`
+	CAFile   string `yaml:"ca,omitempty"`
+}
+
+// Config resolves $VAR references into a schemareg.Config.
+func (s SchemaRegistry) Config() schemareg.Config {
+	return schemareg.Config{
+		URL:      ExpandRef(s.URL),
+		Username: ExpandRef(s.Username),
+		Password: ExpandRef(s.Password),
+		Token:    ExpandRef(s.Token),
+		CAFile:   ExpandRef(s.CAFile),
+	}
 }
 
 // OAuth holds a context's OAUTHBEARER settings. The fields sit flat beside

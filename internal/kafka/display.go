@@ -43,3 +43,14 @@ func hasControlBytes(b []byte) bool {
 	}
 	return false
 }
+
+// framedCopy returns a copy of b when it could carry the Confluent
+// schema-registry header (a zero magic byte and a four-byte ID), else nil.
+// A copy, because a record's slices pin its whole fetch buffer; and only
+// candidates, because nothing else needs the bytes.
+func framedCopy(b []byte) []byte {
+	if len(b) < 5 || b[0] != 0 {
+		return nil
+	}
+	return append([]byte(nil), b...)
+}

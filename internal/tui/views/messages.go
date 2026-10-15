@@ -37,6 +37,7 @@ type MessagesView struct {
 	errCh           <-chan error
 	readyCh         <-chan struct{}
 	client          *kafka.Client
+	decoder         Decoder
 	topic           string
 	filter          string
 	partitions      []int
@@ -49,7 +50,27 @@ type MessagesView struct {
 	partitionFilter int
 	follow          bool
 	loading         bool
+	// raw shows registry-decoded keys and values as they were before
+	// decoding; toggled with x.
+	raw bool
 }
+
+// Decoder decodes a message's registry-framed key and value in place
+// (schemareg.Registry). Views take it as an interface so they need no
+// registry to be tested.
+type Decoder interface {
+	DecodeMessage(ctx context.Context, m *kafka.ConsumedMessage)
+}
+
+// decodeWait bounds how long one record waits for a schema the registry has
+// not answered for yet. The lookup carries on in the background, so later
+// records with that schema decode; this one shows raw with a reason rather
+// than stalling the tail behind a slow registry.
+const decodeWait = 3 * time.Second
+
+// KeyToggleRaw switches Messages and Message Detail between decoded and raw
+// keys and values.
+const KeyToggleRaw = "x"
 
 // Fixed-width columns for messages. VALUE gets remaining space.
 var msgFixedCols = []table.Column{
@@ -132,6 +153,13 @@ func NewMessagesView(client *kafka.Client, topic string) *MessagesView {
 	}
 }
 
+// SetDecoder makes the view decode registry-framed payloads. A nil decoder
+// (no registry configured) leaves every payload as consumed.
+func (v *MessagesView) SetDecoder(d Decoder) { v.decoder = d }
+
+// Raw reports whether decoded payloads are being shown raw.
+func (v *MessagesView) Raw() bool { return v.raw }
+
 // Init starts consuming messages.
 func (v *MessagesView) Init() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,6 +172,7 @@ func (v *MessagesView) Init() tea.Cmd {
 	}
 
 	v.msgCh, v.errCh, v.readyCh = v.client.Consume(ctx, v.topic)
+	v.msgCh = decodeStream(ctx, v.msgCh, v.decoder)
 
 	return tea.Batch(
 		v.waitForMessage(),
@@ -260,6 +289,9 @@ func (v *MessagesView) HandleKey(key string) (string, string) {
 		return "confirm_purge_topic", v.topic
 	case "p", "P", "a":
 		v.handlePartitionKey(key)
+	case KeyToggleRaw:
+		v.raw = !v.raw
+		v.rebuildRows()
 	default:
 		v.handleNavKey(key)
 	}
@@ -388,10 +420,12 @@ func (v *MessagesView) rebuildRows() {
 			continue
 		}
 		// Apply regex filter across key and value. A leading "!" negates.
-		if !f.Empty() && !f.MatchesAny(m.Key, m.Value) {
+		key := m.KeyDecoding.Shown(m.Key, v.raw)
+		shown := m.ValueDecoding.Shown(m.Value, v.raw)
+		if !f.Empty() && !f.MatchesAny(key, shown) {
 			continue
 		}
-		value := strings.ReplaceAll(m.Value, "\n", " ")
+		value := strings.ReplaceAll(shown, "\n", " ")
 		value = strings.ReplaceAll(value, "\t", " ")
 		// Apply value scroll offset.
 		if v.valueOffset > 0 && v.valueOffset < len(value) {
@@ -403,7 +437,7 @@ func (v *MessagesView) rebuildRows() {
 			fmt.Sprintf("%d", m.Offset),
 			fmt.Sprintf("%d", m.Partition),
 			m.Time.Format("1/2/2006, 15:04:05.000"),
-			m.Key,
+			key,
 			value,
 		})
 	}
@@ -489,6 +523,29 @@ func (v *MessagesView) waitForMessage() tea.Cmd {
 		}
 		return MessageMsg(msg)
 	}
+}
+
+// decodeStream decodes each message from in on its own goroutine, so a
+// registry lookup never runs on the UI loop. With no decoder it returns in.
+func decodeStream(ctx context.Context, in <-chan kafka.ConsumedMessage, d Decoder) <-chan kafka.ConsumedMessage {
+	if d == nil || in == nil {
+		return in
+	}
+	out := make(chan kafka.ConsumedMessage, cap(in))
+	go func() {
+		defer close(out)
+		for m := range in {
+			dctx, cancel := context.WithTimeout(ctx, decodeWait)
+			d.DecodeMessage(dctx, &m)
+			cancel()
+			select {
+			case out <- m:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return out
 }
 
 // formatElapsed renders a duration for scan progress: sub-second as "Nms",

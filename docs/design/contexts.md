@@ -55,6 +55,13 @@ they are a Go sub-struct (`config.OAuth`, inlined) but flat `oauth-token`,
 `oauth-client-secret` and `oauth-scopes` keys in YAML, and `no-tls: true`
 sits beside `insecure`. See `docs/design/auth.md`.
 
+The one nested block is `schema-registry:` (`url`, `username`, `password`,
+`token`, `ca`). The registry is a second service with credentials of its own,
+and flat keys would have to be `schema-registry-username` and so on beside
+Kafka's own `username`; nesting keeps the two sets from being mistaken for
+each other. Its secrets take the same whole-value `$VAR` form. See
+`docs/design/schema-registry.md`.
+
 ## Brokers vs SSM-brokers
 
 Two ways to specify the bootstrap broker list:

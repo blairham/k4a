@@ -24,7 +24,9 @@ type ConsumeFlags struct {
 	Verbose bool `short:"v" long:"verbose"                                    description:"Show keys and partition/offset metadata"`
 	NoGroup bool `          long:"no-group"                                   description:"Consume without a consumer group (every partition, from start)"`
 	// -1 is kafka.AllPartitions; int32 so go-flags rejects an out-of-range ID.
-	Partition int32 `long:"partition" default:"-1" description:"With --no-group, read only this partition"`
+	Partition      int32  `long:"partition" default:"-1"   description:"With --no-group, read only this partition"`
+	Decode         string `long:"decode"    default:"auto" description:"auto decodes schema-registry payloads when a registry is configured; raw never does" choice:"auto" choice:"raw"`
+	SchemaRegistry SchemaRegistryFlags
 }
 
 // ConsumeCommand implements the "consume" CLI command.
@@ -63,6 +65,15 @@ Options:
                           with --oauth-client-id/--oauth-client-secret/--oauth-scopes)
   -v, --verbose           Show keys and partition/offset metadata
 
+Schema Registry (decodes Avro, Protobuf and JSON Schema keys and values):
+      --decode=auto|raw              auto (default) decodes when a registry is
+                                     configured; raw prints the bytes as before
+      --schema-registry-url=URL      Registry URL (or the context's schema-registry.url)
+      --schema-registry-username=U   Basic-auth username
+      --schema-registry-password=P   Basic-auth password # pragma: allowlist secret
+      --schema-registry-token=T      Bearer token (instead of username/password)
+      --schema-registry-ca=FILE      CA certificate PEM for the registry
+
 Examples:
   # Use current-context from config
   k4a consume -t my-topic
@@ -99,6 +110,12 @@ func (c *ConsumeCommand) Run(args []string) int {
 		return 1
 	}
 
+	dec, err := newConsumeDecoder(flags)
+	if err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+
 	client, err := flags.BuildClient()
 	if err != nil {
 		log.Error(err.Error())
@@ -126,9 +143,10 @@ func (c *ConsumeCommand) Run(args []string) int {
 	count := 0
 	err = client.ConsumeBlocking(ctx, flags.Topic, group, flags.Partition, func(msg kafka.ConsumedMessage) {
 		count++
+		dec.decode(ctx, &msg)
 		if flags.Verbose {
-			fmt.Printf("[%d] partition=%d offset=%d key=%s\n%s\n\n",
-				count, msg.Partition, msg.Offset, msg.Key, msg.Value)
+			fmt.Printf("[%d] partition=%d offset=%d key=%s%s\n%s\n\n",
+				count, msg.Partition, msg.Offset, msg.Key, schemaSuffix(msg), msg.Value)
 		} else {
 			fmt.Printf("[%d] %s\n", count, msg.Value)
 		}

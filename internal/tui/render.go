@@ -41,7 +41,7 @@ func (a *App) View() tea.View {
 		Content:     a.renderContent(),
 		Breadcrumb:  a.breadcrumb(),
 		HelpVisible: a.showHelp,
-		Help:        helpPanel(a.view),
+		Help:        a.withDecodeHelp(helpPanel(a.view)),
 	}
 	switch {
 	case a.errFlash != "":
@@ -136,7 +136,7 @@ func (a *App) renderInfoPanel() []string {
 // column, per-view actions plus always-on actions stacked in the
 // second column. Layout is owned by [chrome.Chrome.ShortcutGrid].
 func (a *App) renderShortcuts() []string {
-	return a.chrome.ShortcutGrid(tabShortcuts(a.view), actionShortcuts(a.view))
+	return a.chrome.ShortcutGrid(tabShortcuts(a.view), a.withDecodeShortcut(actionShortcuts(a.view)))
 }
 
 // renderContent assembles the bordered content area (table or help)
