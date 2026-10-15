@@ -219,3 +219,38 @@ func equalInt32(a, b []int32) bool {
 	}
 	return true
 }
+
+// TestBuildSearchParamsPath: --path stands in for the positional pattern or
+// ANDs with it, a bad path is an error rather than a silent regex, and with
+// neither there is nothing to search for.
+func TestBuildSearchParamsPath(t *testing.T) {
+	t.Parallel()
+
+	p, err := buildSearchParams("", &SearchFlags{Path: `.order.status=="failed"`})
+	if err != nil {
+		t.Fatalf("path only: %v", err)
+	}
+	if p.Pattern != nil || p.PathString() != `.order.status == "failed"` {
+		t.Errorf("path only: Pattern=%v Path=%q", p.Pattern, p.PathString())
+	}
+
+	p, err = buildSearchParams("needle", &SearchFlags{Path: `.n > 1`})
+	if err != nil {
+		t.Fatalf("path and pattern: %v", err)
+	}
+	if p.Pattern == nil || p.Path == nil {
+		t.Errorf("path and pattern: Pattern=%v Path=%v, want both", p.Pattern, p.Path)
+	}
+
+	if _, bad := buildSearchParams("needle", &SearchFlags{Path: `.n >`}); bad == nil {
+		t.Error("an invalid --path was accepted")
+	}
+	if _, bad := buildSearchParams(" ", &SearchFlags{}); bad == nil {
+		t.Error("neither a pattern nor a path was accepted")
+	}
+
+	m, err := buildMCPParams(mcpSearchInput{Topic: "t", Path: `.a exists`})
+	if err != nil || m.Path == nil || m.Pattern != nil {
+		t.Errorf("MCP path only: params %+v, err %v", m, err)
+	}
+}

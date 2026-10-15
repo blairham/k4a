@@ -316,7 +316,11 @@ tokenized index cannot answer with full recall — so both the local
 dispatcher and `remoteindex.Client.covers()` route those to a scan. The
 `k4a-mcp` frontend has no scan to fall back to; it surfaces the same
 decision as `pattern_recall: full | best_effort` so an agent knows when a
-zero-match answer is not authoritative.
+zero-match answer is not authoritative. A JSON-path `path` is never sent to
+the daemon (`CanServe` declines it, see deep-search.md); `k4a-mcp` filters
+the daemon's matches by it with the scan's own rule (`kafka.PathMatches`) and
+reports `path_recall: full` only when the daemon's answer was uncapped and the
+topic followed, `best_effort` otherwise.
 
 ## MCP frontend (`k4a-mcp`)
 

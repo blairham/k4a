@@ -284,6 +284,7 @@ func (c *Client) follow(ctx context.Context, topic string) {
 func toQueryParams(p kafka.SearchParams) index.QueryParams {
 	out := index.QueryParams{
 		Pattern:    p.Pattern,
+		JSONPath:   p.PathString(),
 		Since:      p.Since,
 		Until:      p.Until,
 		Partitions: p.Partitions,

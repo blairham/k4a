@@ -94,3 +94,23 @@ func TestSearchView_Rerun(t *testing.T) {
 		t.Errorf("patterns searched = %q, want the second run to use the edited query", patterns)
 	}
 }
+
+// TestSearchParamsFor: "path:" followed by a path is a JSON-path search,
+// anything else (including "path:" before other text) stays a regex.
+func TestSearchParamsFor(t *testing.T) {
+	t.Parallel()
+
+	p, err := searchParamsFor(`path: .order.status == "failed"`)
+	if err != nil || p.Path == nil || p.Pattern != nil {
+		t.Fatalf("path query: Path=%v Pattern=%v err=%v", p.Path, p.Pattern, err)
+	}
+	if _, err := searchParamsFor(`path:.order.status ==`); err == nil {
+		t.Error("an invalid path was searched as something else instead of reported")
+	}
+	for _, q := range []string{`path: /api/v1`, `order.status`} {
+		p, err := searchParamsFor(q)
+		if err != nil || p.Path != nil || p.Pattern == nil {
+			t.Errorf("%q: Path=%v Pattern=%v err=%v, want a regex", q, p.Path, p.Pattern, err)
+		}
+	}
+}

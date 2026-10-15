@@ -20,13 +20,20 @@ import (
 // layer — no regex compilation, no scope bitmask, just the strings the
 // dispatcher already computed.
 type QueryParams struct {
-	Since      time.Time
-	Until      time.Time
-	Pattern    *regexp.Regexp
+	Since   time.Time
+	Until   time.Time
+	Pattern *regexp.Regexp
+	// JSONPath is the canonical text of a JSON-path predicate, or "". The
+	// index never serves one (CanServe declines), so only its presence
+	// matters here.
+	JSONPath   string
 	Scopes     []string // any of: "key", "value", "headers"
 	Partitions []int32  // empty = all
 	Limit      int      // 0 = unlimited
 }
+
+// ReasonJSONPathScanOnly is CanServe's reason for declining a JSON-path query.
+const ReasonJSONPathScanOnly = "JSON path queries are scan-only"
 
 // queryDefaultLimit caps how many hits we return from a single Query()
 // call. Matches the deep-search default match cap.
@@ -66,7 +73,13 @@ func (ix *Indexer) CanServe(params QueryParams) (bool, string) {
 // daemon's wire coverage (docs/design/shared-index-service.md) — "indexed
 // (local)" and "indexed (shared)" must never fork the coverage logic.
 func (b Bookkeeper) CanServe(params QueryParams) (bool, string) {
-	// Pattern gate first: Bleve regexp queries are term-anchored, so a
+	// A JSON-path predicate is about document structure, and the index holds
+	// analyzed terms of flattened text: it can neither find every match nor
+	// prove a non-match, so the dispatcher must scan.
+	if params.JSONPath != "" {
+		return false, ReasonJSONPathScanOnly
+	}
+	// Pattern gate: Bleve regexp queries are term-anchored, so a
 	// pattern the tokenized terms cannot answer with full recall is
 	// unservable no matter how much of the range is indexed —
 	// the dispatcher must scan instead of confidently reporting zero.

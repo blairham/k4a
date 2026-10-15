@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
+	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
 )
 
@@ -206,5 +207,26 @@ func TestWrapUnreachableFallsBack(t *testing.T) {
 	drain(t, m, p, e)
 	if !nextCalled.Load() {
 		t.Error("an unreachable daemon must fall through to the local scan")
+	}
+}
+
+// TestWrapJSONPathAlwaysScans: the daemon covers the window and would serve
+// the regex, but it cannot answer a JSON path, so Wrap must fall through.
+func TestWrapJSONPathAlwaysScans(t *testing.T) {
+	t.Parallel()
+	client := dialFake(t, &fakeIndex{following: true, matches: 3})
+	var nextCalled atomic.Bool
+
+	params := coveringParams()
+	expr, err := jsonpath.Parse(`.tag == "needle"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.Path = expr
+	m, p, e := client.Wrap(recordingNext(&nextCalled))(context.Background(), "demo", params)
+	drain(t, m, p, e)
+
+	if !nextCalled.Load() {
+		t.Error("a JSON-path query was served from the shared index; it must scan")
 	}
 }
