@@ -68,8 +68,8 @@ type flags struct {
 	LogLevel      string        `long:"log-level"               env:"K4A_INDEX_LOG_LEVEL"               description:"Log level: debug, info, warn, error"                                                                                                                                                                                                                                                                                                    default:"info"`
 	TopicMaxBytes string        `long:"topic-max-bytes"         env:"K4A_INDEX_TOPIC_MAX_BYTES"         description:"Per-topic index byte cap; the oldest records are trimmed once a topic's index exceeds it. Human size (e.g. 1GiB, 512MB); 0 disables. Total disk ≈ hot-set × this, so keep it under the volume sizeLimit."                                                                                                                               default:"1GiB"`
 	MaxTotalBytes string        `long:"max-total-bytes"         env:"K4A_INDEX_MAX_TOTAL_BYTES"         description:"Disk budget for the WHOLE index root, measured on disk. Over budget the daemon deletes orphaned index dirs, then evicts the coldest non-pinned topics until it fits — turning an abrupt volume-full pod eviction into a graceful loss of the coldest coverage. Set it below the volume's size limit. Human size; 0 disables."           default:"0"`
-	Prefollow     []string      `long:"topic"                   env:"K4A_INDEX_TOPIC"                   description:"Topics to pre-follow (warm + pinned) at startup; each must match --allow. Repeatable / comma-separated."                                                                                                                                                                                                                      short:"t"                 env-delim:","`
-	Allow         []string      `long:"allow"                   env:"K4A_INDEX_ALLOW"                   description:"Follow allowlist: glob patterns of topics the daemon may auto-follow (default-deny; MUST mirror the cluster-side topic grants (IAM policy or ACLs)). Repeatable / comma-separated."                                                                                                                                                                     env-delim:"," required:"true"`
+	Prefollow     []string      `long:"topic"                   env:"K4A_INDEX_TOPIC"                   description:"Topics to pre-follow (warm + pinned) at startup; each must match --allow. Repeatable / comma-separated."                                                                                                                                                                                                                      short:"t"                   env-delim:","`
+	Allow         []string      `long:"allow"                   env:"K4A_INDEX_ALLOW"                   description:"Follow allowlist: glob patterns of topics the daemon may auto-follow (default-deny; MUST mirror the cluster-side topic grants (IAM policy or ACLs)). Repeatable / comma-separated."                                                                                                                                                                       env-delim:"," required:"true"`
 	MaxFollow     int           `long:"max-followed"            env:"K4A_INDEX_MAX_FOLLOWED"            description:"Hard cap on concurrently-followed topics; at the cap a new follow evicts the coldest."                                                                                                                                                                                                                                                  default:"256"`
 	EvictAfter    time.Duration `long:"evict-after"             env:"K4A_INDEX_EVICT_AFTER"             description:"Drop a topic not searched within this idle window (LRU). Pinned pre-follow topics are exempt."                                                                                                                                                                                                                                          default:"168h"`
 	DrainStall    time.Duration `long:"drain-stall-timeout"     env:"K4A_INDEX_DRAIN_STALL_TIMEOUT"     description:"Fail fast if a topic's indexing drain makes no progress for this long while records are queued: dump all goroutine stacks to stderr and exit, so the pod restarts and re-warms instead of serving nothing silently. 0 disables."                                                                                                        default:"5m"`
@@ -82,6 +82,8 @@ type flags struct {
 	TokenFile     string        `long:"token-file"              env:"K4A_INDEX_TOKEN_FILE"              description:"File holding the bearer token every RPC except health checks must present. K4A_INDEX_TOKEN sets it directly."`
 	MaxLimit      int           `long:"max-search-limit"        env:"K4A_INDEX_MAX_SEARCH_LIMIT"        description:"Most matches one Search returns; a larger or unset request limit is lowered to this and the answer reports capped."                                                                                                                                                                                                                     default:"10000"`
 	AdminListen   string        `long:"admin-listen"            env:"K4A_INDEX_ADMIN_LISTEN"            description:"Plain-HTTP address for /metrics (Prometheus), /healthz and /readyz, separate from the gRPC port. Empty disables it."`
+	BackfillWin   time.Duration `long:"backfill-window"         env:"K4A_INDEX_BACKFILL_WINDOW"         description:"History a newly followed topic indexes before its live tail, by record time. 0 starts at the latest records."                                                                                                                                                                                                                           default:"24h"`
+	BackfillMax   int64         `long:"backfill-max-records"    env:"K4A_INDEX_BACKFILL_MAX_RECORDS"    description:"Cap on that history across all partitions (split evenly); a partition with more in the window starts later. 0 = no cap."                                                                                                                                                                                                                default:"1000000"`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
 	NoTLS         bool          `long:"no-tls"                                                          description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
 
@@ -223,6 +225,11 @@ func validateFlags(f *flags) (startupLimits, bool) {
 		log.Error("max-search-limit must be between 1 and 2147483647", "max_search_limit", f.MaxLimit)
 		return startupLimits{}, false
 	}
+	if f.BackfillWin < 0 || f.BackfillMax < 0 {
+		log.Error("backfill-window and backfill-max-records must not be negative",
+			"backfill_window", f.BackfillWin, "backfill_max_records", f.BackfillMax)
+		return startupLimits{}, false
+	}
 	lim := startupLimits{policy: policy, topicMaxBytes: topicMaxBytes, maxTotalBytes: maxTotalBytes}
 	if lim.listener, lim.tls, err = listenerAuth(f); err != nil {
 		log.Error("listener auth", "err", err)
@@ -282,6 +289,8 @@ func logStartup(f *flags, lim startupLimits) {
 		"drain_stall_merge_grace", f.MergeGrace,
 		"drain_stall_wipe_after", f.WipeStrikes,
 		"shutdown_timeout", f.ShutdownGrace,
+		"backfill_window", f.BackfillWin,
+		"backfill_max_records", f.BackfillMax,
 		"listen", f.Listen,
 		"admin_listen", f.AdminListen,
 		"tls", lim.listener.TLSEnabled(),
@@ -318,6 +327,7 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 			StallAfter:  f.DrainStall,
 			MergeGrace:  f.MergeGrace,
 			WipeStrikes: f.WipeStrikes,
+			Backfill:    backfillOptions{Window: f.BackfillWin, MaxRecords: f.BackfillMax},
 		},
 	})
 	defer mgr.stopAll()
@@ -325,8 +335,10 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	// Warm the pinned pre-follow set before serving, then start the LRU sweeper.
 	// Everything else follows on demand, gated by the allowlist.
 	mgr.preFollow(f.Prefollow)
+	// Registration runs on the manager's baseCtx, which is this ctx.
+	restored := mgr.restoreFollowSet() //nolint:contextcheck // see comment above
 	go mgr.sweep()
-	log.Info("follow-set ready", "cluster", cluster, "prefollowed", mgr.size())
+	log.Info("follow-set ready", "cluster", cluster, "followed", mgr.size(), "restored", restored)
 
 	srv, hs := newGRPCServer(lim)
 	is := newIndexServer(mgr)

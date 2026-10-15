@@ -161,11 +161,16 @@ Owns the set of topics currently being followed. Responsibilities:
 - **Registration.** On a `Search` for an unknown topic, check the
   allow/deny policy (below); if allowed, add it to the follow-set and
   start a tail worker + a bounded backfill. Registration is idempotent.
-- **No persistence (yet).** The follow-set lives in memory only: a restart
-  starts from the pinned `--topic` pre-follow set and re-learns the rest
-  from the searches it serves. Persisting it (leaning a compacted Kafka
-  topic) is an open question, below; it would be metadata only — the
-  *index* itself is disposable either way.
+- **Persistence.** The follow-set (topic names + last-queried timestamps)
+  is written to `k4a-index-followset.json` under `--data-dir`, beside the
+  indexes, on every membership change (checked each minute) and at
+  shutdown. A restarted container re-follows it before serving, through
+  today's allowlist and only for topics used within `evictAfter`, restoring
+  each LRU clock (`cmd/k4a-index/followset.go`). It survives what the
+  indexes survive — a container restart, such as the drain-stall watchdog's
+  exit — and not a new pod's empty volume; cross-pod persistence is still
+  the open question below. This is metadata only — the *index* itself is
+  disposable.
 - **LRU eviction.** A topic not searched within `evictAfter` (default
   **7 days**) is dropped. A Search, or a Follow of a topic already followed
   (the client scanned because coverage fell short), counts as use; a
@@ -186,13 +191,33 @@ Owns the set of topics currently being followed. Responsibilities:
 One goroutine per followed topic, each a thin wrapper around the existing
 `internal/index` indexer:
 
-- **Live tail** from latest via `internal/kafka` Consume — steady state,
-  always warm, zero extra machinery beyond what the local index already
-  runs, just never stopped.
-- **Bounded backfill** on registration: index the recent window (last
-  `backfillWindow`, default **24h or 10 GB, whichever smaller**) using
-  the same catch-up scan the local index uses. While backfilling,
-  coverage reports the gap so clients scan across it.
+- **One ordered read: bounded backfill, then the live tail** (#56). At
+  registration the worker plans a start offset per partition
+  (`planBackfill`, `cmd/k4a-index/backfill.go`) from the broker's log-start,
+  high-watermark and time-indexed offsets, and reads forward from there with
+  `kafka.Client.ConsumeFrom`, straight on into the live tail. A partition
+  the index has not seen starts at the first record of `--backfill-window`
+  (default **24h**), pulled forward to its share of
+  `--backfill-max-records` (default **1,000,000** across the topic; the
+  design's 10 GB bound became this record cap, and `--topic-max-bytes`
+  still trims on top). A partition the index already holds resumes right
+  after its newest record — the catch-up a restart used to skip, which left
+  a silent hole between the old index and a tail that restarted near the
+  end. If that resume is impossible (the records were deleted, the topic was
+  recreated, or the gap exceeds the cap) the index is deleted and rebuilt
+  from the window instead of joined across a hole.
+- **Coverage stays contiguous throughout.** Because history and tail are one
+  stream per partition, the indexed range never spans a hole; while the
+  history is being read, the newest-offset frontier is simply behind the
+  broker, so a query reaching "now" falls to a scan exactly as for a lagging
+  tail. `Coverage.backfilling` is true until every partition has reached its
+  registration-time high watermark (or for at most 15 minutes, for a quiet
+  partition whose last offset is a transaction marker). History records
+  wait for indexer buffer room (`AsyncIndexer.SubmitWait`) rather than drop;
+  live records keep the never-block rule. This reuses `internal/index`
+  unchanged apart from that method, rather than `index.Catchup`'s separate
+  range scan, because a second consumer racing the tail is what would open
+  the hole the single stream avoids.
 - Writes the same `Bookkeeper` state (`newest/oldest_offset_per_partition`,
   gaps) that the dispatcher already reads.
 
@@ -381,17 +406,18 @@ Open questions.
 ## Storage & deployment
 
 **Storage: `emptyDir`, not a PVC.** The index is a pure optimization that
-rebuilds from the broker, so index loss is a non-event — on restart the
-daemon re-follows its pinned `--topic` set and re-learns the rest from the
-next searches, with a transient scan-fallback window while it warms. This deliberately sidesteps
+rebuilds from the broker, so index loss is a non-event — on a container
+restart the daemon re-follows its persisted follow-set and each index
+resumes where it stopped; a new pod re-follows its pinned set and
+re-backfills, with a transient scan-fallback window while it warms. This deliberately sidesteps
 PVC lifecycle pain: for a service whose local state is authoritative,
 emptyDir loss is a correctness incident; here it is by-design disposable.
-Nothing about the follow-set is durable today. The plan is for that metadata
-to live *outside* the pod (leaning a compacted Kafka topic so it both
-persists and converges across replicas; see Open questions), so a pod
-restart would re-follow the whole set even on empty local storage. Until
-then, and in the worst case after it, the daemon forgets what it was
-following and re-learns on the next search.
+The one durable bit — the follow-set metadata — is tiny; today it lives on
+the same volume, and the design leans on moving it *outside* the pod (a
+compacted Kafka topic, so it both persists and converges across replicas;
+see Open questions), so that a new pod could re-follow the set even on
+empty local storage. Worst case, even that is lost: the daemon
+forgets what to follow and re-learns on the next search.
 
 **Sizing the volume — on-disk is ~3x the cap** (measured).
 `config.topicMaxBytes` bounds *stored* bytes, which is what the trimmer can
@@ -697,18 +723,15 @@ fallback at every step, so nothing regresses if the daemon is absent.
   allow/deny gate (`cmd/k4a-index/policy.go`, default-deny glob allowlist)
   ships in the SAME change — auto-follow without it is the one dangerous state
   (see Pickup notes), and it mirrors the daemon's Kafka topic grant.
-- **Warming is live-tail only.** A newly-followed topic indexes forward from
-  registration; its coverage window starts at that moment, so clients scan
-  anything older (the coverage frame keeps this honest). **Bounded HISTORICAL
-  backfill on registration** (indexing the recent window that predates the first
-  search) is deliberately deferred: it needs a timestamp→offset lookup
-  `internal/kafka` doesn't yet expose, and `internal/index.Catchup` only fills
-  gaps for partitions with prior state. A follow-up; nothing is stale
-  or wrong without it, the covered window is just narrower on day one.
-- **Cross-pod follow-set persistence is NOT included** (still the open question
-  below). Each replica learns its follow-set independently from the searches it
-  serves and self-heals; the pinned pre-follow set covers restart warmth for the
-  hot topics. A compacted-topic follow-set is the convergence upgrade.
+- **Bounded historical backfill and restart catch-up** shipped later (#56):
+  see *The tail workers* above. Before it, a new topic's coverage started at
+  its first search.
+- **Follow-set persistence is per container** (#56): the set is saved beside
+  the indexes and restored on a container restart. **Cross-pod persistence
+  is NOT included** (still the open question below): each replica, and each
+  new pod, learns its follow-set from the searches it serves and self-heals;
+  the pinned pre-follow set covers new-pod warmth for the hot topics. A
+  compacted-topic follow-set is the convergence upgrade.
 - **Ships:** "search it and it warms; idle topics fall out."
 
 ### Phase 3 — client remote backend (≈ half a week) — **IMPLEMENTED**
@@ -769,7 +792,7 @@ fallback at every step, so nothing regresses if the daemon is absent.
   and self-heals (a pod that never saw a search for X just follows X the
   first time it does; client fallback covers the gap). Both beat a
   ConfigMap; flag which for review.
-- **Backfill window default.** 24h/10 GB is a guess. During incidents the
+- **Backfill window default.** 24h / 1M records (`--backfill-window`, `--backfill-max-records`) is a guess. During incidents the
   interesting window may be longer; per-topic overrides (as in
   `local-index.md`'s retention config) probably belong here too.
 - **Multiple daemons per cluster for read-scaling.** If one pod can't

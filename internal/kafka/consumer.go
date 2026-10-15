@@ -217,13 +217,33 @@ func (c *Client) Consume(ctx context.Context, topic string) (<-chan ConsumedMess
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 
-	go c.runConsume(ctx, topic, ch, errCh, ready)
+	go c.runConsume(ctx, topic, nil, ch, errCh, ready)
+	return ch, errCh, ready
+}
+
+// ConsumeFrom is Consume starting each listed partition at its offset in
+// starts, so a caller that planned a backfill reads history and then the live
+// tail in one ordered stream per partition, with no hand-off to lose records
+// in. A partition missing from starts (created after the plan) is read from
+// its beginning.
+func (c *Client) ConsumeFrom(
+	ctx context.Context, topic string, starts map[int32]int64,
+) (<-chan ConsumedMessage, <-chan error, <-chan struct{}) {
+	ch := make(chan ConsumedMessage, consumerChannelBuffer)
+	errCh := make(chan error, 1)
+	ready := make(chan struct{})
+
+	if starts == nil {
+		starts = map[int32]int64{}
+	}
+	go c.runConsume(ctx, topic, starts, ch, errCh, ready)
 	return ch, errCh, ready
 }
 
 func (c *Client) runConsume(
 	ctx context.Context,
 	topic string,
+	starts map[int32]int64,
 	ch chan<- ConsumedMessage,
 	errCh chan<- error,
 	ready chan<- struct{},
@@ -254,7 +274,14 @@ func (c *Client) runConsume(
 	// handoff but without an explicit offset switchover.
 	partitions := make(map[int32]kgo.Offset, numPartitions)
 	for p := range td.Partitions {
-		partitions[p] = kgo.NewOffset().AtEnd().Relative(-int64(perPartition))
+		switch off, ok := starts[p]; {
+		case starts == nil:
+			partitions[p] = kgo.NewOffset().AtEnd().Relative(-int64(perPartition))
+		case ok:
+			partitions[p] = kgo.NewOffset().At(off)
+		default:
+			partitions[p] = kgo.NewOffset().AtStart()
+		}
 	}
 
 	cl, err := c.newConsumerClient(map[string]map[int32]kgo.Offset{topic: partitions})

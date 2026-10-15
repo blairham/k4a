@@ -103,6 +103,23 @@ func (a *AsyncIndexer) Submit(m kafka.ConsumedMessage) bool {
 	}
 }
 
+// SubmitWait pushes a record, waiting for buffer room instead of dropping it.
+// It is for reading history (a backfill), where pacing the read to the
+// indexer costs nothing and a drop would be a hole in an otherwise complete
+// window; the live tail keeps Submit's never-block contract. Returns false
+// when ctx ends or the indexer is stopped first.
+func (a *AsyncIndexer) SubmitWait(ctx context.Context, m kafka.ConsumedMessage) bool {
+	if a.stopped.Load() {
+		return false
+	}
+	select {
+	case a.input <- m:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // Dropped returns the number of records that were dropped due to a
 // full buffer since the indexer started. Lifetime counter.
 func (a *AsyncIndexer) Dropped() int64 {
