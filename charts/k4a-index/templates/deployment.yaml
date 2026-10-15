@@ -18,20 +18,53 @@ spec:
         {{- include "k4a-index.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "k4a-index.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532        # distroless nonroot
-        runAsGroup: 65532
-        fsGroup: 65532          # so the nonroot process can write the emptyDir index
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: k4a-index
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- if .Values.kafka.insecure }}
+          # --insecure has no env equivalent, so it is passed as an argument.
+          args:
+            - --insecure
+          {{- end }}
           env:
             - name: KAFKA_BROKERS
               value: {{ required "kafka.brokers is required" .Values.kafka.brokers | quote }}
             - name: KAFKA_AUTH
               value: {{ .Values.kafka.auth | quote }}
+            {{- with .Values.kafka.credentials.existingSecret }}
+            # SASL/SCRAM credentials, read from an existing Secret.
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.kafka.credentials.usernameKey }}
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.kafka.credentials.passwordKey }}
+            {{- end }}
+            {{- if .Values.kafka.tls.existingSecret }}
+            # TLS material, mounted from an existing Secret at /etc/k4a/tls.
+            {{- with .Values.kafka.tls.caKey }}
+            - name: KAFKA_TLS_CA
+              value: /etc/k4a/tls/{{ . }}
+            {{- end }}
+            {{- with .Values.kafka.tls.certKey }}
+            - name: KAFKA_TLS_CERT
+              value: /etc/k4a/tls/{{ . }}
+            {{- end }}
+            {{- with .Values.kafka.tls.keyKey }}
+            - name: KAFKA_TLS_KEY
+              value: /etc/k4a/tls/{{ . }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.aws.region }}
             - name: AWS_REGION
               value: {{ .Values.aws.region | quote }}
@@ -70,6 +103,8 @@ spec:
               value: ":{{ .Values.service.port }}"
             - name: K4A_INDEX_DATA_DIR
               value: /data
+            - name: K4A_INDEX_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
           ports:
             - name: grpc
               containerPort: {{ .Values.service.port }}
@@ -93,8 +128,26 @@ spec:
           volumeMounts:
             - name: index
               mountPath: /data
+            # The root filesystem is read-only; /tmp is the only other
+            # writable path.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.kafka.tls.existingSecret }}
+            - name: kafka-tls
+              mountPath: /etc/k4a/tls
+              readOnly: true
+            {{- end }}
       volumes:
         # Disposable index storage — rebuilt from the broker on restart.
         - name: index
           emptyDir:
             sizeLimit: {{ .Values.storage.sizeLimit }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.storage.tmpSizeLimit }}
+        {{- with .Values.kafka.tls.existingSecret }}
+        - name: kafka-tls
+          secret:
+            secretName: {{ . }}
+            defaultMode: 0440
+        {{- end }}
