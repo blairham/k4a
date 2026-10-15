@@ -47,20 +47,22 @@ func (a *App) startConfigEdit(configName string) (tea.Model, tea.Cmd) {
 	return a, cmd
 }
 
-// promptDeleteOffset sets up a confirmation prompt for deleting a single offset.
-func (a *App) promptDeleteOffset() (tea.Model, tea.Cmd) {
+// promptDeleteOffset sets up a confirmation prompt for deleting a single
+// offset, or says why it cannot.
+func (a *App) promptDeleteOffset() (errMsg string, cmd tea.Cmd) {
 	v := typedView[*views.GroupDetailView](a, style.ViewGroupDetail)
 	if a.view != style.ViewGroupDetail || v == nil {
-		return a, nil
+		return "reset works in Group Detail: open a consumer group first", nil
 	}
 	groupID := v.GroupID()
 	info := v.GetSelectedOffset()
 	if info == nil {
-		return a, nil
+		return "no offset selected", nil
 	}
 	param := fmt.Sprintf("%s\x00%s\x00%d", groupID, info.Topic, info.Partition)
 	prompt := fmt.Sprintf("delete offset for %s:%d?", info.Topic, info.Partition)
-	return a.promptConfirm("delete_offset", param, prompt)
+	_, cmd = a.promptConfirm("delete_offset", param, prompt)
+	return "", cmd
 }
 
 // promptConfirm opens the y/n Confirm bar.
@@ -598,7 +600,10 @@ func (a *App) applySwitchContext(msg switchContextMsg) (tea.Model, tea.Cmd) {
 	// Persist the context switch so the next launch starts here.
 	if a.cfg != nil && a.cfgPath != "" {
 		a.cfg.CurrentContext = msg.name
-		config.Save(a.cfgPath, a.cfg) //nolint:errcheck // best-effort persistence
+		if err := config.Save(a.cfgPath, a.cfg); err != nil {
+			// The switch itself worked; say the next launch won't start here.
+			a.errFlash = "switched, but saving current context failed: " + err.Error()
+		}
 	}
 	// Tier 1 session: remember the last context as a fast-path hint
 	// independent of config.yaml (config may be read-only on some setups).

@@ -49,6 +49,7 @@ internal/
                      # listeners and the clients that dial them
   indexwire/         # gRPC contract for the shared index (generated indexv1 + conversions)
   remoteindex/       # Client backend that dials a shared k4a-index daemon
+  schemareg/         # Confluent Schema Registry client + Avro/Protobuf/JSON-Schema decoding
   searchcache/       # On-disk query-result cache (Tier 2) + the search wrapper
   searchcli/         # Shared search-summary shape (CLI `--format summary` + MCP)
   state/             # ~/.k4a state root: tiers, envelopes, advisory file lock, session
@@ -392,6 +393,7 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - `blairham/tuikit` — Shared Charm TUI widgets
 - `charm.land/bubbletea`, `bubbles`, `lipgloss`, `huh` — TUI framework, components, styling, forms
 - `jessevdk/go-flags` — CLI flag parsing; `hashicorp/cli` — subcommand framework
+- `twmb/franz-go/pkg/sr`, `linkedin/goavro/v2`, `bufbuild/protocompile` — Schema Registry client, Avro decoding, Protobuf schema compilation (`internal/schemareg`; see `docs/design/schema-registry.md`)
 - `golang.org/x/mod/semver` — version comparison for `k4a upgrade`, which is otherwise standard library (`internal/upgrade/release.go`)
 
 ## Testing
@@ -405,8 +407,11 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   pattern from the CLI, MCP or a k4a-index client must never be served from
   the index unless every match is found, checked against the index's real
   analyzer), `FuzzParseDuration` / `FuzzParse` (`internal/timebound`; time
-  bounds must be non-negative and exact) and `FuzzParseTopicSchema`
-  (`internal/kafka/schema_fuzz_test.go`; a schema that loads must produce).
+  bounds must be non-negative and exact), `FuzzParseTopicSchema`
+  (`internal/kafka/schema_fuzz_test.go`; a schema that loads must produce)
+  and `FuzzParseWire` (`internal/schemareg/wire_fuzz_test.go`; the Confluent
+  wire-format header and Protobuf message-index path of any record bytes,
+  checked against franz-go's own decoder).
   Before the first release they found a recall gap for Katakana, Thai, İ and
   fold-equivalent letters, Bleve corrupting terms that contain İ, K, Å or Ω,
   overflowing and negative lookbacks, and a schema with an empty sample that
