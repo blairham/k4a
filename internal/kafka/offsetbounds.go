@@ -36,20 +36,28 @@ func (c *Client) TopicOffsetBounds(ctx context.Context, topic string, since time
 	if err != nil {
 		return OffsetBounds{}, fmt.Errorf("listing offsets after %s: %w", since.Format(time.RFC3339), err)
 	}
-	b := OffsetBounds{
-		Start: listedOffsets(starts, topic),
-		End:   listedOffsets(ends, topic),
-		After: listedOffsets(after, topic),
+	var b OffsetBounds
+	if b.Start, err = listedOffsets(starts, topic); err != nil {
+		return OffsetBounds{}, err
+	}
+	if b.End, err = listedOffsets(ends, topic); err != nil {
+		return OffsetBounds{}, err
+	}
+	if b.After, err = listedOffsets(after, topic); err != nil {
+		return OffsetBounds{}, err
 	}
 	return b, nil
 }
 
-func listedOffsets(l kadm.ListedOffsets, topic string) map[int32]int64 {
+// listedOffsets refuses a partial listing: a partition missing from the
+// bounds would look like a partition the topic no longer has.
+func listedOffsets(l kadm.ListedOffsets, topic string) (map[int32]int64, error) {
 	out := map[int32]int64{}
 	for p, o := range l[topic] {
-		if o.Err == nil {
-			out[p] = o.Offset
+		if o.Err != nil {
+			return nil, fmt.Errorf("partition %d: %w", p, o.Err)
 		}
+		out[p] = o.Offset
 	}
-	return out
+	return out, nil
 }

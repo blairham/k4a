@@ -265,3 +265,50 @@ func TestStaleIndexStartsOver(t *testing.T) {
 func coverageReq(topic string) *indexv1.CoverageRequest {
 	return &indexv1.CoverageRequest{Topic: topic}
 }
+
+// failingPlanSource can neither list offsets nor tail; planning must fail.
+type failingPlanSource struct{}
+
+func (failingPlanSource) TopicOffsetBounds(context.Context, string, time.Time) (kafka.OffsetBounds, error) {
+	return kafka.OffsetBounds{}, context.DeadlineExceeded
+}
+
+func (failingPlanSource) ConsumeFrom(context.Context, string, map[int32]int64) (
+	<-chan kafka.ConsumedMessage, <-chan error, <-chan struct{},
+) {
+	return nil, nil, nil
+}
+
+func (failingPlanSource) Consume(context.Context, string) (
+	<-chan kafka.ConsumedMessage, <-chan error, <-chan struct{},
+) {
+	return nil, nil, nil
+}
+
+// TestFailedPlanDropsAHeldIndex: when the broker cannot be asked where to
+// resume, an index that holds records is started over, because the plain
+// tail would begin near the end and the old range would span what it missed.
+func TestFailedPlanDropsAHeldIndex(t *testing.T) {
+	root := state.NewRoot(t.TempDir())
+	ix, err := index.Open(root, "c", testTopic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = ix.Index(context.Background(), kafka.ConsumedMessage{
+		Topic: testTopic, Partition: 0, Offset: 7, Time: time.Now(), Value: "v",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan, ix, err := planTail(context.Background(), root, "c", testTopic, failingPlanSource{},
+		backfillOptions{Window: time.Hour}, ix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ix.Close() //nolint:errcheck // test cleanup
+	if plan != nil {
+		t.Error("a failed plan returned a plan")
+	}
+	if n := len(ix.BookkeeperSnapshot().NewestOffsetPerPartition); n != 0 {
+		t.Errorf("the held index survived a failed plan (%d partitions held)", n)
+	}
+}

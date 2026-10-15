@@ -312,6 +312,7 @@ func (m *manager) register(topic string, pinned bool) {
 		m.teardown(victimTopic, victim)
 	}
 
+	m.saveFollowSet()
 	log.Info("follow: now following", "topic", topic, "pinned", pinned, "followed_total", m.size())
 }
 
@@ -618,6 +619,7 @@ func (m *manager) teardown(topic string, e *followEntry) {
 	if err := os.RemoveAll(dir); err != nil {
 		log.Error("follow: deleting evicted index dir", "topic", topic, "dir", dir, "err", err)
 	}
+	m.saveFollowSet()
 }
 
 // beforeTeardownRemove, when set by a test, runs in teardown after the worker

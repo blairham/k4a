@@ -41,9 +41,10 @@ func (m *manager) lastUse() map[string]int64 {
 }
 
 // saveFollowSet writes the follow-set when its membership changed since the
-// last write. LRU clocks alone moving do not trigger a write: they are only
-// needed to within a sweep, and every membership change and shutdown saves
-// them anyway.
+// last write. It runs on every registration and teardown, since the restart
+// this is for (the drain-stall watchdog's exit) skips shutdown; the minute
+// sweep is a backstop. LRU clocks alone moving do not trigger a write, so a
+// restored clock can be up to a minute stale.
 func (m *manager) saveFollowSet() {
 	topics := m.lastUse()
 	m.saveMu.Lock()

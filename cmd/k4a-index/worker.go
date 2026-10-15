@@ -126,20 +126,20 @@ func planTail(
 	defer cancel()
 	bounds, err := bs.TopicOffsetBounds(pctx, topic, time.Now().Add(-opts.Window))
 	if err != nil {
+		// The plain tail starts near the high watermark, so an index that
+		// already holds records would claim one range across what it missed.
 		log.Warn("backfill: cannot plan, tailing from the latest records", "topic", topic, "err", err)
+		if len(ix.BookkeeperSnapshot().NewestOffsetPerPartition) > 0 {
+			if ix, err = reopenEmpty(root, cluster, topic, ix); err != nil {
+				return nil, nil, err
+			}
+		}
 		return nil, ix, nil
 	}
 	plan, stale := planBackfill(ix.BookkeeperSnapshot(), bounds, opts)
 	if stale {
 		log.Warn("backfill: the index on disk cannot be resumed without a hole — starting it over", "topic", topic)
-		dir := ix.Dir()
-		if cerr := ix.Close(); cerr != nil {
-			return nil, nil, cerr
-		}
-		if rerr := os.RemoveAll(dir); rerr != nil {
-			return nil, nil, rerr
-		}
-		if ix, err = index.Open(root, cluster, topic); err != nil {
+		if ix, err = reopenEmpty(root, cluster, topic, ix); err != nil {
 			return nil, nil, err
 		}
 		plan, _ = planBackfill(ix.BookkeeperSnapshot(), bounds, opts)
@@ -151,6 +151,18 @@ func planTail(
 	log.Info("backfill planned", "topic", topic, "partitions", len(plan.starts),
 		"history_records", history, "window", opts.Window, "max_records", opts.MaxRecords)
 	return &plan, ix, nil
+}
+
+// reopenEmpty deletes a topic's index and opens a fresh one in its place.
+func reopenEmpty(root *state.Root, cluster, topic string, ix *index.Indexer) (*index.Indexer, error) {
+	dir := ix.Dir()
+	if err := ix.Close(); err != nil {
+		return nil, err
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return nil, err
+	}
+	return index.Open(root, cluster, topic)
 }
 
 // run drives the live tail until ctx is canceled. Each consumed record is
@@ -205,18 +217,17 @@ func (w *topicWorker) run(ctx context.Context) {
 	}
 }
 
-// accept hands m to the indexer: waiting for room while it is history,
-// dropping on a full buffer once it is live.
+// accept hands m to the indexer. Until every partition has read its
+// history, every record waits for room: the backfill keeps the buffer full,
+// so a live record from a partition that is already caught up would otherwise
+// be dropped, and a drop records no gap. After that, the live tail's
+// never-block Submit applies.
 func (w *topicWorker) accept(ctx context.Context, m kafka.ConsumedMessage) bool {
-	if w.backfill == nil {
+	if w.backfill == nil || w.backfill.finished() {
 		return w.async.Submit(m)
 	}
-	history := w.backfill.inHistory(m)
 	w.backfill.observe(m)
-	if history {
-		return w.async.SubmitWait(ctx, m)
-	}
-	return w.async.Submit(m)
+	return w.async.SubmitWait(ctx, m)
 }
 
 // backfilling reports whether the worker is still reading history.

@@ -225,7 +225,8 @@ func (c *Client) Consume(ctx context.Context, topic string) (<-chan ConsumedMess
 // starts, so a caller that planned a backfill reads history and then the live
 // tail in one ordered stream per partition, with no hand-off to lose records
 // in. A partition missing from starts (created after the plan) is read from
-// its beginning.
+// its high watermark, like any live tail: it has nothing indexed to be
+// contiguous with.
 func (c *Client) ConsumeFrom(
 	ctx context.Context, topic string, starts map[int32]int64,
 ) (<-chan ConsumedMessage, <-chan error, <-chan struct{}) {
@@ -280,7 +281,7 @@ func (c *Client) runConsume(
 		case ok:
 			partitions[p] = kgo.NewOffset().At(off)
 		default:
-			partitions[p] = kgo.NewOffset().AtStart()
+			partitions[p] = kgo.NewOffset().AtEnd()
 		}
 	}
 

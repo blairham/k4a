@@ -163,8 +163,8 @@ Owns the set of topics currently being followed. Responsibilities:
   start a tail worker + a bounded backfill. Registration is idempotent.
 - **Persistence.** The follow-set (topic names + last-queried timestamps)
   is written to `k4a-index-followset.json` under `--data-dir`, beside the
-  indexes, on every membership change (checked each minute) and at
-  shutdown. A restarted container re-follows it before serving, through
+  indexes, on every registration and eviction (with a one-minute sweep as
+  backstop) and at shutdown. A restarted container re-follows it before serving, through
   today's allowlist and only for topics used within `evictAfter`, restoring
   each LRU clock (`cmd/k4a-index/followset.go`). It survives what the
   indexes survive — a container restart, such as the drain-stall watchdog's
@@ -212,9 +212,12 @@ One goroutine per followed topic, each a thin wrapper around the existing
   broker, so a query reaching "now" falls to a scan exactly as for a lagging
   tail. `Coverage.backfilling` is true until every partition has reached its
   registration-time high watermark (or for at most 15 minutes, for a quiet
-  partition whose last offset is a transaction marker). History records
-  wait for indexer buffer room (`AsyncIndexer.SubmitWait`) rather than drop;
-  live records keep the never-block rule. This reuses `internal/index`
+  partition whose last offset is a transaction marker). Until then every
+  record waits for indexer buffer room (`AsyncIndexer.SubmitWait`) rather
+  than drop, since the backfill keeps the buffer full; afterwards the live
+  tail's never-block rule applies. If planning fails (the broker cannot list
+  offsets), an index that already holds records is started over before the
+  plain tail runs, for the same reason. This reuses `internal/index`
   unchanged apart from that method, rather than `index.Catchup`'s separate
   range scan, because a second consumer racing the tail is what would open
   the hole the single stream avoids.

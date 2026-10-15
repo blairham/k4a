@@ -146,13 +146,6 @@ func newBackfillTracker(targets map[int32]int64) *backfillTracker {
 	return t
 }
 
-// inHistory reports whether m is history for its partition (before the
-// registration-time high watermark). Tail goroutine only.
-func (t *backfillTracker) inHistory(m kafka.ConsumedMessage) bool {
-	end, ok := t.remaining[int32(m.Partition)] //nolint:gosec // partition IDs fit in int32
-	return ok && m.Offset < end
-}
-
 // observe retires a partition once a record at or past its last history
 // offset arrives. Tail goroutine only.
 func (t *backfillTracker) observe(m kafka.ConsumedMessage) {
