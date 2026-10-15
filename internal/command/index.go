@@ -85,6 +85,10 @@ func (c *IndexCommand) Run(args []string) int {
 	case subcmdStatus:
 		return runIndexStatus(out, root)
 	case "clear":
+		if err := checkRootWritable(root, "index clear"); err != nil {
+			log.Error(err.Error())
+			return 1
+		}
 		return runIndexClear(out, root, args[1:])
 	case subcmdHelp, "-h", flagHelp:
 		fmt.Fprintln(out, c.Help()) //nolint:errcheck // stdout; not actionable

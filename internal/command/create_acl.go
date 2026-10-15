@@ -103,6 +103,11 @@ func (c *CreateACLCmd) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	if err := flags.checkWritable("create-acl"); err != nil {
+		log.Error(err.Error())
+		return 1
+	}
+
 	client, err := flags.BuildClient()
 	if err != nil {
 		log.Error(err.Error())

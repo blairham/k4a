@@ -10,12 +10,15 @@ k4a is three programs with different trust surfaces.
 can read every topic and run every admin operation those credentials allow,
 including deleting topics, consumer groups, ACLs and records.
 
-- **The broker's authorization is the only boundary.** `--readonly` (and
-  `ui.readonly: true`) hides and blocks the mutating actions in the TUI so a
-  slip of the keyboard cannot delete a topic; it is a guard rail, not a
-  security control, and the headless subcommands (`delete-topic`,
-  `alter-config`, `create-acl`, …) do not consult it. To be unable to change
-  a cluster, connect with a principal that cannot.
+- **The broker's authorization is the only boundary.** `ui.readonly: true`
+  (and the TUI's `--readonly`) hides and blocks the mutating actions in the
+  TUI and refuses the mutating headless subcommands (`produce`,
+  `create-topic`, `delete-topic`, `alter-config`, `alter-replication`,
+  `create-acl`, `index clear`, `state clear`), so a slip cannot delete a
+  topic. `delete-topic` also asks before deleting unless given `--yes`. It
+  is a guard rail, not a security control: anyone who can edit the config
+  can turn it off. To be unable to change a cluster, connect with a
+  principal that cannot.
 - **Credentials** come from one of:
   - **AWS** (`--auth iam`): the AWS SDK's shared configuration, for the named
     `profile` or the default chain. An SSO session, `credential_process` or
