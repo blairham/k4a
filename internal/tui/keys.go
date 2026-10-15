@@ -16,12 +16,13 @@ import (
 )
 
 // knownCommands is the list of commands for fuzzy matching in command mode.
+// TestKnownCommandsDispatch keeps it in step with dispatchCommand.
 var knownCommands = []string{
-	"q!", "quit", "exit",
-	"topics", "groups", "cluster", "acls",
+	"q", "q!", "quit", "exit",
+	"topics", "topic", "groups", "group", "cluster", "brokers", "acls",
 	"produce", "create-topic", "ct", "create-acl", "acl",
 	"context", "ctx", "reconnect", "reset",
-	"search",
+	"search", "s",
 	"upgrade",
 	"logo", "logoless",
 }

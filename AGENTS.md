@@ -90,12 +90,13 @@ staging` still opens the TUI.
 - **Messages** — live message tail (newest first) with follow mode
 - **Message Detail** — sticky metadata/header cards + scrollable pretty-printed JSON
 - **ACLs** — access control list bindings with create/delete
+- **Search** — streamed matches from a whole-topic search (`s` in Messages, `:search`)
 - **Context** — context selector for switching clusters
 - **Produce** — interactive message production with progress tracking
 - **Create Topic** — topic creation form (name, partitions, replication)
 - **Create ACL** — ACL binding creation form
 - **Reset Offsets** — consumer group offset reset (earliest/latest/specific/shift)
-- **Help** — `?` toggles shortcut reference overlay
+- **Help** — `?` toggles the shortcut overlay for the active view
 
 ## Navigation
 
@@ -106,9 +107,18 @@ staging` still opens the TUI.
 ### Global Keys
 
 - `j`/`k` navigate, `enter` drill in, `esc` back
-- `/` filter (regex), `:` command mode, `?` help
-- `r` refresh, `ctrl+c` quit
-- `G` go to bottom, `PgDn`/`PgUp` page navigation
+- `/` filter (regex, only where it filters — see Filter System), `:` command mode, `?` help
+- `r` refresh (not in Messages, Message Detail, Search or the forms), `ctrl+c` quit
+- `g`/`G` top/bottom, `ctrl+f`/`ctrl+b` (or `PgDn`/`PgUp`) page navigation
+
+**Keys are declared once, in `internal/tui/bindings.go`** (`viewBindings`):
+every binding is in that view's `?` overlay, the `hint` ones also in its hint
+bar, and the global keys are added only where they work (`filterViews`,
+`noRefreshViews`, `formViews`). `TestBindingsAreHandled` fails when a listed
+key does nothing in its view, `TestHandledKeysAreBound` when a view acts on a
+key that is not listed, and `TestKnownCommandsDispatch` when `:` autocomplete
+and `dispatchCommand` disagree. Add a key to the view and to `viewBindings` in
+the same change.
 
 ### Topics View
 
@@ -146,10 +156,16 @@ staging` still opens the TUI.
 - `o` — jump to topic overview
 - `p` / `P` — cycle the partition filter forward / backward; `a` clears it
 - `h` / `l` — scroll the table horizontally / pan the value column
+- `ctrl+d` — purge the topic (the same retention prompt as Topic Detail)
 
 ### Message Detail View
 
 - `s` — save message to file (JSON)
+- `ctrl+f` / `ctrl+b` — page the body
+
+### Search View
+
+- `enter` — view the matched message
 
 ### ACLs View
 
@@ -174,14 +190,16 @@ staging` still opens the TUI.
 - `tab`/`shift+tab` — next/previous field
 - `enter` — submit form
 - `esc` — cancel
+- Every other key goes to the field being edited (#65), so the hint bar
+  offers no tab, help or command keys there
 
 ## Command Mode
 
 Enter with `:`, supports autocomplete:
 
 ```
-:q, :quit, :exit               Quit
-:topics, :groups, :cluster     Switch views
+:q, :q!, :quit, :exit          Quit
+:topics, :groups, :cluster     Switch views (also :topic, :group, :brokers)
 :acls                          Switch to ACLs view
 :context, :ctx                 Open context selector
 :produce [TOPIC]               Produce messages
@@ -205,7 +223,7 @@ Enter with `:`, supports autocomplete:
 
 ```
 Connection:
-  -c, --context NAME      Named context from config
+  -c, --context NAME      Named context from config (-c in the TUI only)
       --config FILE       Config file path (default: ~/.k4a/config.yaml)
   -b, --brokers BROKERS   Bootstrap servers (comma-separated)
   -a, --auth METHOD       Auth: plaintext, tls, scram, scram-sha-256, plain,
@@ -241,8 +259,9 @@ Display:
 ```
 
 The headless subcommands share a `ConnectionFlags` struct
-(`internal/command/flags.go`) that adds the shared-index flags on top of the
-above:
+(`internal/command/flags.go`): the connection flags above, with `--context`
+but no `-c` (`produce` uses `-c` for `--count`), plus the shared-index flags,
+which `search` and `mcp` use:
 
 ```
       --index-endpoint HOST:PORT  Shared k4a-index daemon; overrides the

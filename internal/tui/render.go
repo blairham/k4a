@@ -5,7 +5,6 @@ package tui
 
 import (
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -42,7 +41,7 @@ func (a *App) View() tea.View {
 		Content:     a.renderContent(),
 		Breadcrumb:  a.breadcrumb(),
 		HelpVisible: a.showHelp,
-		Help:        a.helpPanel(),
+		Help:        helpPanel(a.view),
 	}
 	switch {
 	case a.errFlash != "":
@@ -132,154 +131,12 @@ func (a *App) renderInfoPanel() []string {
 	}
 }
 
-// Shortcut keys and descriptions that recur across the per-view shortcut
-// sets and the help panel.
-const (
-	keyEnter = "<enter>"
-	keyEsc   = "<esc>"
-	keySlash = "</>"
-	keyHelp  = "<?>"
-	keyCtrlD = "<ctrl-d>"
-	keyCtrlF = "<ctrl-f>"
-	keyCtrlB = "<ctrl-b>"
-	keyP     = "<p>"
-	keyS     = "<s>"
-	keyR     = "<R>"
-
-	descBack     = "Back"
-	descFilter   = "Filter"
-	descHelp     = "Help"
-	descDelete   = "Delete"
-	descMessages = "Messages"
-)
-
-// viewShortcuts is each view's action column, before the always-on actions
-// are merged in. A view with no entry gets defaultShortcuts.
-var viewShortcuts = map[style.ViewType][]chrome.Shortcut{
-	style.ViewTopics: {
-		{Key: keyEnter, Desc: descMessages},
-		{Key: "<o>", Desc: "Overview"},
-		{Key: keyP, Desc: "Produce"},
-		{Key: keyCtrlD, Desc: descDelete},
-	},
-	style.ViewTopicDetail: {
-		{Key: "<m>", Desc: descMessages},
-		{Key: "<e>", Desc: "Config"},
-		{Key: keyP, Desc: "Partitions"},
-		{Key: keyR, Desc: "Replicas"},
-	},
-	style.ViewTopicConfig: {
-		{Key: keyEnter, Desc: "Edit"},
-		{Key: "<d>", Desc: "Defaults"},
-		{Key: keySlash, Desc: descFilter},
-		{Key: keyEsc, Desc: descBack},
-	},
-	style.ViewGroups: {
-		{Key: keyEnter, Desc: "Detail"},
-		{Key: keyCtrlD, Desc: descDelete},
-		{Key: keySlash, Desc: descFilter},
-		{Key: keyHelp, Desc: descHelp},
-	},
-	style.ViewMessages: {
-		{Key: keyEnter, Desc: "View"},
-		{Key: keyS, Desc: "Search"},
-		{Key: keyCtrlD, Desc: "Purge"},
-		{Key: "<f>", Desc: "Follow"},
-	},
-	style.ViewMessageDetail: {
-		{Key: keyS, Desc: "Save"},
-		{Key: keyCtrlF, Desc: "PgDn"},
-		{Key: keyCtrlB, Desc: "PgUp"},
-		{Key: keyEsc, Desc: descBack},
-	},
-	style.ViewContext: {
-		{Key: keyEnter, Desc: "Switch"},
-		{Key: keyEsc, Desc: descBack},
-		{Key: keyCtrlF, Desc: "PgDn"},
-		{Key: keyCtrlB, Desc: "PgUp"},
-	},
-	style.ViewACLs: {
-		{Key: "<a>", Desc: "Create"},
-		{Key: keyCtrlD, Desc: descDelete},
-		{Key: keySlash, Desc: descFilter},
-		{Key: keyHelp, Desc: descHelp},
-	},
-	style.ViewGroupDetail: {
-		{Key: keyR, Desc: "Reset"},
-		{Key: "<:reset>", Desc: descDelete},
-		{Key: keyEsc, Desc: descBack},
-	},
-	style.ViewBrokerDetail: {
-		{Key: "<d>", Desc: "Defaults"},
-		{Key: keyEsc, Desc: descBack},
-		{Key: keySlash, Desc: descFilter},
-		{Key: keyHelp, Desc: descHelp},
-	},
-	style.ViewProduce:      formShortcuts,
-	style.ViewCreateTopic:  formShortcuts,
-	style.ViewCreateACL:    formShortcuts,
-	style.ViewResetOffsets: formShortcuts,
-}
-
-// formShortcuts is the action column of every form view.
-var formShortcuts = []chrome.Shortcut{
-	{Key: "<tab>", Desc: "Next"},
-	{Key: keyEnter, Desc: "Submit"},
-	{Key: keyEsc, Desc: descBack},
-	{Key: keyHelp, Desc: descHelp},
-}
-
-// defaultShortcuts serves Cluster and Search, neither of which filters.
-var defaultShortcuts = []chrome.Shortcut{
-	{Key: keyEnter, Desc: "Select"},
-	{Key: keyEsc, Desc: descBack},
-	{Key: keyHelp, Desc: descHelp},
-}
-
-// noRefreshViews do not advertise <r>: their Refresh is a no-op (a live
-// tail, a one-shot scan, a single message), or, in a form, r is typed
-// into the field.
-var noRefreshViews = map[style.ViewType]bool{
-	style.ViewMessages:      true,
-	style.ViewMessageDetail: true,
-	style.ViewSearch:        true,
-	style.ViewProduce:       true,
-	style.ViewCreateTopic:   true,
-	style.ViewCreateACL:     true,
-	style.ViewResetOffsets:  true,
-}
-
 // renderShortcuts returns the shortcut grid for the active view,
 // k9s-style: view-switch hotkeys (<1>..<4>) stacked in the leftmost
 // column, per-view actions plus always-on actions stacked in the
 // second column. Layout is owned by [chrome.Chrome.ShortcutGrid].
 func (a *App) renderShortcuts() []string {
-	viewKeys := []chrome.Shortcut{
-		{Key: "<1>", Desc: "Topics"},
-		{Key: "<2>", Desc: "Groups"},
-		{Key: "<3>", Desc: "Cluster"},
-		{Key: "<4>", Desc: "ACLs"},
-	}
-
-	return a.chrome.ShortcutGrid(viewKeys, actionShortcuts(a.view))
-}
-
-// actionShortcuts is the action column for view v: its own set plus the
-// always-on actions it supports, ordered k9s-style by sortShortcuts (digit
-// keys first, rest alphabetical by description).
-func actionShortcuts(v style.ViewType) []chrome.Shortcut {
-	perView, ok := viewShortcuts[v]
-	if !ok {
-		perView = defaultShortcuts
-	}
-	// A copy: the append and sort below must not touch the shared table.
-	actions := slices.Clone(perView)
-	if !noRefreshViews[v] {
-		actions = append(actions, chrome.Shortcut{Key: "<r>", Desc: "Refresh"})
-	}
-	actions = append(actions, chrome.Shortcut{Key: "<:q>", Desc: "Quit"})
-	sortShortcuts(actions)
-	return actions
+	return a.chrome.ShortcutGrid(tabShortcuts(a.view), actionShortcuts(a.view))
 }
 
 // renderContent assembles the bordered content area (table or help)
@@ -313,72 +170,6 @@ func (a *App) breadcrumb() []chrome.Crumb {
 	}
 	crumbs = append(crumbs, chrome.Crumb{Label: style.ViewName(a.view), Leaf: true})
 	return crumbs
-}
-
-// helpPanel returns the help overlay content for the chrome to render
-// when [chrome.Frame.HelpVisible] is true. The panel is static across
-// views — k9s and tuikit consumers do the same.
-//
-// Entries omit multi-character `:command` aliases (e.g. `:produce`,
-// `:ct`, `:reset`) — those are reachable through the `:` palette and
-// don't belong in the keystroke reference. Each section is sorted via
-// sortHelpEntries: view-switch digit keys first in numerical order,
-// then everything else alphabetical by description (k9s convention).
-func (a *App) helpPanel() chrome.HelpPanel {
-	panel := chrome.HelpPanel{
-		Sections: []chrome.HelpSection{
-			{
-				Title: "RESOURCE",
-				Entries: []chrome.HelpEntry{
-					{Key: "<1>", Desc: "Topics"},
-					{Key: "<2>", Desc: "Groups"},
-					{Key: "<3>", Desc: "Cluster"},
-					{Key: "<4>", Desc: "ACLs"},
-					{Key: keyEnter, Desc: descMessages},
-					{Key: "<o>", Desc: "Topic Overview"},
-					{Key: "<e>", Desc: "Topic Config"},
-					{Key: keyP, Desc: "Produce"},
-					{Key: "<c>", Desc: "Create Topic"},
-					{Key: "<a>", Desc: "Create ACL"},
-					{Key: "<i>", Desc: "Toggle Internal"},
-					{Key: keyP, Desc: "Add Partitions"},
-					{Key: keyS, Desc: "Save Message"},
-					{Key: keyCtrlD, Desc: descDelete},
-					{Key: keyCtrlD, Desc: "Purge Topic"},
-					{Key: keyR, Desc: "Reset Offsets"},
-				},
-			},
-			{
-				Title: "GENERAL",
-				Entries: []chrome.HelpEntry{
-					{Key: "<:cmd>", Desc: "Command mode"},
-					{Key: keySlash, Desc: descFilter},
-					{Key: keyEsc, Desc: "Back/Close"},
-					{Key: "<r>", Desc: "Refresh"},
-					{Key: keyHelp, Desc: descHelp},
-				},
-			},
-			{
-				// tuikit's chrome.NavigationHelp wording, minus the
-				// [ ] - history keys k4a does not bind. ctrl-f/ctrl-b,
-				// not ctrl-d/ctrl-u: ctrl-d is Delete/Purge here.
-				Title: "NAVIGATION",
-				Entries: []chrome.HelpEntry{
-					{Key: "<j>", Desc: "Down"},
-					{Key: "<k>", Desc: "Up"},
-					{Key: "<g>", Desc: "Goto Top"},
-					{Key: "<shift-g>", Desc: "Goto Bottom"},
-					{Key: keyCtrlF, Desc: "Page Down"},
-					{Key: keyCtrlB, Desc: "Page Up"},
-					{Key: "<f>", Desc: "Toggle Follow"},
-				},
-			},
-		},
-	}
-	for i := range panel.Sections {
-		sortHelpEntries(panel.Sections[i].Entries)
-	}
-	return panel
 }
 
 // isDigitKey reports whether key is a k9s-style view-switch hotkey of

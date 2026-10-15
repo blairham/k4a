@@ -9,8 +9,9 @@ Build the franz-go client options for one of the authentication methods
 Kafka clusters in the wild actually use, and surface configuration via
 flags + env + config-file context with sensible precedence.
 
-The auth layer doesn't talk to Kafka. It just constructs the Transport;
-the rest of the kafka package consumes it.
+The auth layer doesn't talk to Kafka. It just builds the franz-go client
+options (`NewClientOpts`: seed brokers, `kgo.DialTLSConfig`, `kgo.SASL`);
+the rest of the kafka package passes them to `kgo.NewClient`.
 
 ## Methods
 
@@ -41,29 +42,33 @@ set", we just build with what's relevant.
 
 ## Method selection
 
-`NewTransport(cfg)` switches on `cfg.Method`. Unknown method returns an
-error listing the supported set. There's no auto-detection; the user
-specifies the method explicitly via `--auth` or in their context's
-`auth:` field. We considered probing (try plaintext, fall back to TLS),
-but Kafka brokers handle bad protocols by hanging rather than rejecting
-cleanly, so probing always felt wrong.
+`NewClientOpts(cfg, brokers)` switches on `cfg.Method`. Unknown method
+returns an error listing the supported set. The method is never probed on
+the wire: it comes from `--auth` or the context's `auth:` field, and when
+`--brokers` is given without `--auth` it is inferred from the other flags
+(`inferAuthMethod`, below), not by trying connections. We considered
+probing (try plaintext, fall back to TLS), but Kafka brokers handle bad
+protocols by hanging rather than rejecting cleanly, so probing always felt
+wrong.
 
 ## TLS shape
 
-Every TLS-bearing transport sets `MinVersion: tls.VersionTLS12`. We
-don't expose `MaxVersion` or cipher suite knobs — Go's defaults are
-fine and any cluster requiring weaker than 1.2 isn't a cluster we want
-to make easy to connect to.
+Every TLS config (`newTLSConfig`, which `newMTLSConfig` builds on) sets
+`MinVersion: tls.VersionTLS12`. We don't expose `MaxVersion` or cipher
+suite knobs — Go's defaults are fine and any cluster requiring weaker than
+1.2 isn't a cluster we want to make easy to connect to.
 
-`--insecure` (`InsecureSkipVerify`) is honored on plaintext-TLS, SCRAM,
-and IAM transports. mTLS deliberately doesn't honor it — if you're
-authenticating with a client certificate, asserting the server identity
-isn't optional. If the user needs both, they should fix their CA bundle.
+`--insecure` (`InsecureSkipVerify`) is honored by every TLS method. The
+intent was that mTLS would not honor it — authenticating with a client
+certificate while not verifying the server makes little sense — but
+`newMTLSConfig` inherits it from `newTLSConfig`, and always has; #91
+decides which way to settle it.
 
-CA bundle loading lives in `loadCAPool`. It's used by SCRAM (optional
-override) and mTLS (required). `AppendCertsFromPEM` returns false on
-malformed input; we surface that as an error with the file path so
-operators get something actionable.
+The CA bundle is read in `newTLSConfig`: optional for every TLS method,
+required for mTLS. When given it is the whole root set — the system roots
+are not consulted. `AppendCertsFromPEM` returns false on malformed input;
+we surface that as an error with the file path so operators get something
+actionable.
 
 ## IAM specifics
 
@@ -190,16 +195,16 @@ the command line).
 ## What's intentionally NOT here
 
 - **No client-cert IAM hybrid.** MSK supports IAM *or* mTLS *or* SCRAM
-  per-broker, not a combination. We don't build composite Transports.
+  per-broker, not a combination. We don't build composite mechanisms.
 - **No Kerberos / GSSAPI.** No demand. Adding it would be
-  `kafka-go/sasl/gssapi` plus another method; mostly mechanical, but
-  not free in test surface.
+  a GSSAPI `sasl.Mechanism` (franz-go ships none) plus another method;
+  mostly mechanical, but not free in test surface.
 - **No OIDC device or browser flow for OAUTHBEARER.** Client credentials
   and a token from env or file cover service accounts and anything an
   external tool can mint; an interactive login belongs in that tool.
 - **No SASL extensions or authorization ID** on OAUTHBEARER yet. franz-go
   supports both; add them as `oauth-*` fields when a broker needs one.
-- **No credential reload during a session.** The Transport is built
+- **No credential reload during a session.** The client options are built
   once at startup. Picking up new IAM tokens works because the SDK
   inside the SASL mechanism refreshes; for SCRAM/mTLS, restarting k4a
   is the answer. `:reconnect` rebuilds the client and is the documented
@@ -218,11 +223,11 @@ the command line).
   flags in `cmd/k4a-index`.
   Add a row to the table above.
 - **Adding a TLS knob:** consider whether it belongs on every
-  TLS-using transport or only one. Most things (cipher suites, min
+  TLS-using method or only one. Most things (cipher suites, min
   version) should be uniform — push them into a shared helper rather
   than repeating in each constructor.
 - **Debugging an auth failure:** the failure mode is always a hang or a
-  cryptic kafka-go error. Try `verify` subcommand (`internal/command`)
+  cryptic franz-go error. Try `verify` subcommand (`internal/command`)
   which exercises just the handshake — it's the smallest reproducer.
 - **Don't add `Insecure` to mTLS.** It's been requested. The answer is
   always to fix the CA bundle.

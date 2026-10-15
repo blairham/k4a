@@ -755,7 +755,7 @@ func (a *App) openSearchBar(topic string) (tea.Model, tea.Cmd) {
 //  2. index.AsyncIndexer — instant when the index covers the time range.
 //  3. kafka.Client.DeepSearch — the correctness floor; broker scan.
 //
-// Every entry point into search (TUI Ctrl+F, MCP server, `k4a search`
+// Every entry point into search (the TUI search bar, MCP server, `k4a search`
 // CLI) routes through this so they all pick up the same fast paths.
 func (a *App) searchRunner() views.SearchFunc {
 	if a.searchFunc != nil {

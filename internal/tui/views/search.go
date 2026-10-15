@@ -279,7 +279,7 @@ func (v *SearchView) SetFilter(_ string) {}
 // Refresh is a no-op for search results. The App ticks every active view's
 // Refresh on a poll interval to keep live data current; for a one-shot
 // scan that would mean restarting the search on every tick. Users re-run a
-// search by re-entering the search bar (Ctrl+F).
+// search by re-entering the search bar (`s` in Messages, or :search).
 func (v *SearchView) Refresh() tea.Cmd { return nil }
 
 // Stop cancels any in-flight scan.

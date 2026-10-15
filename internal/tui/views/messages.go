@@ -337,7 +337,7 @@ func (v *MessagesView) Loading() bool { return v.loading }
 func (v *MessagesView) Refresh() tea.Cmd { return nil }
 
 // SetFilter narrows the in-memory messages by regex over key + value.
-// Filter is purely local; a full-topic scan is available via Ctrl+F.
+// Filter is purely local; a full-topic scan is `s` (or :search).
 func (v *MessagesView) SetFilter(filter string) {
 	v.filter = filter
 	v.rebuildRows()
@@ -357,7 +357,7 @@ func (v *MessagesView) View() string {
 		switch {
 		case v.filter != "":
 			msg = fmt.Sprintf(
-				"No matches for /%s in the message buffer — press Ctrl+F to search the whole topic",
+				"No matches for /%s in the message buffer — press s to search the whole topic",
 				v.filter,
 			)
 		default:
