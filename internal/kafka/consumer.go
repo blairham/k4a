@@ -250,7 +250,7 @@ func (c *Client) Consume(ctx context.Context, topic string) (<-chan ConsumedMess
 	errCh := make(chan error, 1)
 	ready := make(chan struct{})
 
-	go c.runConsume(ctx, topic, nil, ch, errCh, ready)
+	go c.runConsume(ctx, topic, nil, nil, ch, errCh, ready)
 	return ch, errCh, ready
 }
 
@@ -270,7 +270,20 @@ func (c *Client) ConsumeFrom(
 	if starts == nil {
 		starts = map[int32]int64{}
 	}
-	go c.runConsume(ctx, topic, starts, ch, errCh, ready)
+	go c.runConsume(ctx, topic, starts, nil, ch, errCh, ready)
+	return ch, errCh, ready
+}
+
+// ConsumeSeek is Consume starting every partition at seek instead of just
+// before its end: the TUI's Messages seek.
+func (c *Client) ConsumeSeek(
+	ctx context.Context, topic string, seek Seek,
+) (<-chan ConsumedMessage, <-chan error, <-chan struct{}) {
+	ch := make(chan ConsumedMessage, consumerChannelBuffer)
+	errCh := make(chan error, 1)
+	ready := make(chan struct{})
+
+	go c.runConsume(ctx, topic, nil, &seek, ch, errCh, ready)
 	return ch, errCh, ready
 }
 
@@ -278,6 +291,7 @@ func (c *Client) runConsume(
 	ctx context.Context,
 	topic string,
 	starts map[int32]int64,
+	seek *Seek,
 	ch chan<- ConsumedMessage,
 	errCh chan<- error,
 	ready chan<- struct{},
@@ -309,6 +323,8 @@ func (c *Client) runConsume(
 	partitions := make(map[int32]kgo.Offset, numPartitions)
 	for p := range td.Partitions {
 		switch off, ok := starts[p]; {
+		case seek != nil:
+			partitions[p] = seek.kgoOffset()
 		case starts == nil:
 			partitions[p] = kgo.NewOffset().AtEnd().Relative(-int64(perPartition))
 		case ok:

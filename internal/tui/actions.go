@@ -202,6 +202,8 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		return a.startChangeReplication(param)
 	case "confirm_purge_topic":
 		return a.startPurgeTopic(param)
+	case views.ActionSeek:
+		return a.startSeek(param)
 	case "confirm_delete_topic":
 		return a.promptConfirm("delete_topic", param, fmt.Sprintf("delete topic %s?", param))
 	case "confirm_delete_acl":
@@ -575,6 +577,28 @@ func (a *App) startPurgeTopic(topic string) (tea.Model, tea.Cmd) {
 	)
 	a.resizeActiveView()
 	return a, cmd
+}
+
+// startSeek opens the prompt for where Messages should read from, pre-filled
+// with "live" so enter alone returns to the tail.
+func (a *App) startSeek(topic string) (tea.Model, tea.Cmd) {
+	cmd := a.openValuePrompt(views.ActionSeek, topic, "live", "seek:",
+		"offset · 1h, 7d or RFC3339 time · b = beginning · live = newest", true)
+	a.resizeActiveView()
+	return a, cmd
+}
+
+// applySeek restarts the Messages view at the typed position.
+func (a *App) applySeek(input string) (errMsg string, cmd tea.Cmd) {
+	seek, err := views.ParseSeek(input, time.Now())
+	if err != nil {
+		return err.Error(), nil
+	}
+	v := typedView[*views.MessagesView](a, style.ViewMessages)
+	if v == nil {
+		return "", nil
+	}
+	return "", v.SeekTo(seek)
 }
 
 // startIncreasePartitions opens the prompt bar pre-filled with the

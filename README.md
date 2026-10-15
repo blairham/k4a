@@ -512,6 +512,7 @@ Live message tail from a topic (newest first).
 | `f` | Toggle follow mode (auto-scroll to newest) |
 | `g` | Jump to newest and resume follow |
 | `o` | Jump to topic overview |
+| `t` | Seek: an offset (every partition), a time (`1h`, `7d`, RFC3339), `b` for the beginning, or `live` for the newest tail |
 | `p` / `P` | Cycle the partition filter forward / backward |
 | `a` | Clear the partition filter (all partitions) |
 | `h` / `l` | Scroll the table horizontally / pan the value column |
@@ -519,6 +520,11 @@ Live message tail from a topic (newest first).
 | `x` | Show schema-registry decoded keys and values raw / decoded (with a registry configured) |
 | `c` / `K` / `C` | Copy the selected row's value / key / whole record as JSON to the clipboard |
 | `e` | Export the rows as shown (partition and `/` filters applied) to a JSONL file |
+
+After a seek the view reads forward from that point and keeps the first
+1000 records (a status line says where it started, and when it stopped);
+`t` then `live` returns to the live tail. `k4a consume --offset/--since`
+is the same seek headless.
 
 Copy uses OSC 52, so the terminal sets the clipboard and it works over SSH
 and in tmux; both copy and export take what is on screen, decoded or raw.
