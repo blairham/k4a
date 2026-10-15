@@ -35,7 +35,7 @@ type followEntry struct {
 	worker    *topicWorker
 	cancel    context.CancelFunc
 	done      chan struct{} // closed when the worker's run() returns
-	lastQuery atomic.Int64  // unix millis of the last Search/Coverage that hit it
+	lastQuery atomic.Int64  // unix millis of the last Search or Follow that hit it
 	pinned    bool
 	// exited is set, under manager.mu, when the tail stopped on its own (the
 	// consume channel closed while ctx was still live). See tailExited.
@@ -136,6 +136,19 @@ func (m *manager) lookup(topic string) *topicWorker {
 	return e.worker
 }
 
+// peek returns the worker for a followed topic WITHOUT touching its LRU clock,
+// or nil. Coverage uses it: a coverage probe is not a search, and if it reset
+// the clock any topic that is merely probed would never look idle to
+// evictAfter.
+func (m *manager) peek(topic string) *topicWorker {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.set[topic]; e != nil {
+		return e.worker
+	}
+	return nil
+}
+
 // ensureFollowed is the demand-driven registration entry point. It gates on the
 // allowlist (default-deny) and, if allowed, kicks off registration as a
 // non-blocking side effect so the Search hot path returns immediately —
@@ -148,9 +161,16 @@ func (m *manager) ensureFollowed(topic string) bool {
 		return false
 	}
 	m.mu.Lock()
-	_, followed := m.set[topic]
+	e, followed := m.set[topic]
 	_, inflight := m.registering[topic]
 	if followed || inflight {
+		// A Follow of a topic already followed is the client saying it just
+		// searched it and the daemon could not cover the query (it scanned
+		// instead). That is use, so it resets the LRU clock — the same as a
+		// covered Search does through lookup.
+		if followed {
+			e.touch()
+		}
 		m.mu.Unlock()
 		return true
 	}
