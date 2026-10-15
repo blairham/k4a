@@ -21,6 +21,7 @@ import (
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/remoteindex"
+	"github.com/blairham/k4a/internal/schemareg"
 	"github.com/blairham/k4a/internal/searchcache"
 	"github.com/blairham/k4a/internal/state"
 	"github.com/blairham/k4a/internal/tui/style"
@@ -116,8 +117,12 @@ type indexerEntry struct {
 
 // App is the root bubbletea model.
 type App struct {
-	filterBar      *chrome.FilterBar
-	client         *kafka.Client
+	filterBar *chrome.FilterBar
+	client    *kafka.Client
+	// registry decodes schema-registry framed messages; nil when the
+	// active context has none.
+	registry       *schemareg.Registry
+	registryFlags  schemareg.Config
 	viewMap        map[style.ViewType]views.View
 	promptDispatch chrome.Dispatch
 	session        *state.Session

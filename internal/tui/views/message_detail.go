@@ -24,6 +24,7 @@ type MessageDetailView struct {
 	width    int
 	height   int
 	ready    bool
+	raw      bool
 }
 
 // NewMessageDetailView creates a new message detail view.
@@ -77,10 +78,21 @@ func (v *MessageDetailView) Count() int { return 1 }
 
 // HandleKey processes view-specific keys.
 func (v *MessageDetailView) HandleKey(key string) (string, string) {
-	if key == "s" {
+	switch key {
+	case "s":
 		return "save_message", ""
+	case KeyToggleRaw:
+		v.SetRaw(!v.raw)
 	}
 	return "", ""
+}
+
+// SetRaw shows a registry-decoded key and value raw (true) or decoded.
+func (v *MessageDetailView) SetRaw(raw bool) {
+	v.raw = raw
+	if v.ready {
+		v.Resize(v.width, v.height)
+	}
 }
 
 // GetMessage returns the displayed message.
@@ -145,8 +157,17 @@ func (v *MessageDetailView) renderCards() string {
 	left.WriteString(label.Render("Partition: ") + val.Render(fmt.Sprintf("%d", m.Partition)) + "\n")
 	left.WriteString(label.Render("Offset:    ") + val.Render(fmt.Sprintf("%d", m.Offset)) + "\n")
 	left.WriteString(label.Render("Timestamp: ") + val.Render(m.Time.Format("1/2/2006, 15:04:05.000")) + "\n")
-	left.WriteString(label.Render("Key:       ") + val.Render(truncate(keyDisplay(m.Key), leftValW)) + "\n")
-	left.WriteString(label.Render("Val Size:  ") + val.Render(formatBytes(int64(len(m.Value)))))
+	left.WriteString(label.Render("Key:       ") +
+		val.Render(truncate(keyDisplay(m.KeyDecoding.Shown(m.Key, v.raw)), leftValW)) + "\n")
+	left.WriteString(label.Render("Val Size:  ") + val.Render(formatBytes(int64(len(v.value())))))
+	for _, d := range []struct {
+		label string
+		dec   kafka.Decoding
+	}{{"Key Sch:   ", m.KeyDecoding}, {"Val Sch:   ", m.ValueDecoding}} {
+		if line := decodingLine(d.dec, v.raw); line != "" {
+			left.WriteString("\n" + label.Render(d.label) + dim.Render(truncate(line, leftValW)))
+		}
+	}
 
 	// Right: headers.
 	var right strings.Builder
@@ -195,7 +216,7 @@ func (v *MessageDetailView) renderCards() string {
 
 // renderValue renders the scrollable message value with syntax-highlighted JSON.
 func (v *MessageDetailView) renderValue() string {
-	if v.msg == nil || v.msg.Value == "" {
+	if v.msg == nil || v.value() == "" {
 		return lipgloss.NewStyle().Foreground(style.ColorGray).Render("(empty)")
 	}
 	// Use viewport width for word wrap, accounting for border(2) + padding(2) + margin.
@@ -203,7 +224,27 @@ func (v *MessageDetailView) renderValue() string {
 	if width < 40 {
 		width = 40
 	}
-	return prettyJSON(v.msg.Value, width)
+	return prettyJSON(v.value(), width)
+}
+
+// value is the value as currently shown: decoded, or raw when toggled.
+func (v *MessageDetailView) value() string {
+	return v.msg.ValueDecoding.Shown(v.msg.Value, v.raw)
+}
+
+// decodingLine describes how a field was decoded, or why it was not; empty
+// when the field was not registry-framed.
+func decodingLine(d kafka.Decoding, raw bool) string {
+	switch {
+	case d.Reason != "":
+		return "not decoded: " + d.Reason
+	case d.Decoded() && raw:
+		return d.Schema + " (raw; x to decode)"
+	case d.Decoded():
+		return d.Schema
+	default:
+		return ""
+	}
 }
 
 func keyDisplay(k string) string {

@@ -16,6 +16,7 @@ import (
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/remoteindex"
+	"github.com/blairham/k4a/internal/schemareg"
 	"github.com/blairham/k4a/internal/tui/style"
 	"github.com/blairham/k4a/internal/tui/views"
 )
@@ -149,7 +150,7 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		return a.openView(style.ViewGroupDetail, a.viewMap[style.ViewGroupDetail].Init())
 	case "messages":
 		a.stopStoppableViews()
-		a.setView(style.ViewMessages, views.NewMessagesView(a.client, param))
+		a.setView(style.ViewMessages, a.newMessagesView(param))
 		// Phase C-1: when indexing is enabled in config, start an
 		// AsyncIndexer for this topic and tee live-tail records into
 		// it. No-op when indexing is off, the cluster ID isn't
@@ -307,7 +308,7 @@ func (a *App) openSearchMatchAt(param string) tea.Cmd {
 // openMessageDetail pushes the current view and shows msg in the detail view.
 func (a *App) openMessageDetail(msg *kafka.ConsumedMessage) tea.Cmd {
 	a.pushView(a.view)
-	a.setView(style.ViewMessageDetail, views.NewMessageDetailView(msg))
+	a.setView(style.ViewMessageDetail, a.newMessageDetailView(views.NewMessageDetailView(msg)))
 	a.view = style.ViewMessageDetail
 	a.resizeActiveView()
 	return a.viewMap[style.ViewMessageDetail].Init()
@@ -491,14 +492,20 @@ func (a *App) doDeleteACL(key string) tea.Cmd {
 // switchContextMsg carries the result of an async context switch.
 type switchContextMsg struct {
 	client *kafka.Client
-	info   ConnInfo
-	err    error
-	name   string
+	// registry is nil when the context has no schema registry; registryErr
+	// reports one that is configured but unusable, which costs decoding,
+	// not the switch.
+	registry    *schemareg.Registry
+	registryErr error
+	info        ConnInfo
+	err         error
+	name        string
 }
 
 // doSwitchContext resolves brokers and builds a new client in a goroutine.
 func (a *App) doSwitchContext(name string) tea.Cmd {
 	cfg := a.cfg
+	srFlags := a.registryFlags
 	return func() tea.Msg {
 		ctx, ok := cfg.Contexts[name]
 		if !ok {
@@ -515,9 +522,12 @@ func (a *App) doSwitchContext(name string) tea.Cmd {
 		if err != nil {
 			return switchContextMsg{err: fmt.Errorf("client for %q: %w", name, err)}
 		}
+		registry, registryErr := registryForContext(ctx, srFlags)
 		return switchContextMsg{
-			name:   name,
-			client: client,
+			name:        name,
+			client:      client,
+			registry:    registry,
+			registryErr: registryErr,
 			info: ConnInfo{
 				Context: name,
 				Auth:    string(authCfg.Method),
@@ -600,6 +610,10 @@ func (a *App) applySwitchContext(msg switchContextMsg) (tea.Model, tea.Cmd) {
 	}
 
 	a.client = msg.client
+	a.registry = msg.registry
+	if msg.registryErr != nil {
+		a.errFlash = "schema registry: " + msg.registryErr.Error()
+	}
 	a.connInfo = msg.info
 	a.awaitingContext = false
 

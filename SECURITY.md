@@ -56,6 +56,13 @@ including deleting topics, consumer groups, ACLs and records.
   captured and guessed offline. All traffic is unencrypted. Without the flag
   a SASL method always uses TLS, and a TLS failure is an error, not a
   fallback.
+- **Schema Registry** credentials (a context's `schema-registry:` block or
+  `--schema-registry-*`, HTTP basic or a bearer token) are sent only to the
+  registry URL, only over https or http to a loopback host, and are never
+  logged. A registry URL with embedded credentials is refused. Schemas the
+  registry returns are held in memory and never written to disk. Decoded
+  values are only displayed (or saved, when you save a message); the
+  search cache and the local and shared indexes keep the bytes as consumed.
 - **Files k4a writes** live under `~/.k4a`, in directories created `0700`:
   the config file, session state, the search-result cache (which holds the
   matched messages) and, when you opt in with `index.enabled: true`, a local

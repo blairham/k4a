@@ -129,6 +129,34 @@ contexts:
     oauth-scopes: kafka
 ```
 
+### Schema Registry
+
+Records written by Confluent serializers (Avro, Protobuf or JSON Schema, framed
+with the registry's 5-byte header) are decoded to JSON in Messages, Message
+Detail and `k4a consume` when a context names a registry:
+
+```yaml
+contexts:
+  production:
+    brokers: broker1:9098
+    auth: iam
+    schema-registry:
+      url: https://schema-registry.example.com
+      username: k4a                      # HTTP basic, or:
+      password: ${K4A_SR_PASSWORD}       # (same whole-value $VAR rule as password)
+      # token: ${K4A_SR_TOKEN}           # bearer instead of username/password
+      # ca: /etc/ssl/sr-ca.pem           # extra CA, on top of the system roots
+```
+
+`--schema-registry-url`, `--schema-registry-username`, `--schema-registry-password`,
+`--schema-registry-token` and `--schema-registry-ca` (env `K4A_SCHEMA_REGISTRY_URL`,
+`_USERNAME`, `_PASSWORD`, `_TOKEN`, `_CA`) override the context's block field by field,
+on `k4a` and `k4a consume`. Credentials are sent only over https (or http to
+localhost) and are never logged or written to disk. A payload that cannot be
+decoded shows as it always has, with the reason beside it; `x` toggles raw and
+decoded in the TUI, and `k4a consume --decode raw` turns decoding off. See
+[`docs/design/schema-registry.md`](docs/design/schema-registry.md).
+
 ### SSM parameter resolution
 
 Broker endpoints can be fetched from AWS SSM Parameter Store using the `ssm-brokers` field. This is useful for MSK clusters where bootstrap brokers are stored in SSM.
@@ -387,6 +415,7 @@ Live message tail from a topic (newest first).
 | `a` | Clear the partition filter (all partitions) |
 | `h` / `l` | Scroll the table horizontally / pan the value column |
 | `ctrl+d` | Purge the topic's messages (same prompt as Topic Detail) |
+| `x` | Show schema-registry decoded keys and values raw / decoded (with a registry configured) |
 
 Saving a single message is in **Message Detail** (`enter`, then `s`) —
 in this list `s` opens search.
@@ -398,6 +427,7 @@ Full message content with metadata cards, headers, and scrollable pretty-printed
 | Key | Action |
 |-----|--------|
 | `s` | Save message to file |
+| `x` | Raw / decoded key and value; the cards name the schema (subject, version, ID) or why it was not decoded |
 | `j` / `k` | Scroll message body |
 | `ctrl+f` / `ctrl+b` | Page the message body down / up |
 
