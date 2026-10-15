@@ -2,11 +2,12 @@
 
 **Status:** shipped — `internal/state` exists and owns `~/.k4a`; the
 session, cache, and index tiers are all live and surfaced by
-`k4a state status|clear|dir`.
+`k4a state status|clear|dir|export|import`.
 **Code:** `internal/state/` (`state.go`, `session.go`, `lock.go`);
 `internal/searchcache/` (the Tier 2 query cache, `~/.k4a/cache/searches/`);
 `internal/index/` (the Tier 3 Bleve index, `~/.k4a/index/`);
-`internal/command/state.go` (the CLI surface). The `internal/config/`
+`internal/command/state.go` and `state_archive.go` (the CLI surface);
+`internal/state/archive.go` and `archive_import.go` (export/import). The `internal/config/`
 refactor named below was not done — config stays its own package and is
 simply the one tier `state` never clears.
 
@@ -197,22 +198,57 @@ identically with or without it.
 
 ### 6. Local-only, never network-shared as default
 
-State directories live on the user's machine. Period. A future "share
-my index of the incident topic with a colleague" feature is fine, but
-as an explicit operation:
+State directories live on the user's machine. Period. Moving state to
+another machine is an explicit operation:
 
 ```
-$ k4a state export --topic example.ingest.prices.v1 --output /tmp/incident.k4aindex
-$ # send the tarball
-
-$ k4a state import /tmp/incident.k4aindex
-Imported 2.8 GB for topic example.ingest.prices.v1 (cluster prod-msk).
+$ k4a state export -o k4a-state.tar.gz            # config, session, cache
+$ k4a state export -o k4a-state.tar.gz --index    # plus local topic indexes
+$ k4a state import k4a-state.tar.gz
 ```
 
-The tarball is a self-describing artifact (schema_version, cluster ID,
-topic name, time range, byte size) that the importer validates before
-unpacking. Importing into a context whose cluster ID doesn't match the
-tarball's gets rejected.
+The archive is a **gzip-compressed tar** (standard tooling can list it;
+no new dependency), written `0600` to a temp file beside the output and
+renamed into place. Its first entry is `manifest.json` (`format:
+k4a-state`, `schema_version`, `created_at`, k4a version, the parts it
+holds, and whether secrets were included or which ones were stripped);
+every other entry mirrors its path under the state root.
+
+- **Parts.** Config, session and the search cache are included by
+  default (`--no-config`, `--no-session`, `--no-cache` leave them out);
+  local indexes only with `--index`, because they are large and
+  rebuildable. Locks, crashed-write temp files and renamed-aside
+  `.bak` backups are never exported.
+- **Secrets.** A credential field (`password`, `oauth-token`,
+  `oauth-client-secret`, `index-token`, `schema-registry.password` /
+  `token`) written as a whole-value `$VAR` stays a reference. An inline
+  one is stripped, and the export names it so it can be set again. The
+  stripped config is re-rendered from the parsed `Config`
+  (`config.StripInlineSecrets`), so comments, anchors and keys k4a does
+  not read are dropped with it — any of those could hold a secret.
+  `--include-secrets` exports `config.yaml` verbatim instead, with a
+  warning on stderr at export and again at import.
+- **Locks.** Each topic index is exported under its writer lock; one
+  another process is writing is skipped and reported. Import takes the
+  writer lock of every topic it replaces before writing anything and
+  refuses if any is held. A topic index is replaced whole, never merged
+  file by file.
+- **Validation.** `state.InspectArchive` reads the whole archive before
+  anything is written and refuses: links of either kind, devices and
+  FIFOs, absolute or unclean names or any `..` element, names outside
+  the layout an export writes (including a writer `lock`), duplicates,
+  a missing or foreign manifest, and a newer schema version. Writes go
+  through an `os.Root`, so a symlink already in the state directory
+  cannot redirect a file outside it either.
+- **Guards.** Import is a mutation: it honors `ui.readonly`
+  (`checkRootWritable`) and lists what it would replace, asking before
+  doing so unless `--yes` (and refusing a non-terminal stdin without
+  it). Export refuses an output path inside the state directory and
+  asks before replacing an existing file.
+
+Indexes are keyed by cluster ID on disk, so an imported index lands
+under the cluster it was built from and is used only when connected to
+that cluster.
 
 A shared backend (Redis, S3, Postgres) is explicitly out of scope.
 That's where k4a stops being one binary and we don't want to cross that
@@ -349,9 +385,9 @@ relevant directory to undo).
 - Topics view shows "indexed?" indicator
 - `state` subcommand grows status/clear at finer granularity
 
-### Phase F (optional) — Export/import
-- `k4a state export` / `k4a state import` for sharing indexes
-- Self-describing tarball format
+### Phase F — Export/import (shipped, #112)
+- `k4a state export` / `k4a state import` (§6)
+- Self-describing tar.gz with a manifest
 
 ## Pickup notes
 
