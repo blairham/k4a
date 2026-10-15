@@ -27,10 +27,16 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          {{- if .Values.kafka.insecure }}
-          # --insecure has no env equivalent, so it is passed as an argument.
+          {{- if or .Values.kafka.insecure .Values.kafka.noTLS }}
+          # --insecure and --no-tls have no env equivalent, so they are passed
+          # as arguments.
           args:
+            {{- if .Values.kafka.insecure }}
             - --insecure
+            {{- end }}
+            {{- if .Values.kafka.noTLS }}
+            - --no-tls
+            {{- end }}
           {{- end }}
           env:
             - name: KAFKA_BROKERS
@@ -38,7 +44,8 @@ spec:
             - name: KAFKA_AUTH
               value: {{ .Values.kafka.auth | quote }}
             {{- with .Values.kafka.credentials.existingSecret }}
-            # SASL/SCRAM credentials, read from an existing Secret.
+            # SASL username/password (scram, scram-sha-256, plain), read from an
+            # existing Secret.
             - name: KAFKA_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -49,6 +56,36 @@ spec:
                 secretKeyRef:
                   name: {{ . }}
                   key: {{ $.Values.kafka.credentials.passwordKey }}
+            {{- end }}
+            {{- with .Values.kafka.oauth }}
+            {{- if .tokenUrl }}
+            # OAUTHBEARER client-credentials grant.
+            - name: KAFKA_OAUTH_TOKEN_URL
+              value: {{ .tokenUrl | quote }}
+            {{- end }}
+            {{- if .clientId }}
+            - name: KAFKA_OAUTH_CLIENT_ID
+              value: {{ .clientId | quote }}
+            {{- end }}
+            {{- if .scopes }}
+            - name: KAFKA_OAUTH_SCOPES
+              value: {{ .scopes | quote }}
+            {{- end }}
+            {{- if and .existingSecret .clientSecretKey }}
+            - name: KAFKA_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .clientSecretKey }}
+            {{- end }}
+            {{- if and .existingSecret .tokenKey }}
+            # OAUTHBEARER static token, read from an existing Secret.
+            - name: KAFKA_OAUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .tokenKey }}
+            {{- end }}
             {{- end }}
             {{- if .Values.kafka.tls.existingSecret }}
             # TLS material, mounted from an existing Secret at /etc/k4a/tls.
