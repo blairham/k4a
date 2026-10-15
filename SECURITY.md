@@ -61,8 +61,15 @@ including deleting topics, consumer groups, ACLs and records.
   registry URL, only over https or http to a loopback host, and are never
   logged. A registry URL with embedded credentials is refused. Schemas the
   registry returns are held in memory and never written to disk. Decoded
-  values are only displayed (or saved, when you save a message); the
-  search cache and the local and shared indexes keep the bytes as consumed.
+  values are only displayed (or saved, copied or exported, when you ask);
+  the search cache and the local and shared indexes keep the bytes as
+  consumed.
+- **Copy and export** are explicit: a copy hands the text to your terminal
+  as an OSC 52 escape (the terminal, not k4a, writes the clipboard), and the
+  confirmation names what was copied and its size, never its content. An
+  export writes JSONL, `0600`, to the path you type (relative to the working
+  directory by default), refuses a path inside `~/.k4a`, and asks before it
+  replaces a file.
 - **Files k4a writes** live under `~/.k4a`, in directories created `0700`:
   the config file, session state, the search-result cache (which holds the
   matched messages) and, when you opt in with `index.enabled: true`, a local

@@ -136,9 +136,11 @@ func bindingFixtures(t *testing.T) map[style.ViewType]func() views.View {
 			return v
 		},
 		style.ViewMessageDetail: func() views.View {
-			m := msg(0, 1)
-			m.Value = `[` + strings.Repeat(`{"line":"x"},`, 60) + `{}]`
-			v := sized(views.NewMessageDetailView(&m))
+			list := []kafka.ConsumedMessage{msg(0, 3), msg(0, 2), msg(0, 1)}
+			list[1].Value = `[` + strings.Repeat(`{"line":"x"},`, 60) + `{}]`
+			d := views.NewMessageDetailView(&list[1])
+			d.SetSiblings(list, 1) // in the middle, so n and N both have somewhere to go
+			v := sized(d)
 			v.UpdateTable(tea.KeyPressMsg{Code: tea.KeyPgDown}) // so PgUp has somewhere to go
 			return v
 		},

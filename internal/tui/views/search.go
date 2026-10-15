@@ -253,13 +253,21 @@ func (v *SearchView) Topic() string { return v.topic }
 
 // HandleKey processes non-table keys for the search results view.
 func (v *SearchView) HandleKey(key string) (string, string) {
-	if key == KeyEnter {
+	switch key {
+	case KeyEnter:
 		idx := v.table.Cursor()
 		if idx >= 0 && idx < len(v.matches) {
 			return "search_message_detail", fmt.Sprintf("%d", idx)
 		}
+	case KeyExport:
+		return ActionExport, v.topic
 	}
 	return "", ""
+}
+
+// Matches returns a copy of the matches so far, in the order shown.
+func (v *SearchView) Matches() []kafka.ConsumedMessage {
+	return append([]kafka.ConsumedMessage(nil), v.matches...)
 }
 
 // GetMatch returns the match at idx, or false if out of range.

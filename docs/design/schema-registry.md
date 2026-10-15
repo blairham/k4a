@@ -120,7 +120,9 @@ off, so no caller checks.
 - **Message Detail** names each field's schema (`subject vN (id N, FORMAT)`)
   or why it was not decoded, in the metadata card.
 - **`x`** toggles raw and decoded on both views, and drilling in keeps the
-  Messages view's mode. It was free on every view; the hint bar shows it only
+  Messages view's mode. Copy (`c`/`K`/`C`) and export (`e`) take the mode
+  on screen: the flash says decoded or raw, and each exported record carries
+  a `decoding` block with `shown`, the schemas and any decode error. It was free on every view; the hint bar shows it only
   with a registry configured, where it does something.
 - **`k4a consume --decode auto|raw`**: `auto` (the default) decodes when a
   registry is configured. `--verbose` adds `key-schema="..."` /
