@@ -75,6 +75,14 @@ including deleting topics, consumer groups, ACLs and records.
   matched messages) and, when you opt in with `index.enabled: true`, a local
   index that **stores message keys, values and headers** of the topics you
   search. Treat the directory as holding a copy of that data.
+- **`k4a state export`** writes that data (the index only with `--index`)
+  to a `0600` tar.gz you name, never inside `~/.k4a`. Inline passwords and
+  tokens are stripped from the exported config; `$VAR` references are
+  kept. `--include-secrets` keeps them, and both export and import print a
+  warning. `k4a state import` validates the whole archive first (no links,
+  absolute paths or `..`, nothing outside the export layout), writes only
+  inside the state directory, honors `ui.readonly` and asks before
+  replacing anything.
 - **`k4a upgrade`** downloads the latest release from
   `github.com/blairham/k4a` over HTTPS and checks the archive against the
   release's `checksums.txt` before replacing the running binary. To raise
