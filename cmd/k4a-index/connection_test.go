@@ -100,7 +100,8 @@ func TestResolveConnectionNoFlagsKeepsContext(t *testing.T) {
 
 // TestResolveConnectionDirectDefaults pins #97: a --brokers connection
 // without --auth infers the method as the CLI does, so a bare local broker
-// is plaintext rather than a SCRAM credential error.
+// is plaintext rather than a SCRAM credential error. The region is left
+// empty so awscreds.Load can use the env or the profile's region (#102).
 func TestResolveConnectionDirectDefaults(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -116,8 +117,14 @@ func TestResolveConnectionDirectDefaults(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Method != tc.want || got.Region != "us-east-1" {
-			t.Errorf("resolveConnection(%+v) = method %q region %q, want %q us-east-1", tc.f, got.Method, got.Region, tc.want)
+		if got.Method != tc.want || got.Region != "" {
+			t.Errorf(
+				"resolveConnection(%+v) = method %q region %q, want %q and no region",
+				tc.f,
+				got.Method,
+				got.Region,
+				tc.want,
+			)
 		}
 	}
 }

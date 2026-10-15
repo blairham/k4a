@@ -98,7 +98,7 @@ Context management stays in `k4a contexts` / `k4a use-context`.
 | `plain` | SASL/PLAIN over TLS | `--username`, `--password` |
 | `oauthbearer` | SASL/OAUTHBEARER over TLS | `--oauth-token`, `--oauth-token-file`, or `--oauth-token-url` + `--oauth-client-id` + `--oauth-client-secret` |
 | `mtls` | Mutual TLS with client certificate | `--cert`, `--key`, `--ca` |
-| `iam` | AWS MSK IAM authentication | `--region` (default: us-east-1) |
+| `iam` | AWS MSK IAM authentication | `--region` (default: `AWS_REGION`/`AWS_DEFAULT_REGION`, then the profile's `region`, then us-east-1) |
 
 With `--brokers` and no `--auth`, k4a infers the method from the flags you pass:
 `--username`/`--password` mean `scram`, any `--oauth-*` flag means
@@ -537,7 +537,7 @@ mTLS:
       --ca FILE           CA certificate        (env: KAFKA_TLS_CA)
 
 IAM:
-  -r, --region REGION     AWS region            (env: AWS_REGION, default: us-east-1)
+  -r, --region REGION     AWS region            (env: AWS_REGION, default: profile region, else us-east-1)
   -p, --profile PROFILE   AWS profile           (env: AWS_PROFILE)
 
 Display:
