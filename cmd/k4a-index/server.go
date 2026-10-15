@@ -118,16 +118,20 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 	return sendDone(stream, int64(len(res.Matches)), res.Capped)
 }
 
-// Coverage reports a topic's indexed ranges without running a query — used by
-// the client's Topics view to render an "indexed?" column.
+// Coverage reports a topic's indexed ranges without running a query. Clients
+// call it before every search to decide index-vs-scan (internal/remoteindex),
+// and k4a-mcp exposes it as a tool.
+//
+// It is read-only in both senses: it never starts a follow, and it never
+// resets a followed topic's LRU clock. The client's next call is what counts
+// as use — a Search when the coverage serves the query, a Follow when it does
+// not — so a topic that is only ever probed still ages out at evictAfter.
 func (s *indexServer) Coverage(_ context.Context, req *indexv1.CoverageRequest) (*indexv1.CoverageResponse, error) {
 	topic := req.GetTopic()
-	w := s.mgr.lookup(topic)
+	w := s.mgr.peek(topic)
 	if w == nil {
-		// Coverage is a read-only probe (the Topics view's "indexed?" column) —
-		// it reports the current state but does NOT trigger a follow. Only a
-		// Search (or an explicit Follow) warms a topic, so probing coverage for
-		// every listed topic can't stampede the follow-set.
+		// Only a Search (or an explicit Follow) warms a topic, so probing
+		// coverage for many topics can't stampede the follow-set.
 		log.Info("coverage", "topic", topic, "following", false)
 		return &indexv1.CoverageResponse{Coverage: &indexv1.Coverage{Following: false}}, nil
 	}
