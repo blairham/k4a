@@ -191,20 +191,12 @@ func (a *App) activeViewHandleKey(key string) (string, string) {
 	return "", ""
 }
 
-//nolint:unparam // Cmd return reserved for views that queue follow-up work after a filter change
-func (a *App) setActiveFilter(filter string) tea.Cmd {
-	v := a.activeView()
-	if v == nil {
-		return nil
+// setActiveFilter pushes filter down to the active view. Filtering is
+// synchronous and local in every view; a full-topic scan is :search.
+func (a *App) setActiveFilter(filter string) {
+	if v := a.activeView(); v != nil {
+		v.SetFilter(filter)
 	}
-	v.SetFilter(filter)
-	// Some views queue follow-up work after a filter change (e.g. MessagesView
-	// debounces the deep-search trigger). Drain that here so the Cmd reaches
-	// the bubbletea loop.
-	if pf, ok := v.(interface{ PendingFilterCmd() tea.Cmd }); ok {
-		return pf.PendingFilterCmd()
-	}
-	return nil
 }
 
 // refreshMsgMatchesView returns true when the refresh message belongs to the
