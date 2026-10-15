@@ -88,6 +88,16 @@ func (c *CreateTopicCmd) Run(args []string) int {
 
 	expandEnvFlags(&flags)
 
+	topicCfg := kafka.CreateTopicConfig{
+		Topic:             flags.Topic,
+		NumPartitions:     flags.Partitions,
+		ReplicationFactor: flags.ReplicationFactor,
+	}
+	if err := kafka.ValidateCreateTopic(topicCfg); err != nil {
+		log.Error("invalid flags", "err", err)
+		return 1
+	}
+
 	client, err := flags.BuildClient()
 	if err != nil {
 		log.Error(err.Error())
@@ -103,11 +113,7 @@ func (c *CreateTopicCmd) Run(args []string) int {
 	fmt.Printf("Creating topic %q (%d partitions, replication factor %d)...\n",
 		flags.Topic, flags.Partitions, flags.ReplicationFactor)
 
-	created, err := client.CreateTopic(ctx, kafka.CreateTopicConfig{
-		Topic:             flags.Topic,
-		NumPartitions:     flags.Partitions,
-		ReplicationFactor: flags.ReplicationFactor,
-	})
+	created, err := client.CreateTopic(ctx, topicCfg)
 	if err != nil {
 		log.Error("create topic failed", "err", err)
 		return 1

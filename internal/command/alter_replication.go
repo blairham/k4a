@@ -12,6 +12,8 @@ import (
 
 	"github.com/charmbracelet/log"
 	goflags "github.com/jessevdk/go-flags"
+
+	"github.com/blairham/k4a/internal/kafka"
 )
 
 const alterReplicationTimeout = 60 * time.Second
@@ -83,6 +85,11 @@ func (c *AlterReplicationCmd) Run(args []string) int {
 	}
 
 	expandEnvFlags(&flags)
+
+	if err := kafka.ValidateReplicationFactor(flags.ReplicationFactor); err != nil {
+		log.Error("invalid flags", "err", err)
+		return 1
+	}
 
 	client, err := flags.BuildClient()
 	if err != nil {

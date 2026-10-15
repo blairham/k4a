@@ -4,6 +4,7 @@
 package kafka
 
 import (
+	"math"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -187,5 +188,53 @@ func TestParsePermission(t *testing.T) {
 				t.Errorf("parsePermission(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ValidateCreateTopic / ValidateReplicationFactor
+// ---------------------------------------------------------------------------
+
+// Out-of-range sizes used to wrap silently on the int32/int16 conversion:
+// RF 65537 became 1 and partitions 4294967297 became 1.
+func TestValidateCreateTopic(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		p, rf   int
+		wantErr bool
+	}{
+		{"defaults", 3, 3, false},
+		{"broker defaults", -1, -1, false},
+		{"max", math.MaxInt32, math.MaxInt16, false},
+		{"rf wraps to 1", 3, 65537, true},
+		{"rf just over int16", 3, math.MaxInt16 + 1, true},
+		{"partitions over int32", math.MaxInt32 + 1, 3, true},
+		{"partitions wrap to 1", 1<<32 + 1, 3, true},
+		{"zero partitions", 0, 3, true},
+		{"zero rf", 3, 0, true},
+		{"negative partitions", -2, 3, true},
+	}
+	for _, tc := range cases {
+		err := ValidateCreateTopic(CreateTopicConfig{Topic: "t", NumPartitions: tc.p, ReplicationFactor: tc.rf})
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%s: ValidateCreateTopic(p=%d, rf=%d) err=%v, wantErr=%v", tc.name, tc.p, tc.rf, err, tc.wantErr)
+		}
+	}
+}
+
+// A non-positive target used to reach resizeReplicas, where a negative RF
+// panics slicing current[:newRF].
+func TestValidateReplicationFactor(t *testing.T) {
+	t.Parallel()
+
+	for rf, wantErr := range map[int]bool{
+		1: false, 3: false, math.MaxInt16: false,
+		0: true, -1: true, math.MaxInt16 + 1: true, 65537: true,
+	} {
+		if err := ValidateReplicationFactor(rf); (err != nil) != wantErr {
+			t.Errorf("ValidateReplicationFactor(%d) err=%v, wantErr=%v", rf, err, wantErr)
+		}
 	}
 }
