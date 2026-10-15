@@ -157,6 +157,9 @@ func (v *CreateACLView) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// Editing reports whether the form is still taking input.
+func (v *CreateACLView) Editing() bool { return v.state == createACLStateForm }
+
 // HandleKeyMsg processes tea.KeyMsg for form interaction.
 func (v *CreateACLView) HandleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	if v.state != createACLStateForm {

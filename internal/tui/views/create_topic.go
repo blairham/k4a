@@ -115,6 +115,9 @@ func (v *CreateTopicView) Update(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
+// Editing reports whether the form is still taking input.
+func (v *CreateTopicView) Editing() bool { return v.state == createTopicStateForm }
+
 // HandleKeyMsg processes tea.KeyMsg for form interaction.
 func (v *CreateTopicView) HandleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	if v.state != createTopicStateForm {
