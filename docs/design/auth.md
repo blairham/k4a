@@ -116,8 +116,13 @@ commands): an empty value means "not set" and keeps the context's.
 `--region` therefore has no flag default — `us-east-1` is filled in only
 for a `--brokers` connection with no context behind it — so an explicit
 `--region us-east-1` still overrides a context in another region.
+A `--brokers` connection without `--auth` infers the method
+(`inferAuthMethod`): credentials mean `scram`, a client cert or key means
+`mtls`, and nothing means `plaintext`. It used to be `scram` regardless, so
+`k4a -b localhost:9092` failed asking for a password.
 `-k` can only turn verification off; it cannot re-enable it for a
 context with `insecure: true`.
+
 Env exists primarily for IAM profile/region (which often flow from the
 shell) and for SCRAM creds (which we'd rather not ask users to put on
 the command line).
