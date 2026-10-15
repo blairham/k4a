@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
 	saslaws "github.com/twmb/franz-go/pkg/sasl/aws"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
 
 	"github.com/blairham/k4a/internal/awscreds"
@@ -24,14 +25,23 @@ import (
 // AuthMethod defines the supported authentication methods.
 type AuthMethod string
 
-// Supported authentication methods.
+// Supported authentication methods. `scram` predates the other SCRAM variant
+// and keeps meaning SCRAM-SHA-512, so existing contexts and scripts are
+// unchanged; `scram-sha-512` is accepted as its explicit spelling.
 const (
-	AuthPlaintext AuthMethod = "plaintext"
-	AuthTLS       AuthMethod = "tls"
-	AuthSCRAM     AuthMethod = "scram"
-	AuthMTLS      AuthMethod = "mtls"
-	AuthIAM       AuthMethod = "iam"
+	AuthPlaintext   AuthMethod = "plaintext"
+	AuthTLS         AuthMethod = "tls"
+	AuthSCRAM       AuthMethod = "scram"
+	AuthSCRAMSHA512 AuthMethod = "scram-sha-512"
+	AuthSCRAMSHA256 AuthMethod = "scram-sha-256"
+	AuthPlain       AuthMethod = "plain"
+	AuthOAuthBearer AuthMethod = "oauthbearer"
+	AuthMTLS        AuthMethod = "mtls"
+	AuthIAM         AuthMethod = "iam"
 )
+
+// methodsForErrors lists the accepted --auth values for an unknown-method error.
+const methodsForErrors = "plaintext, tls, scram (SHA-512), scram-sha-256, plain, oauthbearer, mtls or iam"
 
 // clientID is stamped on every connection so brokers can attribute k4a traffic.
 const clientID = "k4a"
@@ -46,7 +56,44 @@ type AuthConfig struct {
 	CAFile   string
 	Region   string
 	Profile  string
+	OAuth    OAuthConfig
 	Insecure bool
+	// NoTLS runs a SASL method over a plaintext connection (SASL_PLAINTEXT).
+	// It is an explicit opt-in, never a fallback: a SASL method without it
+	// always dials TLS, and the non-SASL TLS methods reject it.
+	NoTLS bool
+}
+
+// IsSASL reports whether m authenticates with a SASL mechanism that has a
+// meaningful plaintext (no-TLS) form. MSK IAM is SASL too, but MSK only
+// accepts it over TLS, so it is not one of them.
+func (m AuthMethod) IsSASL() bool {
+	switch m {
+	case AuthSCRAM, AuthSCRAMSHA512, AuthSCRAMSHA256, AuthPlain, AuthOAuthBearer:
+		return true
+	default:
+		return false
+	}
+}
+
+// CleartextWarning returns the warning to show before connecting when cfg
+// sends SASL credentials over a connection without TLS, or "" when it does
+// not. The kafka package does not print it itself: a headless command writes
+// it to stderr, the daemon logs it, and the TUI must not scribble on its own
+// screen.
+func CleartextWarning(cfg AuthConfig) string {
+	if !cfg.NoTLS || !cfg.Method.IsSASL() {
+		return ""
+	}
+	const tail = "; use --no-tls only against a local or otherwise trusted network"
+	switch cfg.Method {
+	case AuthPlain:
+		return "SASL/PLAIN without TLS: the username and password are sent in cleartext and all traffic is unencrypted" + tail
+	case AuthOAuthBearer:
+		return "OAUTHBEARER without TLS: the bearer token is sent in cleartext, where anyone on the path can replay it, and all traffic is unencrypted" + tail
+	default:
+		return "SCRAM without TLS: the password itself is not sent, but the handshake can be captured and guessed offline, and all traffic is unencrypted" + tail
+	}
 }
 
 // NewClientOpts returns the franz-go client options needed to connect to the
@@ -55,6 +102,13 @@ func NewClientOpts(cfg AuthConfig, brokers string) ([]kgo.Opt, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(splitBrokers(brokers)...),
 		kgo.ClientID(clientID),
+	}
+
+	if cfg.NoTLS && !cfg.Method.IsSASL() && cfg.Method != AuthPlaintext && cfg.Method != "" {
+		return nil, fmt.Errorf(
+			"no-tls applies only to the SASL methods (scram, scram-sha-256, plain, oauthbearer); %s always uses TLS",
+			cfg.Method,
+		)
 	}
 
 	switch cfg.Method {
@@ -68,16 +122,20 @@ func NewClientOpts(cfg AuthConfig, brokers string) ([]kgo.Opt, error) {
 		}
 		return append(opts, kgo.DialTLSConfig(tlsCfg)), nil
 
-	case AuthSCRAM:
-		if cfg.Username == "" || cfg.Password == "" {
-			return nil, errors.New("scram auth requires a username and password")
+	case AuthSCRAM, AuthSCRAMSHA512, AuthSCRAMSHA256, AuthPlain, AuthOAuthBearer:
+		mech, err := saslMechanism(cfg)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, kgo.SASL(mech))
+		if cfg.NoTLS {
+			return opts, nil
 		}
 		tlsCfg, err := newTLSConfig(cfg)
 		if err != nil {
 			return nil, err
 		}
-		mech := scram.Auth{User: cfg.Username, Pass: cfg.Password}.AsSha512Mechanism()
-		return append(opts, kgo.DialTLSConfig(tlsCfg), kgo.SASL(mech)), nil
+		return append(opts, kgo.DialTLSConfig(tlsCfg)), nil
 
 	case AuthMTLS:
 		tlsCfg, err := newMTLSConfig(cfg)
@@ -94,7 +152,31 @@ func NewClientOpts(cfg AuthConfig, brokers string) ([]kgo.Opt, error) {
 		return append(opts, kgo.DialTLSConfig(tlsCfg), kgo.SASL(iamMechanism(cfg))), nil
 
 	default:
-		return nil, fmt.Errorf("unknown auth method %q (want plaintext, tls, scram, mtls or iam)", cfg.Method)
+		return nil, fmt.Errorf("unknown auth method %q (want %s)", cfg.Method, methodsForErrors)
+	}
+}
+
+// saslMechanism builds the SASL mechanism for one of the username/password or
+// token methods. The transport (TLS or not) is the caller's business.
+func saslMechanism(cfg AuthConfig) (sasl.Mechanism, error) {
+	switch cfg.Method {
+	case AuthOAuthBearer:
+		return oauthMechanism(cfg.OAuth)
+	case AuthPlain:
+		if cfg.Username == "" || cfg.Password == "" {
+			return nil, errors.New("plain auth requires a username and password")
+		}
+		return plain.Auth{User: cfg.Username, Pass: cfg.Password}.AsMechanism(), nil
+	case AuthSCRAMSHA256:
+		if cfg.Username == "" || cfg.Password == "" {
+			return nil, errors.New("scram-sha-256 auth requires a username and password")
+		}
+		return scram.Auth{User: cfg.Username, Pass: cfg.Password}.AsSha256Mechanism(), nil
+	default: // AuthSCRAM, AuthSCRAMSHA512
+		if cfg.Username == "" || cfg.Password == "" {
+			return nil, errors.New("scram auth requires a username and password")
+		}
+		return scram.Auth{User: cfg.Username, Pass: cfg.Password}.AsSha512Mechanism(), nil
 	}
 }
 
