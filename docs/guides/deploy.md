@@ -65,12 +65,38 @@ both are installed in the same namespace.
 | `kafka.brokers` | `KAFKA_BROKERS` | Bootstrap servers, comma-separated. Required. |
 | `kafka.auth` | `KAFKA_AUTH` | `plaintext`, `tls`, `scram`, `mtls`, `iam`. Default `iam`. |
 | `aws.region` | `AWS_REGION` | Region for IAM auth. Rendered only when set; the daemon defaults to `us-east-1`. |
-| `serviceAccount.name` / `.annotations` | — | The pod's identity. For `iam` on EKS, bind it to an IAM role with EKS Pod Identity, or annotate it with the role ARN for IRSA. |
+| `kafka.insecure` | `--insecure` | Skip TLS certificate verification. Passed as an argument (the flag has no env). Testing only. |
+| `kafka.credentials.existingSecret` (`.usernameKey`, `.passwordKey`) | `KAFKA_USERNAME`, `KAFKA_PASSWORD` | SASL/SCRAM credentials from an existing Secret. Keys default to `username` / `password`. |
+| `kafka.tls.existingSecret` (`.caKey`, `.certKey`, `.keyKey`) | `KAFKA_TLS_CA`, `KAFKA_TLS_CERT`, `KAFKA_TLS_KEY` | Secret mounted read-only at `/etc/k4a/tls`; each non-empty key becomes the matching file path. Keys default to `ca.crt` / `tls.crt` / `tls.key`. `mtls` needs all three. |
+| `serviceAccount.name` / `.annotations` | — | The pod's identity (empty name = the release fullname). For `iam` on EKS, bind it to an IAM role with EKS Pod Identity, or annotate it with the role ARN for IRSA. |
 
 With `iam` the daemon picks up the pod's AWS credentials, so no SASL secret is
-involved. Other auth methods read `KAFKA_USERNAME` / `KAFKA_PASSWORD` /
-`KAFKA_TLS_*` (see the table below); the chart does not template those, so add
-them to the deployment (ideally from a Secret) if you need them.
+involved; `scram`, `tls` and `mtls` take their material from the two
+`existingSecret` values above, which the chart never creates.
+
+### Release naming
+
+Resources are named the standard Helm way: `<release>-<chart>`, or just the
+release name when it already contains the chart name, so `helm install
+k4a-index …` still yields `k4a-index`. Two releases of a chart in one
+namespace no longer collide. `fullnameOverride` pins the name outright.
+`k4a-mcp`'s default `config.indexAddr` assumes a `k4a-index` release named
+`k4a-index`; otherwise point it at `<release>-k4a-index:9500`.
+
+### Pod hardening and optional policy objects
+
+Both charts run the container with a read-only root filesystem, no privilege
+escalation, all capabilities dropped, `runAsNonRoot`, and the `RuntimeDefault`
+seccomp profile (`securityContext` / `podSecurityContext` in values). The only
+writable paths are emptyDirs: the index at `/data` (`k4a-index`) and `/tmp`.
+`terminationGracePeriodSeconds` defaults to 30.
+
+Both charts also carry a `NetworkPolicy` (`networkPolicy.enabled`, ingress to
+the service port from `networkPolicy.ingressFrom`, egress restricted only if
+`networkPolicy.egress` is set) and a `PodDisruptionBudget`
+(`podDisruptionBudget.enabled`, `minAvailable` or `maxUnavailable`). Both are
+off by default. At `replicaCount: 1`, a PDB with `minAvailable: 1` blocks node
+drains, so raise the replica count first.
 
 ## Adding a topic to the follow set
 
@@ -144,14 +170,15 @@ The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 `K4A_INDEX_TOPIC`, `K4A_INDEX_MAX_FOLLOWED`, `K4A_INDEX_EVICT_AFTER`,
 `K4A_INDEX_TOPIC_MAX_BYTES`, `K4A_INDEX_MAX_TOTAL_BYTES`, the three
 `K4A_INDEX_DRAIN_STALL_*` values (`config.drainStall.*`),
-`K4A_INDEX_LISTEN` (from `service.port`), and `K4A_INDEX_DATA_DIR`
-(`/data`). **`K4A_INDEX_LOG_LEVEL` is not templated** — it runs at its
-default; add it to the deployment template if you need to change it.
+`K4A_INDEX_LISTEN` (from `service.port`), `K4A_INDEX_DATA_DIR`
+(`/data`), `K4A_INDEX_LOG_LEVEL` (`logLevel`), and the Kafka credential and
+TLS values above.
 
 `k4a-mcp` is much smaller: `--index-addr` / `K4A_MCP_INDEX_ADDR` (default
 `k4a-index:9500`, the in-cluster ClusterIP hop — plaintext on purpose, the
 TLS edge is for external clients), `--listen` / `K4A_MCP_LISTEN` (`:9501`),
-`--path` / `K4A_MCP_PATH` (`/mcp`), `--log-level` / `K4A_MCP_LOG_LEVEL`.
+`--path` / `K4A_MCP_PATH` (`/mcp`), `--log-level` / `K4A_MCP_LOG_LEVEL`
+(chart value `logLevel`).
 
 ## Networking
 

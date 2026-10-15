@@ -15,14 +15,15 @@ spec:
         {{- include "k4a-mcp.labels" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "k4a-mcp.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532        # distroless nonroot
-        runAsGroup: 65532
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
         - name: k4a-mcp
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           env:
             - name: K4A_MCP_INDEX_ADDR
               value: {{ .Values.config.indexAddr | quote }}
@@ -30,6 +31,8 @@ spec:
               value: ":{{ .Values.service.port }}"
             - name: K4A_MCP_PATH
               value: {{ .Values.config.path | quote }}
+            - name: K4A_MCP_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -50,3 +53,11 @@ spec:
             periodSeconds: 20
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # The root filesystem is read-only; /tmp is the only writable path.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.tmpSizeLimit }}
