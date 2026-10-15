@@ -30,7 +30,8 @@ service Index {
   rpc Follow(FollowRequest) returns (FollowResponse);
 
   // Coverage reports a topic's indexed ranges without running a query.
-  // Used by the Topics view to render an "indexed?" column.
+  // Clients call it before a search to choose index or scan. It is a
+  // read-only probe: it never starts a follow or resets the LRU clock.
   rpc Coverage(CoverageRequest) returns (CoverageResponse);
 }
 
