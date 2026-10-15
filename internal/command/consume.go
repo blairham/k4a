@@ -95,6 +95,7 @@ func (c *ConsumeCommand) Run(args []string) int {
 		log.Error(err.Error())
 		return 1
 	}
+	defer client.Close()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
