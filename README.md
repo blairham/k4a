@@ -435,6 +435,7 @@ Browse and manage Kafka ACL bindings.
 | Key | Action |
 |-----|--------|
 | `a` | Create new ACL binding |
+| `e` | Edit the selected binding: the create form, pre-filled; asks for confirmation, then creates the new binding and deletes the old one |
 | `ctrl+d` | Delete selected ACL |
 
 ### Messages

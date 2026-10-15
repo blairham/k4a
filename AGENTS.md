@@ -100,7 +100,7 @@ staging` still opens the TUI.
 - **Broker Detail** — broker configuration with default/read-only/sensitive flags
 - **Messages** — live message tail (newest first) with follow mode
 - **Message Detail** — sticky metadata/header cards + scrollable pretty-printed JSON
-- **ACLs** — access control list bindings with create/delete
+- **ACLs** — access control list bindings with create/edit/delete
 - **Search** — streamed matches from a whole-topic search (`s` in Messages, `:search`)
 - **Context** — context selector for switching clusters
 - **Produce** — interactive message production with progress tracking
@@ -201,6 +201,9 @@ before overwriting.
 ### ACLs View
 
 - `a` — create new ACL binding
+- `e` — edit the selected binding (`NewEditACLView`): Kafka has no ACL
+  update, so after a y/n it is `kafka.Client.ReplaceACL` — create the new
+  binding, then delete the old, so a failure leaves both rather than neither
 - `ctrl+d` — delete selected ACL
 
 ### Cluster View
