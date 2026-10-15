@@ -98,6 +98,9 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"upgrade": func() (cli.Command, error) {
 			return &command.UpgradeCommand{Version: info.Version}, nil
 		},
+		"index": func() (cli.Command, error) {
+			return &command.IndexCommand{}, nil
+		},
 		"state": func() (cli.Command, error) {
 			return &command.StateCommand{}, nil
 		},
