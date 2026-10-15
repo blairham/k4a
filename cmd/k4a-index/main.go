@@ -451,6 +451,11 @@ func parseByteSize(s string) (int64, error) {
 	if n < 0 {
 		return 0, fmt.Errorf("byte size %q must be non-negative", s)
 	}
+	// Unchecked, the product wraps: 8388608TiB came back negative, which
+	// reads as "no cap", and other sizes wrap to an arbitrary value.
+	if n > math.MaxInt64/mult {
+		return 0, fmt.Errorf("byte size %q overflows int64", s)
+	}
 	return n * mult, nil
 }
 
