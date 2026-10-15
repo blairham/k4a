@@ -207,7 +207,6 @@ var viewShortcuts = map[style.ViewType][]chrome.Shortcut{
 	style.ViewGroupDetail: {
 		{Key: keyR, Desc: "Reset"},
 		{Key: "<:reset>", Desc: descDelete},
-		{Key: keySlash, Desc: descFilter},
 		{Key: keyEsc, Desc: descBack},
 	},
 	style.ViewBrokerDetail: {
@@ -230,11 +229,24 @@ var formShortcuts = []chrome.Shortcut{
 	{Key: keyHelp, Desc: descHelp},
 }
 
+// defaultShortcuts serves Cluster and Search, neither of which filters.
 var defaultShortcuts = []chrome.Shortcut{
 	{Key: keyEnter, Desc: "Select"},
 	{Key: keyEsc, Desc: descBack},
-	{Key: keySlash, Desc: descFilter},
 	{Key: keyHelp, Desc: descHelp},
+}
+
+// noRefreshViews do not advertise <r>: their Refresh is a no-op (a live
+// tail, a one-shot scan, a single message), or, in a form, r is typed
+// into the field.
+var noRefreshViews = map[style.ViewType]bool{
+	style.ViewMessages:      true,
+	style.ViewMessageDetail: true,
+	style.ViewSearch:        true,
+	style.ViewProduce:       true,
+	style.ViewCreateTopic:   true,
+	style.ViewCreateACL:     true,
+	style.ViewResetOffsets:  true,
 }
 
 // renderShortcuts returns the shortcut grid for the active view,
@@ -249,24 +261,25 @@ func (a *App) renderShortcuts() []string {
 		{Key: "<4>", Desc: "ACLs"},
 	}
 
-	perView, ok := viewShortcuts[a.view]
+	return a.chrome.ShortcutGrid(viewKeys, actionShortcuts(a.view))
+}
+
+// actionShortcuts is the action column for view v: its own set plus the
+// always-on actions it supports, ordered k9s-style by sortShortcuts (digit
+// keys first, rest alphabetical by description).
+func actionShortcuts(v style.ViewType) []chrome.Shortcut {
+	perView, ok := viewShortcuts[v]
 	if !ok {
 		perView = defaultShortcuts
 	}
 	// A copy: the append and sort below must not touch the shared table.
 	actions := slices.Clone(perView)
-
-	// Always-on actions land in the action column alongside the
-	// per-view set; sortShortcuts then orders the merged set k9s-style
-	// (digit keys first, rest alphabetical by description).
-	actions = append(
-		actions,
-		chrome.Shortcut{Key: "<r>", Desc: "Refresh"},
-		chrome.Shortcut{Key: "<:q>", Desc: "Quit"},
-	)
+	if !noRefreshViews[v] {
+		actions = append(actions, chrome.Shortcut{Key: "<r>", Desc: "Refresh"})
+	}
+	actions = append(actions, chrome.Shortcut{Key: "<:q>", Desc: "Quit"})
 	sortShortcuts(actions)
-
-	return a.chrome.ShortcutGrid(viewKeys, actions)
+	return actions
 }
 
 // renderContent assembles the bordered content area (table or help)
