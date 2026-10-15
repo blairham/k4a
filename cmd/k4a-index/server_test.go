@@ -296,12 +296,18 @@ func waitIndexed(t *testing.T, w *topicWorker, want int) {
 // a connected client. Cleanup is registered on t.
 func dialServer(t *testing.T, mgr *manager) indexv1.IndexClient {
 	t.Helper()
+	return dialIndexServer(t, newIndexServer(mgr))
+}
+
+// dialIndexServer is dialServer for an indexServer the test configured.
+func dialIndexServer(t *testing.T, is *indexServer) indexv1.IndexClient {
+	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	srv := grpc.NewServer()
-	indexv1.RegisterIndexServer(srv, newIndexServer(mgr))
+	indexv1.RegisterIndexServer(srv, is)
 	go srv.Serve(lis) //nolint:errcheck // stopped in cleanup
 	t.Cleanup(srv.Stop)
 
@@ -446,5 +452,54 @@ func drainSearchCapped(
 				capped = ev.GetProgress().GetCapped()
 			}
 		}
+	}
+}
+
+// TestSearchLimitIsCappedServerSide proves a request cannot ask the daemon for
+// more matches than --max-search-limit: an oversized and an unset limit are
+// both lowered to it, and the answer says it was capped.
+func TestSearchLimitIsCappedServerSide(t *testing.T) {
+	fake := newFakeCluster(t, testTopic)
+	seeds := fake.ListenAddrs()
+	wantNeedles := produceRecords(t, seeds, testTopic, recordCount)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	mgr := newManager(ctx, state.NewRoot(t.TempDir()), "test-cluster", newKafkaClient(t, seeds),
+		mustPolicy(t, testTopic), managerConfig{})
+	defer mgr.stopAll()
+	mgr.preFollow([]string{testTopic})
+	worker := mgr.lookup(testTopic)
+	if worker == nil {
+		t.Fatal("pre-follow did not register the topic")
+	}
+	worker.waitReady(ctx)
+	waitIndexed(t, worker, recordCount)
+
+	const maxLimit = 3
+	if wantNeedles <= maxLimit {
+		t.Fatalf("fixture has %d needles; the cap of %d would not bind", wantNeedles, maxLimit)
+	}
+	is := newIndexServer(mgr)
+	is.maxLimit = maxLimit
+	client := dialIndexServer(t, is)
+
+	for name, limit := range map[string]int32{"oversized": int32(wantNeedles * 10), "unset": 0} {
+		t.Run(name, func(t *testing.T) {
+			stream, err := client.Search(ctx, &indexv1.SearchRequest{
+				Topic: testTopic, Pattern: "needle", Scopes: []string{"value"}, Limit: limit,
+			})
+			if err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+			matches, capped := drainSearchCapped(t, stream)
+			if matches != maxLimit {
+				t.Errorf("streamed %d matches, want the server cap %d", matches, maxLimit)
+			}
+			if !capped {
+				t.Error("a server-capped answer reported capped=false")
+			}
+		})
 	}
 }

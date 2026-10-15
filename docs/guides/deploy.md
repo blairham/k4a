@@ -160,6 +160,10 @@ these via env vars, so in-cluster the env column is what you actually edit.
 | `--drain-stall-wipe-after` | `K4A_INDEX_DRAIN_STALL_WIPE_AFTER` | `3` | On the Nth consecutive stall exit for the same topic index, quarantine that index so the next boot re-warms fresh. `0` disables. |
 | `--shutdown-timeout` | `K4A_INDEX_SHUTDOWN_TIMEOUT` | `15s` | On SIGTERM, how long in-flight RPCs may run before they are cut off, so a stalled Search cannot hold shutdown open past the pod's grace period (which would skip the final index flush). Keep it under `terminationGracePeriodSeconds` (Kubernetes default 30s). `0` stops them at once. |
 | `-l`, `--listen` | `K4A_INDEX_LISTEN` | `:9500` | gRPC listen address. |
+| `--tls-cert`, `--tls-key` | `K4A_INDEX_TLS_CERT`, `K4A_INDEX_TLS_KEY` | *(empty: plaintext)* | Serve gRPC over TLS. The certificate is re-read when its file changes. |
+| `--tls-client-ca` | `K4A_INDEX_TLS_CLIENT_CA` | *(empty)* | Require a client certificate signed by this CA on every RPC except health checks (mTLS). Needs `--tls-cert`. |
+| `--token-file` | `K4A_INDEX_TOKEN_FILE` (or the token itself in `K4A_INDEX_TOKEN`) | *(empty: no token)* | Bearer token every RPC except health checks must present. Read once at startup. |
+| `--max-search-limit` | `K4A_INDEX_MAX_SEARCH_LIMIT` | `10000` | Most matches one Search returns; a larger or missing request limit is lowered to it and the answer reports capped. |
 | `--data-dir` | `K4A_INDEX_DATA_DIR` | k4a's `~/.k4a` | Index storage root. |
 | `--log-level` | `K4A_INDEX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
 
@@ -177,6 +181,8 @@ The chart wires `KAFKA_BROKERS` (`kafka.brokers`), `KAFKA_AUTH`
 `K4A_INDEX_TOPIC`, `K4A_INDEX_MAX_FOLLOWED`, `K4A_INDEX_EVICT_AFTER`,
 `K4A_INDEX_TOPIC_MAX_BYTES`, `K4A_INDEX_MAX_TOTAL_BYTES`, the three
 `K4A_INDEX_DRAIN_STALL_*` values (`config.drainStall.*`),
+`K4A_INDEX_MAX_SEARCH_LIMIT` (`config.maxSearchLimit`), the listener's
+`K4A_INDEX_TLS_*` and `K4A_INDEX_TOKEN_FILE` (`listener.*`, below),
 `K4A_INDEX_LISTEN` (from `service.port`), `K4A_INDEX_DATA_DIR`
 (`/data`), `K4A_INDEX_LOG_LEVEL` (`logLevel`), and the Kafka credential and
 TLS values above.
@@ -187,6 +193,45 @@ TLS edge is for external clients), `--listen` / `K4A_MCP_LISTEN` (`:9501`),
 `--path` / `K4A_MCP_PATH` (`/mcp`), `--log-level` / `K4A_MCP_LOG_LEVEL`
 (chart value `logLevel`).
 
+## Authenticating callers
+
+`k4a-index` can ask callers for a credential. **Nothing is required by
+default**, so upgrading an install changes nothing on the wire; the daemon
+instead logs a warning at startup that its listener is plaintext and
+unauthenticated. What it authenticates is "a caller holding this
+deployment's credential" — there is still no per-caller authorization
+(Phase 5 of the design doc), so every authenticated caller reads every
+followed topic.
+
+`k4a-index` chart values:
+
+| Value | Renders | Notes |
+|---|---|---|
+| `listener.tls.existingSecret` (`.certKey`, `.keyKey`) | `K4A_INDEX_TLS_CERT`, `K4A_INDEX_TLS_KEY` | A `kubernetes.io/tls` Secret mounted at `/etc/k4a/listener-tls`. Keys default to `tls.crt` / `tls.key`. A renewed certificate is served without a restart. |
+| `listener.tls.clientCAKey` | `K4A_INDEX_TLS_CLIENT_CA` | A CA key in the same Secret (e.g. `ca.crt`); clients must then present a certificate it signed. |
+| `listener.token.existingSecret` (`.key`) | `K4A_INDEX_TOKEN_FILE` | Secret mounted at `/etc/k4a/listener-token`; key defaults to `token`. Restart the pod after rotating it. |
+
+Health checks (and the TCP probes) stay open whatever is configured.
+
+**Upgrade path** for a running plaintext install:
+
+1. Issue the daemon a certificate (cert-manager, or your PKI) for the names
+   clients dial, and set `listener.tls.existingSecret`. Clients drop
+   `index-insecure` and, for a private CA, set `index-ca`. A k4a still
+   configured with `index-insecure: true` now fails its handshake and
+   searches locally, with a warning — slower, never wrong.
+2. Create a token Secret, set `listener.token.existingSecret`, and hand the
+   token to clients (`K4A_INDEX_TOKEN`, `--index-token-file`, or a context's
+   `index-token: $VAR`). Clients refuse to send a token over plaintext, so
+   do step 1 first, or keep TLS on a load balancer in front and dial that.
+3. Optionally require client certificates with `listener.tls.clientCAKey`;
+   clients set `index-cert`/`index-key`.
+
+Doing all three at once is fine for a new install; on a live one, each step
+breaks only the clients not yet moved, and those degrade to a scan.
+`k4a-mcp` cannot yet present index credentials, so keep its in-cluster hop
+to an unauthenticated listener until it can (#54).
+
 ## Networking
 
 Both charts create a `ClusterIP` Service only. To reach them from developer
@@ -194,9 +239,10 @@ machines, put an **internal** LoadBalancer or Ingress in front, reachable over
 your private network / VPN, with DNS such as `k4a-index.example.com` and
 `k4a-mcp.example.com`:
 
-- **k4a-index** serves plaintext gRPC (h2c) on 9500. Terminate TLS at the
-  edge on `:443` and make sure the listener **negotiates ALPN `h2`** (on an
-  AWS NLB, `alpnPolicy: HTTP2Preferred`; on an Ingress controller, its gRPC
+- **k4a-index** serves plaintext gRPC (h2c) on 9500 unless `listener.tls`
+  is set. Either serve TLS from the pod, or terminate TLS at the edge on
+  `:443` and make sure the listener **negotiates ALPN `h2`** (on an AWS NLB,
+  `alpnPolicy: HTTP2Preferred`; on an Ingress controller, its gRPC
   backend-protocol setting). Without it the TLS handshake fails and every
   client silently falls back to a broker scan.
 - **k4a-mcp** serves MCP streamable-HTTP on 9501 at `/mcp`, plus a plain
