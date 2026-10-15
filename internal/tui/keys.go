@@ -230,10 +230,10 @@ func (a *App) onFilterChange(value string) {
 func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 	lower := strings.ToLower(strings.TrimSpace(input))
 
-	// Handle commands with arguments first.
-	if strings.HasPrefix(lower, "produce") {
-		topic := strings.TrimSpace(strings.TrimPrefix(input, "produce"))
-		_, c := a.handleAction(actionProduce, topic)
+	// Handle commands with arguments first. The command word is matched
+	// whole and case-insensitively; the topic keeps the case it was typed in.
+	if fields := strings.Fields(input); len(fields) > 0 && strings.EqualFold(fields[0], "produce") {
+		_, c := a.handleAction(actionProduce, strings.Join(fields[1:], " "))
 		return "", c
 	}
 

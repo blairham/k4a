@@ -1712,6 +1712,41 @@ func TestExecuteCommandProduce(t *testing.T) {
 	}
 }
 
+// TestExecuteCommandProduceParsesWord matches the command word whole and
+// case-insensitively, and keeps the topic exactly as typed.
+func TestExecuteCommandProduceParsesWord(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // the produce form looks for ~/.k4a/schemas
+
+	cases := []struct {
+		input, topic string
+		produce      bool
+	}{
+		{"produce my-topic", "my-topic", true},
+		{"Produce Orders", "Orders", true},
+		{"  PRODUCE   foo  ", "foo", true},
+		{"produce", "", true},
+		{"producer", "", false},
+		{"produce-foo", "", false},
+	}
+	for _, tc := range cases {
+		app := NewApp(nil, ConnInfo{}, nil, "", "dev")
+		app.width = 80
+		app.height = 40
+
+		app.dispatchCommand(tc.input) //nolint:errcheck
+		if got := app.view == style.ViewProduce; got != tc.produce {
+			t.Errorf("%q: opened produce = %v, want %v", tc.input, got, tc.produce)
+			continue
+		}
+		if !tc.produce {
+			continue
+		}
+		if got := typedView[*views.ProduceView](app, style.ViewProduce).Topic(); got != tc.topic {
+			t.Errorf("%q: topic = %q, want %q", tc.input, got, tc.topic)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // refreshMsgMatchesView / refreshMsgHasError — more cases
 // ---------------------------------------------------------------------------
