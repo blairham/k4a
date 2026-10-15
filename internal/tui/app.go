@@ -503,6 +503,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		}
 		return a, nil
 
+	case brokerConfigMsg:
+		cmd := a.applyBrokerConfigResult(msg)
+		return a, cmd
+
 	case editTopicConfigMsg:
 		a.loading = false
 		if msg.err != nil {

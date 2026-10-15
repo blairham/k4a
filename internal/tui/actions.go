@@ -116,6 +116,9 @@ const (
 	actionContextView        = "context_view"
 )
 
+// msgReadonly is what a write refused under ui.readonly says.
+const msgReadonly = "readonly mode"
+
 // writeActions are actions that mutate Kafka state and are blocked in readonly mode.
 var writeActions = map[string]bool{
 	actionProduce:            true,
@@ -123,6 +126,7 @@ var writeActions = map[string]bool{
 	actionCreateACL:          true,
 	"reset_offsets":          true,
 	"edit_topic_config":      true,
+	actionEditBrokerConfig:   true,
 	actionIncreasePartitions: true,
 	actionChangeReplication:  true,
 	"confirm_purge_topic":    true,
@@ -133,7 +137,7 @@ var writeActions = map[string]bool{
 
 func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint:gocyclo,funlen // flat action dispatch
 	if a.readonly && writeActions[action] {
-		a.errFlash = "readonly mode"
+		a.errFlash = msgReadonly
 		return a, nil
 	}
 
@@ -175,6 +179,8 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 		return a.openView(style.ViewResetOffsets, a.viewMap[style.ViewResetOffsets].Init())
 	case "edit_topic_config":
 		return a.startConfigEdit(param)
+	case actionEditBrokerConfig:
+		return a.startBrokerConfigEdit(param)
 	case actionIncreasePartitions:
 		return a.startIncreasePartitions(param)
 	case actionChangeReplication:

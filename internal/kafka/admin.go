@@ -312,6 +312,31 @@ func (c *Client) AlterTopicConfig(ctx context.Context, topic, key, value string)
 	return nil
 }
 
+// AlterBrokerConfig sets key on one broker (a per-broker dynamic config, not
+// the cluster-wide default) with IncrementalAlterConfigs. A nil value deletes
+// the broker's dynamic override, so the static or default value applies again.
+// The broker refuses keys that are not dynamically updatable.
+func (c *Client) AlterBrokerConfig(ctx context.Context, brokerID, key string, value *string) error {
+	id, err := parseBrokerID(brokerID)
+	if err != nil {
+		return err
+	}
+	op := kadm.SetConfig
+	if value == nil {
+		op = kadm.DeleteConfig
+	}
+	resps, err := c.admin.AlterBrokerConfigs(ctx, []kadm.AlterConfig{{Op: op, Name: key, Value: value}}, id)
+	if err != nil {
+		return fmt.Errorf("altering broker config: %w", err)
+	}
+	for _, r := range resps {
+		if r.Err != nil {
+			return fmt.Errorf("altering config %q on broker %s: %w", key, brokerID, r.Err)
+		}
+	}
+	return nil
+}
+
 // ChangeReplicationFactor alters the replica assignments for every partition of
 // a topic so that each partition has exactly newRF replicas. The new replicas
 // are distributed evenly across the cluster's brokers.
