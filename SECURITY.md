@@ -73,12 +73,26 @@ including deleting topics, consumer groups, ACLs and records.
 `k4a-index` tails Kafka topics with **its own** credentials and answers
 searches over gRPC for anyone who can reach it.
 
-- **There is no per-request authentication.** The gRPC listener
-  (`--listen`, default `:9500`) is plaintext and accepts every caller. **The
-  network is the boundary**: expose it only on a private network, and put a
-  TLS-terminating load balancer in front if clients are to use the default
-  (verified TLS) dial. Anyone who can reach the port can search every topic
-  the daemon follows, whatever their own Kafka permissions are.
+- **Transport authentication is opt-in; by default there is none.** The gRPC
+  listener (`--listen`, default `:9500`) is plaintext and accepts every
+  caller unless configured otherwise, and the daemon logs a warning at
+  startup when it is. It can serve TLS (`--tls-cert`/`--tls-key`), require a
+  client certificate from a CA (`--tls-client-ca`, mTLS), and require a bearer
+  token (`--token-file` or `K4A_INDEX_TOKEN`, compared in constant time).
+  Health checks stay open; every other RPC is refused `Unauthenticated`
+  without the configured credential. Clients refuse to send a token over a
+  plaintext dial.
+- **Authentication is not authorization.** Anyone holding the deployment's
+  token or a client certificate the CA signed can search every topic the
+  daemon follows and start follows within `--allow`, whatever their own Kafka
+  permissions are. Per-caller authorization (Phase 5 of
+  `docs/design/shared-index-service.md`) does not exist yet. Without
+  credentials configured, **the network is the boundary**: expose the port
+  only on a private network.
+- **A search is bounded.** `--max-search-limit` (default 10000) lowers any
+  larger or missing request limit and reports the answer as capped. Search
+  patterns, which can hold what a caller is looking for (an email address,
+  an account number), are logged only at `debug`.
 - **The `--allow` topic allowlist is the authorization boundary.** It is
   required and default-deny: a topic is followed only if it matches one of the
   glob patterns, and a search for any other topic is answered with no
@@ -216,6 +230,12 @@ In scope, among others:
 - a crash or unbounded resource use in `k4a-index` or `k4a-mcp` caused by a
   request
 
-Out of scope: anything that follows from exposing `k4a-index` or `k4a-mcp`
-to a network you do not trust, from running with `--insecure`, or from an
-allowlist wider than you meant.
+Also in scope: a `k4a-index` configured with a token or client CA answering
+a request that lacks it (other than a health check), or a k4a client sending
+an index token over plaintext.
+
+Out of scope: anything that follows from exposing an unauthenticated
+`k4a-index` or `k4a-mcp` to a network you do not trust, from running with
+`--insecure`, from an allowlist wider than you meant, or from an
+authenticated caller reading a followed topic their own Kafka permissions
+would not allow (there is no per-caller authorization yet).

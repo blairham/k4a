@@ -24,10 +24,30 @@ import (
 type indexServer struct {
 	indexv1.UnimplementedIndexServer
 	mgr *manager
+	// maxLimit bounds the matches one Search returns, whatever the request
+	// asks for: a single request must not be able to make the daemon
+	// materialize and stream an arbitrarily large result.
+	maxLimit int
 }
 
+// defaultMaxSearchLimit matches the client's own default cap, so an
+// unconfigured daemon lowers nothing a stock k4a sends.
+const defaultMaxSearchLimit = 10_000
+
 func newIndexServer(mgr *manager) *indexServer {
-	return &indexServer{mgr: mgr}
+	return &indexServer{mgr: mgr, maxLimit: defaultMaxSearchLimit}
+}
+
+// clampLimit lowers a missing or oversized request limit to maxLimit. The
+// query then reports capped honestly when the bound binds, exactly as for a
+// limit the client chose.
+func (s *indexServer) clampLimit(req *indexv1.SearchRequest) {
+	if s.maxLimit <= 0 {
+		return
+	}
+	if l := req.GetLimit(); l <= 0 || int(l) > s.maxLimit {
+		req.Limit = int32(s.maxLimit) //nolint:gosec // validated positive; a flag-sized int
+	}
 }
 
 // Search streams a leading Coverage event, then the indexed matches
@@ -38,10 +58,13 @@ func newIndexServer(mgr *manager) *indexServer {
 func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_SearchServer) error {
 	start := time.Now()
 	topic := req.GetTopic()
+	s.clampLimit(req)
+	// The pattern is what the caller is looking for — an account number, an
+	// email address — so it is logged only at debug.
+	log.Debug("search pattern", "topic", topic, "pattern", req.GetPattern())
 	log.Info(
 		"search",
 		"topic", topic,
-		"pattern", req.GetPattern(),
 		"scopes", req.GetScopes(),
 		"since_ms", req.GetSinceMs(),
 		"until_ms", req.GetUntilMs(),

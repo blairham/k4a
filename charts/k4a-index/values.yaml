@@ -31,6 +31,32 @@ service:
   # terminates TLS and negotiates ALPN h2 (see docs/guides/deploy.md).
   port: 9500
 
+# Caller authentication on the gRPC listener. Both are off by default, which
+# keeps an upgraded install serving plaintext with no caller credential — the
+# daemon logs a warning at startup saying so. This authenticates "a caller
+# holding the deployment's credential"; it does not authorize per caller, so
+# every authenticated caller still reads every followed topic (SECURITY.md).
+listener:
+  # Serve gRPC over TLS from an existing kubernetes.io/tls Secret, mounted
+  # read-only at /etc/k4a/listener-tls. A renewed certificate is picked up
+  # without a restart. Clients then dial without index-insecure, trusting this
+  # certificate's CA (index-ca, or k4a-mcp's index.tls values).
+  tls:
+    existingSecret: ""
+    certKey: tls.crt
+    keyKey: tls.key
+    # Set to a CA key in the same Secret (e.g. ca.crt) to require a client
+    # certificate signed by it on every RPC but health checks (mTLS).
+    clientCAKey: ""
+  # A bearer token every RPC but health checks must present, from an existing
+  # Secret mounted at /etc/k4a/listener-token. Read at startup: restart the
+  # pod after rotating it. Clients refuse to send it over plaintext, so pair
+  # it with listener.tls (or a TLS-terminating load balancer for external
+  # clients — then in-cluster k4a-mcp must also go through TLS).
+  token:
+    existingSecret: ""
+    key: token
+
 kafka:
   # Bootstrap servers, comma-separated. Required. Rendered as KAFKA_BROKERS.
   brokers: ""
@@ -158,6 +184,10 @@ podDisruptionBudget:
   maxUnavailable: ""
 
 config:
+  # Most matches one Search returns. A request asking for more (or for no
+  # limit) is lowered to this and reported as capped. Rendered as
+  # K4A_INDEX_MAX_SEARCH_LIMIT; the default matches the k4a client's own cap.
+  maxSearchLimit: 10000
   # Follow allowlist — the v1 authorization boundary (design doc §Security).
   # REQUIRED: the chart refuses to render without it.
   #
