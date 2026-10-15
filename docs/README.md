@@ -36,6 +36,7 @@ packages: `k4a-index` (the shared always-on index, served over gRPC) and
 | State management (session, file lock, tiering) | [`design/state-management.md`](design/state-management.md) | shipped |
 | Local rolling index for fast topic search | [`design/local-index.md`](design/local-index.md) | shipped (Tiers 5-6 unbuilt) |
 | Shared always-on index service (`k4a-index`) | [`design/shared-index-service.md`](design/shared-index-service.md) | shipped (Phase 5 outstanding) |
+| Schema Registry decoding (Avro, Protobuf, JSON Schema) | [`design/schema-registry.md`](design/schema-registry.md) | living document |
 
 ## Guides
 
