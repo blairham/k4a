@@ -191,7 +191,15 @@ func forwardScan(
 			if onMatch != nil {
 				onMatch(m)
 			}
-			matchCh <- m
+			// A reader that canceled (a background search stopped, or replaced
+			// by a new one) stops reading; blocking here would leak this
+			// goroutine and the scan under it.
+			select {
+			case matchCh <- m:
+			case <-ctx.Done():
+				res.canceled = true
+				return res
+			}
 		case p, ok := <-srcProg:
 			if !ok {
 				srcProg = nil

@@ -162,6 +162,9 @@ func (s SearchSource) String() string {
 // DeepSearchProgress is emitted periodically while a scan is running and
 // once more on terminal state (Done=true).
 type DeepSearchProgress struct {
+	// Topic is set by SearchTopics so a merged multi-topic stream says
+	// which topic each frame is about; a single-topic search leaves it empty.
+	Topic          string
 	Elapsed        time.Duration // wall time since scan start
 	Scanned        int64         // messages read across all partitions
 	Total          int64         // sum of (lastOffset-firstOffset) across partitions
