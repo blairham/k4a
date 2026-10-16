@@ -146,6 +146,7 @@ var viewBindings = map[style.ViewType][]binding{
 		{keyEnter, "View", true},
 		{keyS, "Edit Query", true},
 		{keyR, "Re-run", true},
+		{"<x>", "Stop", true},
 		{keyE, descExport, true},
 		copyBindings[0], copyBindings[1], copyBindings[2],
 		{keyEsc, descBack, false},

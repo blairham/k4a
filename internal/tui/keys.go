@@ -22,7 +22,7 @@ var knownCommands = []string{
 	"topics", "topic", "groups", "group", "cluster", "brokers", "acls", "quotas",
 	"produce", "create-topic", "ct", "create-acl", "acl",
 	"context", "ctx", "reconnect", "reset",
-	"search", "s",
+	"search", "s", "results", "search-stop",
 	"upgrade",
 	"logo", "logoless",
 }
@@ -240,6 +240,13 @@ func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 		_, c := a.handleAction(actionProduce, strings.Join(fields[1:], " "))
 		return "", c
 	}
+	// :search TOPIC searches that topic; a glob (orders.*) searches every
+	// topic it selects.
+	if fields := strings.Fields(input); len(fields) == 2 &&
+		(strings.EqualFold(fields[0], "search") || strings.EqualFold(fields[0], "s")) {
+		_, c := a.handleAction(actionSearch, fields[1])
+		return "", c
+	}
 
 	if vt, ok := commandViews[lower]; ok {
 		return "", a.switchView(vt)
@@ -265,6 +272,13 @@ func (a *App) dispatchCommand(input string) (errMsg string, cmd tea.Cmd) {
 		// Open the search bar (same as pressing `s` in Messages).
 		_, c := a.handleAction(actionSearch, a.searchTopic())
 		return "", c
+	case "results":
+		return a.showSearch(), nil
+	case "search-stop":
+		if !a.stopSearch() {
+			return "no search is running", nil
+		}
+		return "", nil
 	case "upgrade":
 		// Checked before quitting: the upgrade itself runs after the TUI
 		// exits, and a Homebrew install would only refuse there.

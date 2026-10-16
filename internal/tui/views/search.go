@@ -5,9 +5,11 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 
 	"charm.land/bubbles/v2/table"
 	tea "charm.land/bubbletea/v2"
@@ -71,7 +73,16 @@ const (
 	// made the chunked-scan bug dangerous rather than merely annoying.
 	searchStateTruncated
 	searchStateErrored
+	// searchStateCanceled means the user stopped the scan: what is shown is
+	// whatever arrived before, and says so.
+	searchStateCanceled
 )
+
+// scanSeq numbers scans across every SearchView. Per-view numbering let a
+// replaced view's late messages (scan 1) pass as the new view's scan 1.
+var scanSeq atomic.Int64
+
+func nextScanID() int { return int(scanSeq.Add(1)) }
 
 // SearchFunc runs a deep search and returns the standard three-channel
 // shape. The TUI passes in either *kafka.Client.DeepSearch directly or a
@@ -82,9 +93,14 @@ type SearchFunc func(
 	params kafka.SearchParams,
 ) (<-chan kafka.ConsumedMessage, <-chan kafka.DeepSearchProgress, <-chan error)
 
+// TopicResolver lists the topics a glob selects, for a cross-topic search.
+type TopicResolver func(ctx context.Context, glob string) ([]string, error)
+
 // SearchView streams results from an active deep search.
 // The query itself is collected by the App's command bar in search mode;
-// SearchView is only the results pane.
+// SearchView is only the results pane. Its topic may be a glob
+// (kafka.IsTopicGlob), which searches every topic it selects; see
+// search_topics.go.
 type SearchView struct {
 	scanErr   error
 	cancel    context.CancelFunc
@@ -92,11 +108,14 @@ type SearchView struct {
 	progCh    <-chan kafka.DeepSearchProgress
 	errCh     <-chan error
 	runSearch SearchFunc
+	resolve   TopicResolver
+	perTopic  map[string]*topicCoverage
 	topic     string
 	query     string
 	filter    string
 	matches   []kafka.ConsumedMessage
-	visible   []int // indexes into matches that pass filter, in table order
+	visible   []int    // indexes into matches that pass filter, in table order
+	topics    []string // what a glob resolved to, in display order
 	table     table.Model
 	progress  kafka.DeepSearchProgress
 	state     searchState
@@ -120,7 +139,7 @@ func NewSearchView(run SearchFunc, topic, query string) *SearchView {
 		state:     searchStateRunning,
 	}
 
-	cols := buildMsgColumns(80, 0)
+	cols := v.columns(80)
 	v.table = table.New(
 		table.WithColumns(cols),
 		table.WithFocused(true),
@@ -139,9 +158,11 @@ func (v *SearchView) Init() tea.Cmd { return v.start() }
 // terminal message stops it.
 func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
+	// A message from an earlier scan came from that scan's own reader; the
+	// current scan has its reader already, so a stale one starts nothing.
 	case SearchMatchMsg:
 		if m.ScanID != v.scanID {
-			return v.waitForNextEvent()
+			return nil
 		}
 		v.matches = append(v.matches, m.Msg)
 		if f := parseFilter(v.filter); f.Empty() || f.MatchesAny(m.Msg.Key, m.Msg.Value) {
@@ -151,17 +172,25 @@ func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 		return v.waitForNextEvent()
 	case SearchProgressMsg:
 		if m.ScanID != v.scanID {
-			return v.waitForNextEvent()
+			return nil
 		}
-		v.applyProgress(m.Prog)
+		if v.Multi() {
+			v.topicProgress(m.Prog)
+		} else if v.state != searchStateCanceled {
+			v.applyProgress(m.Prog)
+		}
 		return v.waitForNextEvent()
 	case SearchErrMsg:
 		if m.ScanID != v.scanID {
-			return v.waitForNextEvent()
+			return nil
 		}
-		v.state = searchStateErrored
-		v.scanErr = m.Err
+		v.applyErr(m.Err)
 		return v.waitForNextEvent()
+	case SearchTopicsMsg:
+		if m.ScanID != v.scanID {
+			return nil
+		}
+		return v.topicsResolved(m)
 	case SearchChanClosedMsg:
 		if m.ScanID != v.scanID {
 			return nil
@@ -171,12 +200,38 @@ func (v *SearchView) Update(msg tea.Msg) tea.Cmd {
 		if m.ScanID != v.scanID {
 			return nil
 		}
-		if v.state == searchStateRunning {
-			v.state = searchStateDone
-		}
+		v.finish()
 		return nil
 	}
 	return nil
+}
+
+// applyErr records a scan error. After the user stopped the scan, the
+// cancellation surfacing as an error is expected and not shown; in a
+// cross-topic search, one topic's error belongs to that topic.
+func (v *SearchView) applyErr(err error) {
+	if v.state == searchStateCanceled {
+		return
+	}
+	var te *kafka.TopicError
+	if v.Multi() && errors.As(err, &te) {
+		v.topicErr(te)
+		return
+	}
+	v.state = searchStateErrored
+	v.scanErr = err
+}
+
+// finish moves a running scan to its end state once every channel closed.
+func (v *SearchView) finish() {
+	if v.state != searchStateRunning {
+		return
+	}
+	if v.Multi() {
+		v.finishTopics()
+		return
+	}
+	v.state = searchStateDone
 }
 
 // applyProgress records a progress frame and moves the state on: capped and
@@ -209,9 +264,7 @@ func (v *SearchView) channelClosed(which searchChannel) tea.Cmd {
 		// Other channels still have data to drain — keep listening.
 		return v.waitForNextEvent()
 	}
-	if v.state == searchStateRunning {
-		v.state = searchStateDone
-	}
+	v.finish()
 	return nil
 }
 
@@ -227,7 +280,7 @@ func (v *SearchView) UpdateTable(msg tea.Msg) tea.Cmd {
 func (v *SearchView) Resize(width, height int) {
 	v.width = width
 	v.height = height
-	v.table.SetColumns(buildMsgColumns(width, v.xOffset))
+	v.table.SetColumns(v.columns(width))
 	v.table.SetWidth(width)
 	v.table.SetStyles(tableStylesWithWidth(width))
 }
@@ -239,8 +292,12 @@ func (v *SearchView) Resize(width, height int) {
 // Only a clean, complete scan hides the header to reclaim the two rows; there
 // the results table really does tell the whole story.
 func (v *SearchView) headerVisible() bool {
+	if v.Multi() {
+		return true // the per-topic coverage line is the answer's provenance
+	}
 	switch v.state {
-	case searchStateRunning, searchStateErrored, searchStateCapped, searchStateTruncated:
+	case searchStateRunning, searchStateErrored, searchStateCapped, searchStateTruncated,
+		searchStateCanceled:
 		return true
 	case searchStateDone:
 		return false
@@ -261,13 +318,35 @@ func (v *SearchView) Topic() string { return v.topic }
 const (
 	KeyRerunSearch = "R"
 	KeyEditSearch  = "s"
+	KeyStopSearch  = "x"
 )
 
 // Actions the search results view asks the App to run.
 const (
 	ActionRerunSearch = "search_rerun"
 	ActionEditSearch  = "search_edit"
+	ActionStopSearch  = "search_stop"
 )
+
+// Running reports whether the scan is still in flight.
+func (v *SearchView) Running() bool { return v.state == searchStateRunning }
+
+// Cancel stops a running scan and keeps what it found, marked as partial.
+// It reports whether there was a scan to stop.
+func (v *SearchView) Cancel() bool {
+	if v.state != searchStateRunning {
+		return false
+	}
+	v.Stop()
+	v.state = searchStateCanceled
+	return true
+}
+
+// StatusLine is the one-line state of the search, for the App to show while
+// the scan runs in the background behind another view.
+func (v *SearchView) StatusLine() string {
+	return fmt.Sprintf("search /%s in %s · %s", v.query, v.topic, v.progressFragments())
+}
 
 // HandleKey processes non-table keys for the search results view.
 func (v *SearchView) HandleKey(key string) (string, string) {
@@ -287,6 +366,10 @@ func (v *SearchView) HandleKey(key string) (string, string) {
 		return ActionRerunSearch, v.topic
 	case KeyEditSearch:
 		return ActionEditSearch, v.topic
+	case KeyStopSearch:
+		if v.Running() {
+			return ActionStopSearch, v.topic
+		}
 	}
 	return "", ""
 }
@@ -299,6 +382,7 @@ func (v *SearchView) SetQuery(q string) { v.query = q }
 func (v *SearchView) Rerun() tea.Cmd {
 	v.Stop()
 	v.matches, v.visible = nil, nil
+	v.topics, v.perTopic = nil, nil
 	v.progress = kafka.DeepSearchProgress{}
 	v.scanErr = nil
 	setTableRows(&v.table, nil)
@@ -343,7 +427,7 @@ func (v *SearchView) SetFilter(filter string) {
 			continue
 		}
 		v.visible = append(v.visible, i)
-		rows = append(rows, matchRow(m))
+		rows = append(rows, v.row(m))
 	}
 	setTableRows(&v.table, rows)
 }
@@ -390,10 +474,17 @@ func (v *SearchView) renderHeaderBox() string {
 	bold := lipgloss.NewStyle().Foreground(style.ColorLightSkyBlue).Bold(true)
 	inner := lipgloss.NewStyle().Width(innerWidth)
 
-	line1 := bold.Render("search: ") + dim.Render("/"+v.query+" · "+v.topic)
+	where := v.topic
+	if v.Multi() && len(v.topics) > 0 {
+		where += fmt.Sprintf(" · %d topics", len(v.topics))
+	}
+	line1 := bold.Render("search: ") + dim.Render("/"+v.query+" · "+where)
 	line2 := dim.Render(v.progressFragments())
 
 	body := inner.Render(line1) + "\n" + inner.Render(line2)
+	if v.Multi() {
+		body += "\n" + inner.Render(dim.Render(v.coverageLine()))
+	}
 	return lipgloss.NewStyle().
 		Width(width-2).
 		BorderStyle(lipgloss.RoundedBorder()).
@@ -412,6 +503,9 @@ func (v *SearchView) SelectedMessage() (kafka.ConsumedMessage, bool) {
 }
 
 func (v *SearchView) progressFragments() string {
+	if v.Multi() {
+		return v.topicsProgressFragments()
+	}
 	switch v.state {
 	case searchStateRunning:
 		var pct int64
@@ -451,6 +545,12 @@ func (v *SearchView) progressFragments() string {
 			return "error: " + v.scanErr.Error()
 		}
 		return "error"
+	case searchStateCanceled:
+		return fmt.Sprintf(
+			"stopped · %d matches · %s · results are partial",
+			len(v.matches),
+			formatElapsed(v.progress.Elapsed),
+		)
 	}
 	return ""
 }
@@ -465,8 +565,11 @@ func (v *SearchView) start() tea.Cmd {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	v.cancel = cancel
-	v.scanID++
+	v.scanID = nextScanID()
 	v.state = searchStateRunning
+	if v.Multi() {
+		return v.startTopics(ctx, params)
+	}
 
 	matchCh, progCh, errCh := v.runSearch(ctx, v.topic, params)
 	v.matchCh = matchCh
@@ -517,7 +620,25 @@ func (v *SearchView) waitForNextEvent() tea.Cmd {
 // existing rows. With thousands of matches streaming in, a full rebuild per
 // match dominates render time and causes input lag.
 func (v *SearchView) appendRow(m kafka.ConsumedMessage) {
-	setTableRows(&v.table, append(v.table.Rows(), matchRow(m)))
+	setTableRows(&v.table, append(v.table.Rows(), v.row(m)))
+}
+
+// row is one match as a results-table row; a cross-topic search leads with
+// the topic, since the same offset means nothing without it.
+func (v *SearchView) row(m kafka.ConsumedMessage) table.Row {
+	r := matchRow(m)
+	if v.Multi() {
+		return append(table.Row{m.Topic}, r...)
+	}
+	return r
+}
+
+// columns is the results table's layout for width.
+func (v *SearchView) columns(width int) []table.Column {
+	if v.Multi() {
+		return buildColumns(searchTopicsFixedCols, width, v.xOffset)
+	}
+	return buildMsgColumns(width, v.xOffset)
 }
 
 // matchRow is one match as a results-table row.

@@ -602,15 +602,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo,gocogn
 		return a, cmd
 
 	case views.SearchMatchMsg, views.SearchProgressMsg, views.SearchErrMsg,
-		views.SearchChanClosedMsg, views.SearchTerminalMsg:
+		views.SearchChanClosedMsg, views.SearchTerminalMsg, views.SearchTopicsMsg:
 		// Route deep-search messages straight to the SearchView even
 		// when it's not the active view, so the scan can stream in
 		// matches while the user navigates into a message detail and
 		// back.
-		if v := a.viewMap[style.ViewSearch]; v != nil {
-			return a, v.Update(msg)
-		}
-		return a, nil
+		cmd := a.updateSearch(msg)
+		return a, cmd
 
 	default:
 		cmd := a.updateActiveView(msg)

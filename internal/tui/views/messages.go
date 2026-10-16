@@ -132,9 +132,15 @@ var msgFixedCols = []table.Column{
 }
 
 func buildMsgColumns(totalWidth, xOffset int) []table.Column {
-	cols := make([]table.Column, 0, len(msgFixedCols)+1)
+	return buildColumns(msgFixedCols, totalWidth, xOffset)
+}
+
+// buildColumns lays out fixed columns scrolled by xOffset, then a VALUE
+// column that takes the rest of totalWidth.
+func buildColumns(fixed []table.Column, totalWidth, xOffset int) []table.Column {
+	cols := make([]table.Column, 0, len(fixed)+1)
 	consumed := xOffset
-	for _, c := range msgFixedCols {
+	for _, c := range fixed {
 		colTotal := c.Width + 2 // +2 for cell padding
 		switch {
 		case consumed >= colTotal:
