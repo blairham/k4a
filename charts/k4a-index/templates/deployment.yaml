@@ -71,6 +71,15 @@ spec:
             - name: KAFKA_OAUTH_SCOPES
               value: {{ .scopes | quote }}
             {{- end }}
+            {{- if .extensions }}
+            # SASL extensions some brokers require beside the token.
+            - name: KAFKA_OAUTH_EXTENSIONS
+              value: {{ .extensions | quote }}
+            {{- end }}
+            {{- if .authzid }}
+            - name: KAFKA_OAUTH_AUTHZID
+              value: {{ .authzid | quote }}
+            {{- end }}
             {{- if and .existingSecret .clientSecretKey }}
             - name: KAFKA_OAUTH_CLIENT_SECRET
               valueFrom:

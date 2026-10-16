@@ -80,11 +80,15 @@ kafka:
   # OAUTHBEARER (auth: oauthbearer). Either the client-credentials grant
   # (tokenUrl + clientId, with the client secret under clientSecretKey in
   # existingSecret), or a static token under tokenKey in existingSecret. Set
-  # one; the daemon refuses both. Rendered as KAFKA_OAUTH_*.
+  # one; the daemon refuses both. Rendered as KAFKA_OAUTH_*. extensions
+  # ("key=value,key=value", e.g. Confluent Cloud's logicalCluster and
+  # identityPoolId) and authzid (act as this principal) apply to either.
   oauth:
     tokenUrl: ""
     clientId: ""
     scopes: ""
+    extensions: ""
+    authzid: ""
     existingSecret: ""
     clientSecretKey: ""
     tokenKey: ""

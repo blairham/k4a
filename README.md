@@ -97,7 +97,7 @@ Context management stays in `k4a contexts` / `k4a use-context`.
 | `scram` | SASL/SCRAM-SHA-512 over TLS (also spelled `scram-sha-512`) | `--username`, `--password` |
 | `scram-sha-256` | SASL/SCRAM-SHA-256 over TLS | `--username`, `--password` |
 | `plain` | SASL/PLAIN over TLS | `--username`, `--password` |
-| `oauthbearer` | SASL/OAUTHBEARER over TLS | `--oauth-token`, `--oauth-token-file`, or `--oauth-token-url` + `--oauth-client-id` + `--oauth-client-secret` |
+| `oauthbearer` | SASL/OAUTHBEARER over TLS | `--oauth-token`, `--oauth-token-file`, `--oauth-token-url` + `--oauth-client-id` + `--oauth-client-secret`, or `--oauth-issuer` + `--oauth-client-id` (interactive login) |
 | `mtls` | Mutual TLS with client certificate | `--cert`, `--key`, `--ca` |
 | `iam` | AWS MSK IAM authentication | `--region` (default: `AWS_REGION`/`AWS_DEFAULT_REGION`, then the profile's `region`, then us-east-1) |
 
@@ -128,6 +128,28 @@ contexts:
     oauth-client-id: k4a
     oauth-client-secret: ${K4A_OAUTH_SECRET}
     oauth-scopes: kafka
+    oauth-extensions: logicalCluster=lkc-xxxx,identityPoolId=pool-xxxx
+```
+
+For a person rather than a service account, name an OIDC issuer instead of
+a token URL and k4a logs you in: the `device` flow (the default) prints a
+code to enter on any device, and the `browser` flow opens your browser
+(authorization code with PKCE, redirected to a loopback port). The token is
+cached owner-only under your user config directory and refreshed as it
+expires (ask for `offline_access` if your IdP needs it for a refresh
+token). Commands log in by themselves when needed; `k4a login` does it
+ahead of time, `--force` again, and `--logout` forgets the token:
+
+```yaml
+contexts:
+  sso:
+    brokers: broker.example.com:9093
+    auth: oauthbearer
+    oauth-issuer: https://login.example.com/realms/kafka
+    oauth-client-id: k4a
+    oauth-scopes: openid,offline_access
+    oauth-flow: browser        # or device (default)
+    oauth-authzid: team-svc    # optional: act as this principal
 ```
 
 ### Schema Registry
@@ -679,6 +701,11 @@ OAUTHBEARER (one source):
       --oauth-client-id ID       Client ID             (env: KAFKA_OAUTH_CLIENT_ID)
       --oauth-client-secret S    Client secret         (env: KAFKA_OAUTH_CLIENT_SECRET)
       --oauth-scopes A,B         Scopes                (env: KAFKA_OAUTH_SCOPES)
+      --oauth-issuer URL         OIDC issuer: log in interactively (env: KAFKA_OAUTH_ISSUER)
+      --oauth-flow FLOW          client-credentials, device (issuer default) or browser
+      --oauth-redirect-port N    Fixed loopback port for the browser flow
+      --oauth-extensions K=V,..  SASL extensions       (env: KAFKA_OAUTH_EXTENSIONS)
+      --oauth-authzid ID         Authorization ID      (env: KAFKA_OAUTH_AUTHZID)
 
 mTLS:
       --cert FILE         Client certificate   (env: KAFKA_TLS_CERT)

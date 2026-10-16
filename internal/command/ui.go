@@ -154,6 +154,10 @@ func (c *UICommand) Run(args []string) int {
 	var connInfo tui.ConnInfo
 	if !pickContext {
 		warnCleartext(authCfg) // before the TUI owns the screen
+		if loginErr := ensureOAuthLogin(authCfg); loginErr != nil {
+			log.Error(loginErr.Error())
+			return 1
+		}
 		client, err = kafka.NewClient(authCfg, brokers)
 		if err != nil {
 			log.Error("client setup failed", "err", err)

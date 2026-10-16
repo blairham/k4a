@@ -48,7 +48,10 @@ Connection:
   -k, --insecure           Skip TLS certificate verification (refused with mtls)
       --no-tls             Run a SASL method without TLS (credentials in cleartext)
       --oauth-token=TOKEN  OAUTHBEARER token (or --oauth-token-file, or --oauth-token-url
-                           with --oauth-client-id/--oauth-client-secret/--oauth-scopes)`
+                           with --oauth-client-id/--oauth-client-secret/--oauth-scopes,
+                           or --oauth-issuer to log in; see k4a login --help)
+      --oauth-extensions=K=V,...  OAUTHBEARER SASL extensions
+      --oauth-authzid=ID   OAUTHBEARER authorization ID`
 
 // parseCmdArgs parses args into flags and expands their $VAR references.
 // When done is true the caller returns code: help was printed, or the flags

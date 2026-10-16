@@ -43,6 +43,19 @@ including deleting topics, consumer groups, ACLs and records.
     fetched token is held in memory and never written to disk or logged. The
     same `$VAR`, process-list and keychain (`--field oauth-token` /
     `oauth-client-secret`) advice applies to the token and the secret.
+    An **interactive OIDC login** (`--oauth-issuer`, device-code or browser
+    flow with PKCE) caches its access and refresh tokens: in the OS keychain
+    (service `k4a`, account `oauth/<hash>`) when it takes them, otherwise
+    (no keychain, or a token too large for one) in an owner-only file
+    (`0600` in a `0700` directory) under the user config directory
+    (`k4a/oauth/`), never under `~/.k4a`, so `k4a state export` does not
+    carry them. Anyone who can read your keychain or files can use them
+    until they expire or are revoked; `k4a login --logout` deletes them.
+    Codes and refresh tokens go only to endpoints that pass the same
+    https-or-loopback check, discovered from an issuer that must name
+    itself, and the browser flow's loopback listener ignores a callback
+    without the login's random `state`. `k4a-index` refuses an issuer, so a
+    daemon never runs on a person's login.
   - **mTLS** (`--auth mtls`): certificate, key and CA PEM files named by path;
     k4a reads them and never copies them.
 - **TLS** is verified against the system roots, plus `--ca` when given, at TLS
@@ -278,7 +291,8 @@ In scope, among others:
   the index
 - a TLS connection that skips verification without `--insecure`, or SASL
   credentials sent without TLS when `--no-tls` was not given
-- files under `~/.k4a` created readable by other users
+- files under `~/.k4a`, or the OIDC token cache, created readable by other
+  users
 - `k4a upgrade` installing an archive that does not match `checksums.txt`
 - a crash or unbounded resource use in `k4a-index` or `k4a-mcp` caused by a
   request

@@ -128,6 +128,11 @@ type OAuth struct {
 	ClientID     string `yaml:"oauth-client-id,omitempty"`
 	ClientSecret string `yaml:"oauth-client-secret,omitempty"`
 	Scopes       string `yaml:"oauth-scopes,omitempty"`
+	AuthzID      string `yaml:"oauth-authzid,omitempty"`
+	Extensions   string `yaml:"oauth-extensions,omitempty"`
+	Flow         string `yaml:"oauth-flow,omitempty"`
+	Issuer       string `yaml:"oauth-issuer,omitempty"`
+	RedirectPort string `yaml:"oauth-redirect-port,omitempty"`
 }
 
 // Keychain maps a context's secret fields to OS keychain entries: each value
@@ -415,6 +420,11 @@ func (ctx *Context) ToAuthConfig() kafka.AuthConfig {
 			ClientID:     ExpandRef(ctx.OAuth.ClientID),
 			ClientSecret: ExpandRef(ctx.OAuth.ClientSecret),
 			Scopes:       ExpandRef(ctx.OAuth.Scopes),
+			AuthzID:      ExpandRef(ctx.OAuth.AuthzID),
+			Extensions:   ExpandRef(ctx.OAuth.Extensions),
+			Flow:         ExpandRef(ctx.OAuth.Flow),
+			Issuer:       ExpandRef(ctx.OAuth.Issuer),
+			RedirectPort: ExpandRef(ctx.OAuth.RedirectPort),
 		},
 		Insecure: ctx.Insecure,
 		NoTLS:    ctx.NoTLS,

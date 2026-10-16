@@ -4,8 +4,10 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/endpointauth"
@@ -40,8 +42,9 @@ type ConnectionFlags struct {
 	OAuth OAuthFlags
 }
 
-// OAuthFlags configures OAUTHBEARER: a static token, a token file, or the
-// client-credentials grant. Shared by the TUI and the headless commands.
+// OAuthFlags configures OAUTHBEARER: a static token, a token file, the
+// client-credentials grant, or an interactive OIDC login, plus the SASL
+// authorization ID and extensions. Shared by the TUI and the headless commands.
 type OAuthFlags struct {
 	Token        string `long:"oauth-token"         env:"KAFKA_OAUTH_TOKEN"         description:"OAUTHBEARER static bearer token"`
 	TokenFile    string `long:"oauth-token-file"    env:"KAFKA_OAUTH_TOKEN_FILE"    description:"OAUTHBEARER token file, re-read on every connection"`
@@ -49,6 +52,11 @@ type OAuthFlags struct {
 	ClientID     string `long:"oauth-client-id"     env:"KAFKA_OAUTH_CLIENT_ID"     description:"OAUTHBEARER client ID"`
 	ClientSecret string `long:"oauth-client-secret" env:"KAFKA_OAUTH_CLIENT_SECRET" description:"OAUTHBEARER client secret"`
 	Scopes       string `long:"oauth-scopes"        env:"KAFKA_OAUTH_SCOPES"        description:"OAUTHBEARER scopes (comma-separated)"`
+	AuthzID      string `long:"oauth-authzid"       env:"KAFKA_OAUTH_AUTHZID"       description:"OAUTHBEARER authorization ID: act as this principal"`
+	Extensions   string `long:"oauth-extensions"    env:"KAFKA_OAUTH_EXTENSIONS"    description:"OAUTHBEARER SASL extensions (key=value,key=value)"`
+	Flow         string `long:"oauth-flow"          env:"KAFKA_OAUTH_FLOW"          description:"OAUTHBEARER grant: client-credentials, device or browser"`
+	Issuer       string `long:"oauth-issuer"        env:"KAFKA_OAUTH_ISSUER"        description:"OIDC issuer for an interactive login (device or browser flow)"`
+	RedirectPort string `long:"oauth-redirect-port" env:"KAFKA_OAUTH_REDIRECT_PORT" description:"Fixed loopback port for the browser flow's redirect (default: any free port)"`
 }
 
 func (o OAuthFlags) config() kafka.OAuthConfig {
@@ -59,6 +67,11 @@ func (o OAuthFlags) config() kafka.OAuthConfig {
 		ClientID:     o.ClientID,
 		ClientSecret: o.ClientSecret,
 		Scopes:       o.Scopes,
+		AuthzID:      o.AuthzID,
+		Extensions:   o.Extensions,
+		Flow:         o.Flow,
+		Issuer:       o.Issuer,
+		RedirectPort: o.RedirectPort,
 	}
 }
 
@@ -201,6 +214,9 @@ func (f *ConnectionFlags) BuildClient() (*kafka.Client, error) {
 	}
 
 	warnCleartext(authCfg)
+	if loginErr := ensureOAuthLogin(authCfg); loginErr != nil {
+		return nil, loginErr
+	}
 	client, err := kafka.NewClient(authCfg, brokers)
 	if err != nil {
 		return nil, fmt.Errorf("client setup failed: %w", err)
@@ -214,6 +230,21 @@ func warnCleartext(auth kafka.AuthConfig) {
 	if w := kafka.CleartextWarning(auth); w != "" {
 		fmt.Fprintln(os.Stderr, "warning: "+w)
 	}
+}
+
+// ensureOAuthLogin runs an interactive OIDC login on stderr when the
+// connection needs one and has no usable cached token. It happens here,
+// before connecting, because the handshake itself never prompts.
+func ensureOAuthLogin(auth kafka.AuthConfig) error {
+	if auth.Method != kafka.AuthOAuthBearer || !auth.OAuth.Interactive() {
+		return nil
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if _, err := kafka.OAuthLogin(ctx, auth.OAuth, kafka.LoginOptions{Out: os.Stderr}); err != nil {
+		return fmt.Errorf("OIDC login failed: %w", err)
+	}
+	return nil
 }
 
 // directAuthConfig fills the defaults for a --brokers connection, which has no
@@ -249,6 +280,11 @@ func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
 		{&base.OAuth.ClientID, &flags.OAuth.ClientID},
 		{&base.OAuth.ClientSecret, &flags.OAuth.ClientSecret},
 		{&base.OAuth.Scopes, &flags.OAuth.Scopes},
+		{&base.OAuth.AuthzID, &flags.OAuth.AuthzID},
+		{&base.OAuth.Extensions, &flags.OAuth.Extensions},
+		{&base.OAuth.Flow, &flags.OAuth.Flow},
+		{&base.OAuth.Issuer, &flags.OAuth.Issuer},
+		{&base.OAuth.RedirectPort, &flags.OAuth.RedirectPort},
 	} {
 		if *f.src != "" {
 			*f.dst = *f.src
