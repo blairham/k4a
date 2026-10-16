@@ -183,6 +183,7 @@ func (c *UICommand) Run(args []string) int {
 	cfg, cfgPath := loadUIConfig(&flags)
 	app := tui.NewApp(client, connInfo, cfg, cfgPath, c.Version)
 	app.SetSchemaRegistry(registry, flags.SchemaRegistry.config())
+	app.SetSecretStore(secretStore())
 	if pickContext {
 		app.SetAwaitingContext()
 	} else if flags.Context != "" || flags.Brokers != "" {
@@ -303,7 +304,8 @@ func (flags *UIFlags) authConfig() kafka.AuthConfig {
 func resolveConnection(flags UIFlags) (string, kafka.AuthConfig, string, error) {
 	// If --brokers is provided directly, use flags.
 	if flags.Brokers != "" {
-		return flags.Brokers, directAuthConfig(flags.authConfig()), "direct", nil
+		auth, err := fillSecrets(nil, flags.Brokers, directAuthConfig(flags.authConfig()))
+		return flags.Brokers, auth, "direct", err
 	}
 
 	// Load config file.
@@ -339,7 +341,10 @@ func resolveConnection(flags UIFlags) (string, kafka.AuthConfig, string, error) 
 		return "", kafka.AuthConfig{}, "", err
 	}
 
-	return brokers, overlayAuth(ctx.ToAuthConfig(), flags.authConfig()), ctxName, nil
+	// Asked here, before the TUI owns the screen; a context picked inside it
+	// is asked in the TUI's own prompt bar.
+	auth, err := fillSecrets(ctx, ctxName, overlayAuth(ctx.ToAuthConfig(), flags.authConfig()))
+	return brokers, auth, ctxName, err
 }
 
 // errPickContext says "the config is fine, the user just hasn't chosen yet" —

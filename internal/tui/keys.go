@@ -163,6 +163,9 @@ func (a *App) dispatchToBar(msg tea.KeyMsg) (tea.Cmd, bool) {
 		handled, cmd = a.filterBar.Update(msg, a.onFilterChange)
 	case a.prompt.Active():
 		handled, cmd = a.prompt.Update(msg, a.promptDispatch)
+		if !a.prompt.Active() {
+			unmaskPrompt(a.prompt)
+		}
 	case a.confirm.Active():
 		handled, cmd = a.confirm.Update(msg, a.confirmDispatch)
 	}

@@ -1,7 +1,8 @@
 # Design: Authentication
 
 **Status:** living document — describes current behavior
-**Code:** `internal/kafka/auth.go`, `internal/kafka/oauth.go`
+**Code:** `internal/kafka/auth.go`, `internal/kafka/oauth.go`,
+`internal/secrets`, `internal/command/credentials.go`, `internal/tui/credentials.go`
 
 ## Purpose
 
@@ -163,6 +164,65 @@ Secrets (`oauth-token`, `oauth-client-secret`) take the same whole-value
 `$VAR` form as `password`. No token, secret or token response is logged or
 written under `~/.k4a`.
 
+## Keychain and typed passwords
+
+A context's secrets can live in the OS keychain (macOS Keychain, the Secret
+Service on Linux, Windows Credential Manager, through `zalando/go-keyring`)
+instead of the file or the environment. The context names the entries in a
+`keychain:` block, each value an account under the service `k4a`:
+
+```yaml
+contexts:
+  prod:
+    brokers: b1:9096
+    auth: scram
+    username: alice
+    keychain:
+      password: prod/password   # also oauth-token, oauth-client-secret
+```
+
+`k4a set-credential prod [--field password|oauth-token|oauth-client-secret]`
+reads the secret — typed twice without echo on a terminal, one line from a
+pipe otherwise, so a password manager can feed it — stores it as
+`k4a` / `prod/<field>`, writes the reference and **removes any literal value
+of that field from the file**, so the two cannot disagree.
+`k4a delete-credential prod [--field ...]` removes the entry and the
+reference; an entry already gone is not an error.
+
+A keychain entry fills its field only when nothing else did, so the order
+is **flag > env > config value > keychain > typed**. It is read after the
+flags are laid over the context (`Context.ApplyKeychain`), which means a
+`--password` or `KAFKA_PASSWORD` never touches the keychain, and a context
+with no `keychain:` block never reads it at all. A reference to a missing
+entry is an error naming `set-credential`, not a silent fallback.
+
+When a username-and-password method (`scram`, `scram-sha-256`, `plain`)
+has a username and still no password, k4a asks for it:
+
+- the headless commands and `k4a ui` at startup prompt on the terminal,
+  without echo, **only when stdin is a terminal**; a pipe or `/dev/null` is
+  left alone and the connection fails with the usual missing-password error,
+  so a script never hangs on a prompt;
+- a context chosen inside the TUI (the picker, `:reconnect`) asks in the
+  prompt bar, masked; esc cancels the switch.
+
+A typed password goes into that one client and is not kept: the next switch
+or `:reconnect` to that context asks again. `set-credential` is how to stop
+being asked. Nothing typed or read from the keychain is logged or written
+under `~/.k4a`.
+
+Tests never reach the real keychain. Everything takes a `secrets.Store`:
+`internal/command` reads its `secretStore` variable, which its `TestMain`
+replaces with `secrets.NewMemory()` (and the prompt with a stub), and the
+TUI has no store at all until `k4a ui` sets one (`App.SetSecretStore`).
+
+Limits: the keychain holds the Kafka secrets only — the schema-registry
+password and token and the index token keep the file-or-`$VAR` forms.
+`k4a-index` is a daemon with no keychain or terminal, so it ignores
+`keychain:` and never prompts. The TUI's prompt bar trims surrounding
+spaces, so a password that begins or ends with a space has to come from
+the keychain or a flag.
+
 ## Why split `tls` and `scram`?
 
 `tls` is "encrypted connection, anonymous client". A surprising number
@@ -200,7 +260,8 @@ context with `insecure: true`.
 
 Env exists primarily for IAM profile/region (which often flow from the
 shell) and for SCRAM creds (which we'd rather not ask users to put on
-the command line).
+the command line). After those three come the keychain and then a typed
+password (see *Keychain and typed passwords*).
 
 ## What's intentionally NOT here
 
@@ -219,9 +280,6 @@ the command line).
   inside the SASL mechanism refreshes; for SCRAM/mTLS, restarting k4a
   is the answer. `:reconnect` rebuilds the client and is the documented
   escape hatch.
-- **No platform keychain integration.** SCRAM passwords come from env
-  or config (or interactively typed in a context, future). We don't
-  reach into Keychain / Secret Service.
 
 ## Pickup notes
 

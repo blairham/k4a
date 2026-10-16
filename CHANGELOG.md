@@ -8,6 +8,15 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ## [Unreleased]
 
+### Added
+
+- Context secrets in the OS keychain: `k4a set-credential CONTEXT` stores the
+  password (or `--field oauth-token` / `oauth-client-secret`) in the macOS
+  Keychain, Secret Service or Windows Credential Manager and replaces the
+  value in the config with a `keychain:` reference; `delete-credential`
+  removes it. A context with a username and no password is asked for one, on
+  a terminal or in the TUI's masked prompt (#119).
+
 ## [0.0.3] - 2026-10-15
 
 ### Breaking

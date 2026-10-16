@@ -76,6 +76,19 @@ func (m AuthMethod) IsSASL() bool {
 	}
 }
 
+// NeedsPassword reports whether cfg is a username-and-password method with a
+// username but no password yet — the one case worth asking the user for it.
+// Without a username there is nothing to prompt for: the missing username is
+// the error worth showing.
+func (cfg AuthConfig) NeedsPassword() bool {
+	switch cfg.Method {
+	case AuthSCRAM, AuthSCRAMSHA512, AuthSCRAMSHA256, AuthPlain:
+		return cfg.Username != "" && cfg.Password == ""
+	default:
+		return false
+	}
+}
+
 // CleartextWarning returns the warning to show before connecting when cfg
 // sends SASL credentials over a connection without TLS, or "" when it does
 // not. The kafka package does not print it itself: a headless command writes

@@ -23,6 +23,7 @@ import (
 	"github.com/blairham/k4a/internal/remoteindex"
 	"github.com/blairham/k4a/internal/schemareg"
 	"github.com/blairham/k4a/internal/searchcache"
+	"github.com/blairham/k4a/internal/secrets"
 	"github.com/blairham/k4a/internal/state"
 	"github.com/blairham/k4a/internal/tui/style"
 	"github.com/blairham/k4a/internal/tui/views"
@@ -125,8 +126,11 @@ type App struct {
 	registryFlags  schemareg.Config
 	viewMap        map[style.ViewType]views.View
 	promptDispatch chrome.Dispatch
-	session        *state.Session
-	searchCache    *searchcache.Cache
+	// secrets is the keychain a context switch reads; nil (tests, and any
+	// caller that never sets one) refuses a context that references it.
+	secrets     secrets.Store
+	session     *state.Session
+	searchCache *searchcache.Cache
 	// searchFunc replaces searchRunner when set, so a test can open a
 	// search without scanning a broker.
 	searchFunc       views.SearchFunc

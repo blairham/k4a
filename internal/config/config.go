@@ -21,6 +21,7 @@ import (
 	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/schemareg"
+	"github.com/blairham/k4a/internal/secrets"
 )
 
 // DefaultConfigDir returns the default config directory.
@@ -75,6 +76,9 @@ type Context struct {
 	CAFile        string `yaml:"ca,omitempty"`
 	IndexEndpoint string `yaml:"index-endpoint,omitempty"`
 	OAuth         OAuth  `yaml:",inline"`
+	// Keychain names OS keychain entries that hold this context's secrets,
+	// so the file need not.
+	Keychain Keychain `yaml:"keychain,omitempty"`
 	// SchemaRegistry decodes registry-framed keys and values for display.
 	SchemaRegistry SchemaRegistry `yaml:"schema-registry,omitempty"`
 	// IndexCA, IndexCert and IndexKey verify the shared index's TLS listener
@@ -124,6 +128,97 @@ type OAuth struct {
 	ClientID     string `yaml:"oauth-client-id,omitempty"`
 	ClientSecret string `yaml:"oauth-client-secret,omitempty"`
 	Scopes       string `yaml:"oauth-scopes,omitempty"`
+}
+
+// Keychain maps a context's secret fields to OS keychain entries: each value
+// is an account under the "k4a" service (`k4a set-credential` writes
+// "<context>/<field>"). An entry fills its field only when nothing else has —
+// a flag, the environment, or the field itself in this file — so the
+// precedence stays flag > env > config > keychain > an interactive prompt.
+type Keychain struct {
+	Password          string `yaml:"password,omitempty"`
+	OAuthToken        string `yaml:"oauth-token,omitempty"`
+	OAuthClientSecret string `yaml:"oauth-client-secret,omitempty"`
+}
+
+// The context fields a keychain entry can hold, by their YAML names.
+const (
+	FieldPassword          = "password"
+	FieldOAuthToken        = "oauth-token"
+	FieldOAuthClientSecret = "oauth-client-secret"
+)
+
+// ErrUnknownKeychainField means a field name the keychain cannot hold.
+var ErrUnknownKeychainField = errors.New(
+	"not a field the keychain can hold (password, oauth-token, oauth-client-secret)",
+)
+
+// keychainSlot pairs a field's keychain reference with its literal value in
+// the context.
+func (ctx *Context) keychainSlot(field string) (ref, literal *string, err error) {
+	switch field {
+	case FieldPassword:
+		return &ctx.Keychain.Password, &ctx.Password, nil
+	case FieldOAuthToken:
+		return &ctx.Keychain.OAuthToken, &ctx.OAuth.Token, nil
+	case FieldOAuthClientSecret:
+		return &ctx.Keychain.OAuthClientSecret, &ctx.OAuth.ClientSecret, nil
+	default:
+		return nil, nil, fmt.Errorf("%q: %w", field, ErrUnknownKeychainField)
+	}
+}
+
+// SetKeychainRef points field at the keychain account and drops the field's
+// literal value, so the secret is no longer in the file and the two can never
+// disagree.
+func (ctx *Context) SetKeychainRef(field, account string) error {
+	ref, literal, err := ctx.keychainSlot(field)
+	if err != nil {
+		return err
+	}
+	*ref, *literal = account, ""
+	return nil
+}
+
+// ClearKeychainRef removes field's keychain reference and returns the account
+// it named ("" when there was none).
+func (ctx *Context) ClearKeychainRef(field string) (string, error) {
+	ref, _, err := ctx.keychainSlot(field)
+	if err != nil {
+		return "", err
+	}
+	account := *ref
+	*ref = ""
+	return account, nil
+}
+
+// ApplyKeychain fills each secret auth still lacks from the keychain entry
+// this context names for it. It is called after flags and env are laid over
+// the context, so the keychain is read only for a secret nothing else
+// supplied; a context without references never touches the store.
+func (ctx *Context) ApplyKeychain(auth kafka.AuthConfig, store secrets.Store) (kafka.AuthConfig, error) {
+	for _, s := range []struct {
+		dst  *string
+		ref  string
+		name string
+	}{
+		{&auth.Password, ctx.Keychain.Password, FieldPassword},
+		{&auth.OAuth.Token, ctx.Keychain.OAuthToken, FieldOAuthToken},
+		{&auth.OAuth.ClientSecret, ctx.Keychain.OAuthClientSecret, FieldOAuthClientSecret},
+	} {
+		if s.ref == "" || *s.dst != "" {
+			continue
+		}
+		if store == nil {
+			return auth, fmt.Errorf("%s: no keychain available", s.name)
+		}
+		v, err := store.Get(s.ref)
+		if err != nil {
+			return auth, fmt.Errorf("reading %s from the keychain: %w (k4a set-credential stores it)", s.name, err)
+		}
+		*s.dst = v
+	}
+	return auth, nil
 }
 
 // Load reads the config from disk. Returns a zero config (no error) if the file doesn't exist.

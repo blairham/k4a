@@ -284,3 +284,24 @@ func writePEM(t *testing.T, path, pemType string, data []byte) {
 		t.Fatal(err)
 	}
 }
+
+func TestNeedsPassword(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		cfg  AuthConfig
+		want bool
+	}{
+		{AuthConfig{Method: AuthSCRAM, Username: "u"}, true},
+		{AuthConfig{Method: AuthSCRAMSHA256, Username: "u"}, true},
+		{AuthConfig{Method: AuthPlain, Username: "u"}, true},
+		{AuthConfig{Method: AuthSCRAM, Username: "u", Password: "p"}, false},
+		{AuthConfig{Method: AuthSCRAM}, false}, // no username: that is the error to show
+		{AuthConfig{Method: AuthOAuthBearer, Username: "u"}, false},
+		{AuthConfig{Method: AuthIAM, Username: "u"}, false},
+	} {
+		if got := tc.cfg.NeedsPassword(); got != tc.want {
+			t.Errorf("%+v: NeedsPassword = %v, want %v", tc.cfg, got, tc.want)
+		}
+	}
+}

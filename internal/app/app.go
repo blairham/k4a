@@ -118,6 +118,12 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"use-context": func() (cli.Command, error) {
 			return &command.UseContextCommand{}, nil
 		},
+		"set-credential": func() (cli.Command, error) {
+			return &command.SetCredentialCommand{}, nil
+		},
+		"delete-credential": func() (cli.Command, error) {
+			return &command.DeleteCredentialCommand{}, nil
+		},
 		"version": func() (cli.Command, error) {
 			return &command.VersionCommand{
 				Version: info.Version,
