@@ -417,13 +417,19 @@ behavior at any step.
   win for users who know their schema.
 
 ### Tier 6 (optional) — External-sink integration (≈ 1–2 weeks)
-- Detect Confluent S3 sink connectors via Kafka Connect REST API
-- For topics with active sinks, offer "search archive (Athena)" as a
-  third option alongside indexed/scan
-- Athena query generation, results streamed back through the same
-  channel SearchView consumes
-- **Ships:** orgs with existing archives get an even faster path for
-  cold data than the local index can offer.
+- Search an existing S3 archive of a topic (written by a sink connector,
+  read through a Glue table) with Athena, as `k4a search --archive`
+- Configured per context and topic rather than discovered from Kafka
+  Connect; the same candidate-filter-then-exact-regex rule as the index,
+  so the archive never forks pattern semantics
+- Cost controls: required `--since` and time-partition pruning, an S3
+  size estimate with confirm-before-run and a refuse threshold, and a
+  bytes-scanned watchdog that stops a running query
+- Reports its own coverage (archive window, fields searched, bytes
+  scanned) and never claims Kafka's; no hybrid with a Kafka scan in v1
+- **Ships:** orgs with existing archives can search history older than
+  Kafka retention without writing SQL.
+- **Design:** [`archive-search.md`](archive-search.md) (#117).
 
 ## Open questions
 
