@@ -81,6 +81,7 @@ type flags struct {
 	TokenFile     string        `long:"token-file"              env:"K4A_INDEX_TOKEN_FILE"              description:"File holding the bearer token every RPC except health checks must present. K4A_INDEX_TOKEN sets it directly."`
 	MaxLimit      int           `long:"max-search-limit"        env:"K4A_INDEX_MAX_SEARCH_LIMIT"        description:"Most matches one Search returns; a larger or unset request limit is lowered to this and the answer reports capped."                                                                                                                                                                                                                     default:"10000"`
 	AdminListen   string        `long:"admin-listen"            env:"K4A_INDEX_ADMIN_LISTEN"            description:"Plain-HTTP address for /metrics (Prometheus), /healthz and /readyz, separate from the gRPC port. Empty disables it."`
+	FollowTopic   string        `long:"followset-topic"         env:"K4A_INDEX_FOLLOWSET_TOPIC"         description:"Compacted Kafka topic that holds the follow-set, shared by every pod and replica, so a new pod re-follows what the deployment followed and replicas converge (created compacted if absent). Needs read and write on it (and create, to create it). Empty keeps only the local file under --data-dir."`
 	BackfillWin   time.Duration `long:"backfill-window"         env:"K4A_INDEX_BACKFILL_WINDOW"         description:"History a newly followed topic indexes before its live tail, by record time. 0 starts at the latest records."                                                                                                                                                                                                                           default:"24h"`
 	BackfillMax   int64         `long:"backfill-max-records"    env:"K4A_INDEX_BACKFILL_MAX_RECORDS"    description:"Cap on that history across all partitions (split evenly); a partition with more in the window starts later. 0 = no cap."                                                                                                                                                                                                                default:"1000000"`
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
@@ -201,6 +202,13 @@ func validateFlags(f *flags) (startupLimits, bool) {
 		}
 	}
 
+	if f.FollowTopic != "" {
+		if err = index.ValidateTopicName(f.FollowTopic); err != nil {
+			log.Error("followset-topic", "err", err)
+			return startupLimits{}, false
+		}
+	}
+
 	topicMaxBytes, err := parseByteSize(f.TopicMaxBytes)
 	if err != nil {
 		log.Error("topic-max-bytes", "err", err)
@@ -288,6 +296,7 @@ func logStartup(f *flags, lim startupLimits) {
 		"drain_stall_merge_grace", f.MergeGrace,
 		"drain_stall_wipe_after", f.WipeStrikes,
 		"shutdown_timeout", f.ShutdownGrace,
+		"followset_topic", f.FollowTopic,
 		"backfill_window", f.BackfillWin,
 		"backfill_max_records", f.BackfillMax,
 		"listen", f.Listen,
@@ -321,6 +330,7 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 		MaxFollowed:   f.MaxFollow,
 		EvictAfter:    f.EvictAfter,
 		MaxTotalBytes: lim.maxTotalBytes,
+		Store:         openFollowStore(ctx, client, f.FollowTopic),
 		Worker: workerOptions{
 			TrimBytes:   lim.topicMaxBytes,
 			StallAfter:  f.DrainStall,
@@ -335,7 +345,8 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	// Everything else follows on demand, gated by the allowlist.
 	mgr.preFollow(f.Prefollow)
 	// Registration runs on the manager's baseCtx, which is this ctx.
-	restored := mgr.restoreFollowSet() //nolint:contextcheck // see comment above
+	restored := mgr.restoreFollowSet(ctx)
+	mgr.startStore(ctx)
 	go mgr.sweep()
 	log.Info("follow-set ready", "cluster", cluster, "followed", mgr.size(), "restored", restored)
 
@@ -375,6 +386,25 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 		return 1
 	}
 	return 0
+}
+
+// openFollowStore opens the shared follow-set store, or returns nil to keep
+// only the local file: when none is configured, or when it cannot be opened —
+// the store makes the daemon warm faster after a reschedule, and a daemon
+// that refused to start without it would trade that for an outage.
+func openFollowStore(ctx context.Context, client *kafka.Client, topic string) followStore {
+	if topic == "" {
+		return nil
+	}
+	s, err := openKafkaFollowStore(ctx, client, topic)
+	if err != nil {
+		log.Error("follow-set store: unavailable — keeping the follow-set in the local file only; "+
+			"grant the daemon read and write on the topic, or create it with cleanup.policy=compact",
+			"topic", topic, "err", err)
+		return nil
+	}
+	log.Info("follow-set store: shared through a compacted topic", "topic", topic)
+	return s
 }
 
 // newGRPCServer builds the server with its transport credentials and

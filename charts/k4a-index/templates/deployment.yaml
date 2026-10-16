@@ -114,6 +114,11 @@ spec:
             - name: K4A_INDEX_TOPIC
               value: {{ .Values.config.prefollow | quote }}
             {{- end }}
+            {{- if .Values.config.followSetTopic }}
+            # The follow-set shared by every pod and replica (#123).
+            - name: K4A_INDEX_FOLLOWSET_TOPIC
+              value: {{ .Values.config.followSetTopic | quote }}
+            {{- end }}
             - name: K4A_INDEX_MAX_FOLLOWED
               value: {{ .Values.config.maxFollowed | quote }}
             # Per-topic index byte cap — trims oldest records so a high-volume

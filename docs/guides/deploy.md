@@ -151,6 +151,7 @@ these via env vars, so in-cluster the env column is what you actually edit.
 |---|---|---|---|
 | `--allow` | `K4A_INDEX_ALLOW` | *(none — **required**)* | Glob allowlist of topics the daemon may follow. Default-deny; an empty list is a startup error. Keep it in step with the daemon's Kafka read grant. |
 | `-t`, `--topic` | `K4A_INDEX_TOPIC` | *(empty)* | Topics to pre-follow (warm + pinned) at startup. Repeatable / comma-separated. Each must match `--allow`. |
+| `--followset-topic` | `K4A_INDEX_FOLLOWSET_TOPIC` | *(empty)* | Compacted topic that holds the follow-set for every pod and replica (chart: `config.followSetTopic`). Created compacted if absent. Needs read, write and describe on it, and create unless you create it. Empty keeps only the local file. |
 | `--max-followed` | `K4A_INDEX_MAX_FOLLOWED` | `256` | Hard cap on concurrently-followed topics; at the cap a new follow evicts the coldest. |
 | `--backfill-window` | `K4A_INDEX_BACKFILL_WINDOW` | `24h` | History a newly followed topic indexes before its live tail. `0` keeps the old start (the most recent ~100 records). |
 | `--backfill-max-records` | `K4A_INDEX_BACKFILL_MAX_RECORDS` | `1000000` | Cap on that history across the topic's partitions (split evenly); also how far behind a restarted index may be and still resume. `0` = no cap. |
@@ -337,7 +338,16 @@ NetworkPolicy is on. There is still no pprof endpoint.
   reach for a PVC here. A container restart within the pod keeps the
   volume: the daemon re-follows its saved follow-set
   (`/data/k4a-index-followset.json`) and each index catches up from where
-  it stopped.
+  it stopped. A new pod (a reschedule, a drain, an upgrade) starts on an
+  empty volume, so it re-follows only `config.prefollow` unless
+  `config.followSetTopic` is set: then it reads the follow-set from that
+  compacted topic and re-follows what the deployment followed, backfilling
+  each topic, and replicas follow what any one of them starts. Grant the
+  daemon's identity read, write and describe on the topic first (on MSK IAM
+  `kafka-cluster:ReadData`, `WriteData`, `DescribeTopic`; add `CreateTopic`
+  to let the daemon create it, or create it yourself with
+  `cleanup.policy=compact`). Without the grant the daemon logs an error and
+  keeps the local file only.
 - **Silence is the failure mode, not restarts.** The drain-stall watchdog
   exists because a wedged drain serves *nothing*, silently, for as long as
   nobody notices. If the daemon exits with a goroutine dump on stderr, that

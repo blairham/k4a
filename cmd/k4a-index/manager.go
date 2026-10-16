@@ -42,6 +42,16 @@ type followEntry struct {
 	exited bool
 }
 
+// newFollowEntry starts an entry's LRU clock at lastUse, or now when 0.
+func newFollowEntry(w *topicWorker, cancel context.CancelFunc, pinned bool, lastUse int64) *followEntry {
+	e := &followEntry{worker: w, cancel: cancel, done: make(chan struct{}), pinned: pinned}
+	if lastUse <= 0 {
+		lastUse = time.Now().UnixMilli()
+	}
+	e.lastQuery.Store(lastUse)
+	return e
+}
+
 // touch records that the topic was just queried, resetting its LRU clock.
 func (e *followEntry) touch() { e.lastQuery.Store(time.Now().UnixMilli()) }
 
@@ -83,6 +93,21 @@ type manager struct {
 	// saveMu serializes writes of it.
 	saved  map[string]int64
 	saveMu sync.Mutex
+	// dropped is each topic this replica stopped following and the LRU clock
+	// it had then, under mu; a store entry no newer than that is a stale echo
+	// of the same topic, not a fresh use, and does not bring it back
+	// (followstore.go).
+	dropped map[string]int64
+	// The shared follow-set store, nil unless --followset-topic is set; see
+	// followset.go for its fields' use.
+	store     followStore
+	storeNext map[int32]int64
+	published map[string]int64 // what the store holds for topics we follow, under storeMu
+	storeKick chan struct{}
+	storeStop context.CancelFunc
+	storeDone sync.WaitGroup
+	storeOnce sync.Once
+	storeMu   sync.Mutex
 }
 
 // managerConfig carries the tunables; zero values fall back to the defaults
@@ -95,7 +120,9 @@ type managerConfig struct {
 	// Unlike Worker.TrimBytes (per-topic, stored bytes) this is measured on
 	// disk and across all topics — see enforceDiskBudget.
 	MaxTotalBytes int64
-	Worker        workerOptions // per-topic knobs, passed to each spawned worker
+	// Store is the shared follow-set store; nil keeps only the local file.
+	Store  followStore
+	Worker workerOptions // per-topic knobs, passed to each spawned worker
 }
 
 func newManager(
@@ -120,6 +147,10 @@ func newManager(
 		set:           make(map[string]*followEntry),
 		registering:   make(map[string]struct{}),
 		pins:          make(map[string]struct{}),
+		dropped:       make(map[string]int64),
+		store:         cfg.Store,
+		published:     make(map[string]int64),
+		storeKick:     make(chan struct{}, 1),
 	}
 	if m.maxFollowed <= 0 {
 		m.maxFollowed = defaultMaxFollowed
@@ -197,7 +228,7 @@ func (m *manager) ensureFollowed(topic string) bool {
 	log.Info("follow: registering topic on demand", "topic", topic, "pinned", pinned)
 	go func() {
 		defer m.wg.Done()
-		m.register(topic, pinned)
+		m.register(topic, pinned, 0)
 	}()
 	return true
 }
@@ -221,7 +252,7 @@ func (m *manager) preFollow(topics []string) {
 		}
 		m.registering[t] = struct{}{}
 		m.mu.Unlock()
-		m.register(t, true)
+		m.register(t, true, 0)
 	}
 }
 
@@ -229,8 +260,9 @@ func (m *manager) preFollow(topics []string) {
 // the follow-set, evicting the coldest topic first if the set is at its cap. It
 // runs off the hot path (a goroutine for on-demand follows, inline for the
 // startup pre-warm). On open failure it clears the in-flight marker so a later
-// search retries cleanly.
-func (m *manager) register(topic string, pinned bool) {
+// search retries cleanly. lastUse seeds the LRU clock of a topic restored from
+// the follow-set; 0 means now.
+func (m *manager) register(topic string, pinned bool, lastUse int64) {
 	w, err := newTopicWorker(m.baseCtx, m.root, m.cluster, topic, m.src, m.worker)
 	if err != nil {
 		log.Error("follow: opening index failed — topic stays unfollowed", "topic", topic, "err", err)
@@ -255,8 +287,7 @@ func (m *manager) register(topic string, pinned bool) {
 	m.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(m.baseCtx)
-	entry := &followEntry{worker: w, cancel: cancel, done: make(chan struct{}), pinned: pinned}
-	entry.touch()
+	entry := newFollowEntry(w, cancel, pinned, lastUse)
 
 	// Start the tail BEFORE the entry can become visible in the map, so entry.done
 	// is always backed by a live goroutine — an eviction that races registration
@@ -302,7 +333,7 @@ func (m *manager) register(topic string, pinned bool) {
 		victimTopic, victim = m.evictColdestLocked()
 	}
 	m.set[topic] = entry
-	delete(m.registering, topic)
+	m.adoptedLocked(topic)
 	m.mu.Unlock()
 
 	if victim != nil {
@@ -314,6 +345,13 @@ func (m *manager) register(topic string, pinned bool) {
 
 	m.saveFollowSet()
 	log.Info("follow: now following", "topic", topic, "pinned", pinned, "followed_total", m.size())
+}
+
+// adoptedLocked clears what a topic carried while it was not followed: its
+// in-flight mark and its drop clock. Caller holds m.mu.
+func (m *manager) adoptedLocked(topic string) {
+	delete(m.registering, topic)
+	delete(m.dropped, topic)
 }
 
 // tailExited handles a tail that stopped while its context was still live: the
@@ -345,6 +383,7 @@ func (m *manager) tailExited(topic string, e *followEntry) {
 // retire stops a worker whose tail has ended, without deleting its index, then
 // clears the topic's in-flight marker so the next search may re-register it.
 func (m *manager) retire(topic string, e *followEntry) {
+	m.markDropped(topic, e)
 	e.cancel()
 	<-e.done
 	if err := e.worker.stop(); err != nil {
@@ -568,6 +607,7 @@ func (m *manager) evictIdle() {
 	// After the evictions, so a topic torn down just now (teardown already
 	// deleted its dir) is not also considered here.
 	m.reapIdleOrphans()
+	m.forgetDropped(cutoff)
 }
 
 // reapIdleOrphans deletes index dirs no worker owns that have gone untouched
@@ -597,6 +637,7 @@ func (m *manager) reapIdleOrphans() {
 // new worker; with it, that request is told the topic is warming and the next
 // one re-registers cleanly.
 func (m *manager) teardown(topic string, e *followEntry) {
+	m.markDropped(topic, e)
 	defer func() {
 		m.mu.Lock()
 		delete(m.registering, topic)
@@ -633,7 +674,10 @@ var beforeTeardownRemove func(topic string)
 // every tail goroutine has finished, so no worker started before shutdown can
 // be left running with its writer lock held.
 func (m *manager) stopAll() {
-	// Persist before the set is emptied, so the next container re-follows it.
+	// Persist before the set is emptied, so the next container (or pod)
+	// re-follows it. The store goes first: its tail can still register topics
+	// until it is stopped.
+	m.stopStore()
 	m.saveFollowSetNow(m.lastUse())
 	m.mu.Lock()
 	m.closing = true

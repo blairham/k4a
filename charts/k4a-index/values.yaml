@@ -223,6 +223,21 @@ config:
   # a hot topic is indexed before the first search. Comma-separated; each MUST
   # match `allow`. Empty = purely demand-driven.
   prefollow: ""
+  # Compacted Kafka topic that holds the follow-set, shared by every pod and
+  # replica (design doc §Follow-set persistence across pods). Empty keeps it
+  # only in a file on the emptyDir, which survives a container restart but not
+  # a new pod: after a reschedule, upgrade or scale-up the new pod follows only
+  # `prefollow` until searches warm the rest, and replicas follow different
+  # sets. Set it (e.g. k4a-index.followset) and the daemon creates the topic
+  # compacted if it is missing, writes each follow and its last use there,
+  # reads it on startup and tails it, so a new pod re-follows what the
+  # deployment followed and a replica follows what another one started. The
+  # daemon's Kafka identity then also needs Read and Write on this topic (on
+  # MSK IAM: kafka-cluster:ReadData, WriteData and DescribeTopic), plus Create
+  # unless you create it yourself with cleanup.policy=compact. If it cannot be
+  # opened the daemon logs an error and keeps the local file. Rendered as
+  # K4A_INDEX_FOLLOWSET_TOPIC.
+  followSetTopic: ""
   # Hard cap on concurrently-followed topics; at the cap a new follow evicts the
   # coldest. Bounds consumer connections + emptyDir disk.
   maxFollowed: 256

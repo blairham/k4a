@@ -515,7 +515,7 @@ func (c *Client) applyTopicConfig(ctx context.Context, topic string, detail *Top
 // shows; an unparseable retention value leaves the existing figure.
 func (d *TopicDetail) applyConfigEntry(key, v string) {
 	switch key {
-	case "cleanup.policy":
+	case cleanupPolicyConfig:
 		d.CleanupPolicy = v
 	case "retention.ms":
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {

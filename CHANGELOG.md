@@ -16,6 +16,13 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   value in the config with a `keychain:` reference; `delete-credential`
   removes it. A context with a username and no password is asked for one, on
   a terminal or in the TUI's masked prompt (#119).
+- `k4a-index` can keep its follow-set in a compacted Kafka topic
+  (`--followset-topic`, chart `config.followSetTopic`), so a new pod
+  re-follows what the deployment followed instead of only its pinned topics,
+  and the replicas of a set follow what any one of them starts. Off by
+  default: it needs read and write on that topic (and create, unless you
+  create it compacted); without it the follow-set stays in the local file
+  (#123).
 
 ## [0.0.3] - 2026-10-15
 
