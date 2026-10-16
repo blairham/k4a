@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/blairham/k4a/internal/endpointauth"
 )
 
 // roundRobin sends each HTTP request to the next replica in turn, standing in
@@ -44,7 +46,7 @@ func TestToolCallAcrossReplicasWithoutSharedSession(t *testing.T) {
 
 	rr := &roundRobin{hits: make([]atomic.Uint64, 2)}
 	for range 2 {
-		ts := httptest.NewServer(newMCPHandler(newMCPServer(client, "test")))
+		ts := httptest.NewServer(newMCPHandler(newMCPServer(client, "test", endpointauth.Authorizer{})))
 		t.Cleanup(ts.Close)
 		u, err := url.Parse(ts.URL)
 		if err != nil {

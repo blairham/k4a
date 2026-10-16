@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
 	"github.com/blairham/k4a/internal/jsonpath"
@@ -39,7 +40,10 @@ const (
 // it holds no Kafka client, no Bleve index, no AWS creds; every query is
 // answered by the daemon. That is the whole point of the split: one warm index,
 // many thin MCP frontends.
-func newMCPServer(client indexv1.IndexClient, version string) *mcp.Server {
+//
+// authz is k4a-mcp's own --authz-policy, checked per tool call against the
+// caller the HTTP Guard identified; its zero value admits every caller.
+func newMCPServer(client indexv1.IndexClient, version string, authz endpointauth.Authorizer) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "k4a-index",
 		Version: version,
@@ -64,14 +68,14 @@ func newMCPServer(client indexv1.IndexClient, version string) *mcp.Server {
 			"returns and path_recall says whether that was every record in the window " +
 			"('full') or a capped page ('best_effort': zero matches are unverified; narrow " +
 			"the window, add a query, or scan with k4a search --path).",
-	}, searchHandler(client))
+	}, authorizeSearch(authz, client, searchHandler(client)))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "coverage",
 		Description: "Report what the shared k4a-index holds for a topic (per-partition " +
 			"offset/time ranges, gaps, following/backfilling) WITHOUT running a query. Use " +
 			"to decide whether an index-backed search will be authoritative before issuing it.",
-	}, coverageHandler(client))
+	}, authorizeCoverage(authz, coverageHandler(client)))
 
 	return srv
 }

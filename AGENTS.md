@@ -47,7 +47,8 @@ internal/
   index/             # Local Bleve index: indexer, analyzer, query/coverage, pattern rewrite,
                      # async intake, catch-up backfill, inventory
   endpointauth/      # TLS/mTLS + bearer-token auth for the k4a-index and k4a-mcp
-                     # listeners and the clients that dial them
+                     # listeners and the clients that dial them, and per-caller
+                     # authorization (--authz-policy, authz.go)
   indexwire/         # gRPC contract for the shared index (generated indexv1 + conversions)
   remoteindex/       # Client backend that dials a shared k4a-index daemon
   schemareg/         # Confluent Schema Registry client + Avro/Protobuf/JSON-Schema decoding
@@ -443,8 +444,10 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - **Never hand-edit `internal/indexwire/indexv1/*.pb.go`.** Change the proto,
   run `make proto` and commit both; CI's `make check-proto` fails on stale
   output.
-- **Nothing secret reaches logs, `~/.k4a` or an index**, and `k4a-index`
-  never follows or serves a topic outside `--allow`. `SECURITY.md` states the
+- **Nothing secret reaches logs, `~/.k4a` or an index**, `k4a-index`
+  never follows or serves a topic outside `--allow`, and under
+  `--authz-policy` neither daemon serves or follows a topic the caller's
+  entries do not grant. `SECURITY.md` states the
   trust model — keep it true when behavior changes.
 - **Read the owning `docs/design/*.md` before changing an area**, and update
   it in the same change when the change makes it stale.

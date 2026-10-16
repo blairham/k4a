@@ -1,7 +1,8 @@
 # Design: Shared always-on index service (`k4a-index`)
 
-**Status:** shipped — Phases 0-4 are implemented. Phase 5 (per-caller authorization) is the remaining
-follow-up; it gates following *sensitive* topics, not the deployment.
+**Status:** shipped — Phases 0-5 are implemented. Phase 5 (per-caller authorization, #118) shipped as
+an operator-written identity→topic-glob policy (`--authz-policy`), not as a mirror of each caller's
+Kafka ACLs; see *Per-caller authorization* below.
 **Depends on:** [`local-index.md`](local-index.md) — this promotes that
 doc's per-process Tier-3 indexer into a shared network service, and
 picks up its two explicitly-parked items ("Background daemon (`k4a
@@ -11,7 +12,8 @@ deletable optimization") is preserved, not weakened.
 **Depends on:** [`deep-search.md`](deep-search.md) — the client keeps the
 scan path as the correctness floor; the service never replaces it.
 **Code:** `cmd/k4a-index/` (the daemon: `main.go`, `server.go`,
-`manager.go`, `worker.go`, `policy.go`, `followset.go`, `followstore.go`) reusing `internal/index`
+`manager.go`, `worker.go`, `policy.go`, `followset.go`, `followstore.go`; per-caller authorization
+in `internal/endpointauth/authz.go`) reusing `internal/index`
 unchanged and `internal/kafka` (whose `keyedlog.go` holds the follow-set store); `internal/remoteindex` (the client backend);
 `internal/indexwire` (+ `proto/`) for the gRPC contract; `charts/k4a-index`
 for the deploy. The MCP frontend is `cmd/k4a-mcp` + `charts/k4a-mcp`.
@@ -370,9 +372,11 @@ shelling out to a local scan. This ships as a **separate deployment**,
 Auth is deliberately *not* oauth2-proxy (remote MCP clients do
 OAuth2/bearer, not cookie-SSO). The listener takes the same opt-in TLS,
 mTLS and shared bearer token as the gRPC port (#54, `internal/endpointauth`),
-which Claude Code sends as a header; MCP's own OAuth flow, and per-caller
-authorization, remain later work. Its hop to `k4a-index` presents that
-daemon's credentials (`--index-tls`, `--index-token-file`, …).
+which Claude Code sends as a header, and the same `--authz-policy` (Phase 5,
+below); MCP's own OAuth flow remains later work. Its hop to `k4a-index`
+presents that daemon's credentials (`--index-tls`, `--index-token-file`, …),
+so the daemon sees k4a-mcp as one caller: telling the people behind it apart
+is k4a-mcp's own policy's job.
 
 ## Security — the shared-index surface
 
@@ -405,7 +409,7 @@ The v1 stance:
   `--tls-client-ca`, `--token-file`). All are opt-in so an upgrade changes
   nothing on the wire; an unauthenticated listener says so at startup. This
   answers "is the caller part of this deployment?", not "may this caller
-  read this topic?" — that is Phase 5. Health checks stay open. Clients
+  read this topic?" — that is Phase 5, below. Health checks stay open. Clients
   (`internal/remoteindex`) send a token only over TLS, and a context's
   credentials only to that context's endpoint. A server-side
   `--max-search-limit` bounds one Search, and search patterns are logged at
@@ -414,15 +418,61 @@ The v1 stance:
   v1 model — network-gated plus a non-sensitive topic allowlist as the
   authorization boundary — so production is in scope for **non-sensitive**
   topics (telemetry, reference data, etc.). Treat every widening of the
-  allowlist as a deliberate, reviewed change. What Phase 5 (per-caller
-  authorization) gates is following **sensitive** topics (orders/fills/PII):
-  those must not be added to the allowlist until it lands, because reaching
-  the daemon still grants broad read over whatever it follows.
+  allowlist as a deliberate, reviewed change. Without a per-caller policy,
+  reaching the daemon grants broad read over whatever it follows, so
+  sensitive topics (orders/fills/PII) belong on the allowlist only together
+  with an `--authz-policy` that grants them to the callers who may read them.
 
-Per-caller topic authorization (the daemon enforces each caller's own
-Kafka read grants before serving a topic's matches) is the follow-up that
-would let the service safely follow sensitive topics. Called out in
-Open questions.
+### Per-caller authorization (Phase 5, #118)
+
+`--authz-policy FILE` (`K4A_INDEX_AUTHZ_POLICY`, `K4A_MCP_AUTHZ_POLICY`; the
+charts' `listener.authz`) maps each caller to the topic globs it may
+**search** and **follow**:
+
+```yaml
+callers:
+  - name: payments-oncall
+    cert: {cn: payments-oncall}     # or san: <DNS/email/URI/IP>, or subject: "CN=...,O=..."
+    search: ["payments.*", "telemetry.*"]
+    follow: ["payments.*"]
+  - name: ci
+    tokenSHA256: <hex SHA-256 of the bearer token>
+    search: ["telemetry.*"]
+```
+
+- **Identity.** A verified client certificate, matched exactly on its
+  subject CN, one SAN, or the full subject DN; or a bearer token, matched by
+  its SHA-256 so the policy (a ConfigMap) never holds a token. A caller
+  matching several entries gets their union. Certificate entries need a
+  client CA; token entries replace the shared `--token-file` (one
+  Authorization header cannot carry both), and the daemon refuses either
+  contradiction at startup. Unknown fields are refused too, so a typo
+  cannot silently grant nothing.
+- **Grants.** Globs are `path.Match`, as for `--allow`. `search` covers
+  Search and Coverage (coverage reveals whether and how far a topic is
+  indexed); `follow` covers Follow and the warm-on-first-search follow a
+  Search would start. Neither implies the other: a caller who may search but
+  not follow a cold topic gets "not followed" and no follow is started.
+  `--allow` still bounds everything — a policy grant never widens it.
+- **Default-deny once configured.** A caller no entry names is refused
+  `Unauthenticated` on every RPC but health checks (HTTP 401 on k4a-mcp); a
+  named caller asking for an ungranted topic is refused `PermissionDenied`
+  (a tool error on k4a-mcp). A k4a client treats either as "not covered" and
+  scans with its own Kafka credentials, so a refusal costs the index, never
+  the answer. A handler reached with a policy configured but no identified
+  caller refuses rather than failing open.
+- **No policy, no change.** Without `--authz-policy` every authenticated
+  caller reaches every topic `--allow` admits, exactly as before; the daemon
+  logs that at startup.
+- **k4a-mcp.** The daemon sees k4a-mcp's own credential, so k4a-mcp
+  enforces its own policy per tool call against the caller its listener
+  identified. Grant k4a-mcp's identity, in the daemon's policy, the union of
+  what its callers may reach.
+
+What this is not: the grants are written by the operator, not derived from
+each caller's own Kafka ACLs or IAM policy. Keeping the two in step is the
+operator's job, as it already is for `--allow`. The policy is read at
+startup (the chart rolls the pods when an inline policy changes).
 
 ## Storage & deployment
 
@@ -655,9 +705,9 @@ the rare failover's N× backfill is even a problem.
 
 ## What's intentionally NOT here (v1)
 
-- **Per-caller ACL enforcement.** v1 uses the allowlist as the
-  authorization boundary (above). Mirroring each caller's MSK read grants
-  is the follow-up that unlocks sensitive topics, not v1.
+- **Mirroring each caller's Kafka ACLs.** Per-caller authorization
+  (Phase 5) is an operator-written policy, not a describe-ACLs or IAM
+  lookup per caller.
 - **Consensus/Raft replication.** HA is fan-out replicas + Kafka as the
   replication log (see *Availability model*), never a Raft-replicated
   index. Lease-based backfill coordination is the deferred optimization if
@@ -871,19 +921,21 @@ fallback at every step, so nothing regresses if the daemon is absent.
   the brokers' end offsets on the stats tick. See
   [`guides/deploy.md`](../guides/deploy.md#metrics-and-probes).
 
-### Phase 5 (gates sensitive topics) — per-caller authorization (≈ 2 weeks)
-- Daemon enforces each caller's own Kafka read grants before serving a
-  topic's matches.
+### Phase 5 (gates sensitive topics) — per-caller authorization — done (#118)
+- `--authz-policy` on k4a-index and k4a-mcp maps mTLS identities and bearer
+  tokens to search/follow topic globs, default-deny once configured (see
+  *Per-caller authorization*). The mapping is operator-written rather than
+  read from each caller's Kafka grants (the "coarser mapping" option below).
 - **Ships:** the safety property that lets the daemon follow sensitive
   topics without turning the index into a read-around.
 
 ## Open questions
 
-- **Per-caller authorization mechanism.** How does the daemon learn a
-  caller's Kafka read grants cheaply? Options: the client presents its own
-  MSK IAM identity and the daemon does a describe-ACLs cache; or a
-  coarser group→topic-allowlist mapping. This gates sensitive topics — flag
-  for design.
+- **Per-caller authorization mechanism** — decided for Phase 5: the coarser
+  identity→topic-glob mapping. Deriving grants from each caller's own Kafka
+  read grants (the client presents its MSK IAM identity and the daemon keeps
+  a describe-ACLs cache) stays open, if keeping the policy in step by hand
+  proves error-prone.
 - **Compacted topics.** Same concern as `local-index.md`: the shared index
   may retain records compaction has since removed from the broker. For
   "did this ever happen?" that's a feature; the shared render must mark

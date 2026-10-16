@@ -48,6 +48,11 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   `schemaRegistry` values. An index serves a search only when it decoded
   with the same registry, which the coverage contract now carries
   (`Coverage.decoder`, a hash, never the URL) (#115).
+- Per-caller authorization for `k4a-index` and `k4a-mcp` (Phase 5 of the
+  shared-index design): `--authz-policy` maps verified client certificates
+  (CN, SAN or subject) and per-caller bearer tokens (by SHA-256) to the topic
+  globs each caller may search and follow, default-deny once configured, with
+  `listener.authz` in both charts. Without a policy nothing changes (#118).
 
 ### Fixed
 

@@ -134,13 +134,20 @@ searches over gRPC for anyone who can reach it.
   Health checks stay open; every other RPC is refused `Unauthenticated`
   without the configured credential. Clients refuse to send a token over a
   plaintext dial.
-- **Authentication is not authorization.** Anyone holding the deployment's
-  token or a client certificate the CA signed can search every topic the
-  daemon follows and start follows within `--allow`, whatever their own Kafka
-  permissions are. Per-caller authorization (Phase 5 of
-  `docs/design/shared-index-service.md`) does not exist yet. Without
-  credentials configured, **the network is the boundary**: expose the port
-  only on a private network.
+- **Per-caller authorization is opt-in** (`--authz-policy`, Phase 5 of
+  `docs/design/shared-index-service.md`). Without a policy, authentication is
+  not authorization: anyone holding the deployment's token or a client
+  certificate the CA signed can search every topic the daemon follows and
+  start follows within `--allow`, whatever their own Kafka permissions are.
+  With one, it is default-deny: each caller, identified by a verified client
+  certificate (subject CN, a SAN, or the subject DN) or by its own bearer
+  token (held in the policy as a SHA-256, never in the clear), may search
+  and follow only the topics its entries grant; a caller the policy does not
+  name is refused `Unauthenticated`, an ungranted topic `PermissionDenied`.
+  The grants are written by the operator, not read from the caller's Kafka
+  ACLs, so keep them no wider than those ACLs. `--allow` still bounds every
+  grant. Without credentials configured, **the network is the boundary**:
+  expose the port only on a private network.
 - **The admin port** (`--admin-listen`; the chart's `metrics.port`, 9502)
   serves Prometheus metrics and plain-HTTP health with no credential. It
   exposes followed topic names and counters, never record content; restrict
@@ -182,8 +189,10 @@ Kafka credentials of its own.
   answer, so a private network only. It can serve HTTPS (`--tls-cert`),
   require client certificates (`--tls-client-ca`) and require a bearer token
   (`--token-file` / `K4A_MCP_TOKEN`), with the same guard and the same
-  limits as `k4a-index`: `/health` stays open, and authentication is not
-  per-caller authorization.
+  limits as `k4a-index`: `/health` stays open. `--authz-policy` authorizes
+  per caller exactly as on `k4a-index`, checked on every tool call. It is
+  the only per-person boundary behind k4a-mcp: k4a-index sees k4a-mcp's own
+  credential, so its policy can grant k4a-mcp only as a whole.
 - **Its hop to `k4a-index` is plaintext gRPC by default.** `--index-tls`,
   `--index-ca`, `--index-cert`/`--index-key` and `--index-token-file` give
   it what an authenticated `k4a-index` asks for; it refuses to start with an
@@ -304,11 +313,13 @@ In scope, among others:
   request
 
 Also in scope: a `k4a-index` or `k4a-mcp` configured with a token or client
-CA answering a request that lacks it (other than a health check), or a k4a
-client or `k4a-mcp` sending an index token over plaintext.
+CA answering a request that lacks it (other than a health check), a k4a
+client or `k4a-mcp` sending an index token over plaintext, and, under
+`--authz-policy`, a caller reaching a topic, or starting a follow, that its
+entries do not grant.
 
 Out of scope: anything that follows from exposing an unauthenticated
 `k4a-index` or `k4a-mcp` to a network you do not trust, from running with
-`--insecure`, from an allowlist wider than you meant, or from an
-authenticated caller reading a followed topic their own Kafka permissions
-would not allow (there is no per-caller authorization yet).
+`--insecure`, from an allowlist or policy wider than you meant, or, without
+`--authz-policy`, from an authenticated caller reading a followed topic
+their own Kafka permissions would not allow.

@@ -34,8 +34,8 @@ service:
 # Caller authentication on the gRPC listener. Both are off by default, which
 # keeps an upgraded install serving plaintext with no caller credential — the
 # daemon logs a warning at startup saying so. This authenticates "a caller
-# holding the deployment's credential"; it does not authorize per caller, so
-# every authenticated caller still reads every followed topic (SECURITY.md).
+# holding the deployment's credential"; without listener.authz below, every
+# authenticated caller reads every followed topic (SECURITY.md).
 listener:
   # Serve gRPC over TLS from an existing kubernetes.io/tls Secret, mounted
   # read-only at /etc/k4a/listener-tls. A renewed certificate is picked up
@@ -56,6 +56,28 @@ listener:
   token:
     existingSecret: ""
     key: token
+  # Per-caller authorization (--authz-policy, SECURITY.md). Off by default:
+  # every authenticated caller reaches every topic the daemon follows, and may start follows within config.allow. Once a policy is set it is
+  # default-deny: a caller its entries do not name is refused, and a named
+  # caller reaches only the topics its entries grant. Give the policy inline
+  # (rendered into a ConfigMap; changing it rolls the pods) or name an
+  # existing ConfigMap holding it under `key`. The policy holds SHA-256 hashes
+  # of tokens, never the tokens. Certificate entries need
+  # listener.tls.clientCAKey; token entries replace listener.token. Example:
+  #   policy:
+  #     callers:
+  #       - name: payments-oncall
+  #         cert: {cn: payments-oncall}   # or san: ..., or subject: "CN=...,O=..."
+  #         search: ["payments.*"]
+  #         follow: ["payments.*"]
+  #       - name: ci
+  #         tokenSHA256: <sha256 of the token, e.g. printf %s "$TOKEN" | sha256sum>
+  #         search: ["telemetry.*"]
+  authz:
+    policy: {}
+    existingConfigMap: ""
+    key: policy.yaml
+
 
 kafka:
   # Bootstrap servers, comma-separated. Required. Rendered as KAFKA_BROKERS.

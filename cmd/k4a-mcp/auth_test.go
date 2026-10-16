@@ -104,8 +104,8 @@ func TestAuthenticatedEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { conn.Close() }) //nolint:errcheck // test cleanup
 
-	ts := httptest.NewUnstartedServer(newHTTPHandler(newMCPServer(indexv1.NewIndexClient(conn), "test"), f.Path,
-		endpointauth.NewGuard(listener)))
+	srv := newMCPServer(indexv1.NewIndexClient(conn), "test", endpointauth.Authorizer{})
+	ts := httptest.NewUnstartedServer(newHTTPHandler(srv, f.Path, endpointauth.NewGuard(listener)))
 	ts.Listener = tls.NewListener(ts.Listener, tlsCfg)
 	ts.Start()
 	t.Cleanup(ts.Close)

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/indexwire"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
 )
@@ -24,6 +25,9 @@ import (
 type indexServer struct {
 	indexv1.UnimplementedIndexServer
 	mgr *manager
+	// authz is per-caller authorization (--authz-policy). Its zero value
+	// admits every caller the Guard let in, the behavior before Phase 5.
+	authz endpointauth.Authorizer
 	// maxLimit bounds the matches one Search returns, whatever the request
 	// asks for: a single request must not be able to make the daemon
 	// materialize and stream an arbitrarily large result.
@@ -58,6 +62,10 @@ func (s *indexServer) clampLimit(req *indexv1.SearchRequest) {
 func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_SearchServer) error {
 	start := time.Now()
 	topic := req.GetTopic()
+	if err := s.authorize(stream.Context(), endpointauth.ActionSearch, topic); err != nil {
+		searchesTotal.WithLabelValues(searchForbidden).Inc()
+		return err
+	}
 	s.clampLimit(req)
 	// The pattern is what the caller is looking for — an account number, an
 	// email address — so it is logged only at debug.
@@ -74,24 +82,7 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 
 	w := s.mgr.lookup(topic)
 	if w == nil {
-		// Not followed yet. If the allowlist permits it, begin following as a
-		// side effect so the NEXT search is warm; this call still reports no
-		// coverage and the client scans (warm-on-first-search). A denied topic
-		// just reports no coverage and is never followed.
-		// contextcheck: registration deliberately runs on the daemon-lifetime ctx,
-		// not this request's stream ctx — the follow must OUTLIVE the search that
-		// triggered it (warm-on-first-search), so the request ctx must not thread in.
-		if s.mgr.ensureFollowed(topic) { //nolint:contextcheck // see comment above
-			searchesTotal.WithLabelValues(searchWarming).Inc()
-			log.Info("search: topic not followed — now warming, client scans this time", "topic", topic)
-		} else {
-			searchesTotal.WithLabelValues(searchDenied).Inc()
-			log.Warn("search: topic not allowlisted → client will scan (never followed)", "topic", topic)
-		}
-		if err := sendCoverage(stream, &indexv1.Coverage{Following: false}); err != nil {
-			return err
-		}
-		return sendDone(stream, 0, false)
+		return s.searchUnfollowed(stream, topic)
 	}
 
 	params, err := indexwire.RequestToQueryParams(req)
@@ -148,6 +139,35 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 	return sendDone(stream, int64(len(res.Matches)), res.Capped)
 }
 
+// searchUnfollowed answers a Search for a topic that is not followed yet. If
+// the allowlist and the caller's grant permit it, the daemon begins following
+// as a side effect so the NEXT search is warm; this call still reports no
+// coverage and the client scans (warm-on-first-search). A topic outside the
+// allowlist, or one this caller may search but not follow, just reports no
+// coverage and is not followed.
+func (s *indexServer) searchUnfollowed(stream indexv1.Index_SearchServer, topic string) error {
+	ctx := stream.Context()
+	switch {
+	case !s.authz.Allows(ctx, endpointauth.ActionFollow, topic):
+		searchesTotal.WithLabelValues(searchForbidden).Inc()
+		log.Info("search: topic not followed and the caller may not follow it → client scans",
+			"topic", topic, "caller", endpointauth.GrantFromContext(ctx).Caller())
+	// contextcheck: registration deliberately runs on the daemon-lifetime ctx,
+	// not this request's stream ctx — the follow must OUTLIVE the search that
+	// triggered it (warm-on-first-search), so the request ctx must not thread in.
+	case s.mgr.ensureFollowed(topic): //nolint:contextcheck // see comment above
+		searchesTotal.WithLabelValues(searchWarming).Inc()
+		log.Info("search: topic not followed — now warming, client scans this time", "topic", topic)
+	default:
+		searchesTotal.WithLabelValues(searchDenied).Inc()
+		log.Warn("search: topic not allowlisted → client will scan (never followed)", "topic", topic)
+	}
+	if err := sendCoverage(stream, &indexv1.Coverage{Following: false}); err != nil {
+		return err
+	}
+	return sendDone(stream, 0, false)
+}
+
 // Coverage reports a topic's indexed ranges without running a query. Clients
 // call it before every search to decide index-vs-scan (internal/remoteindex),
 // and k4a-mcp exposes it as a tool.
@@ -156,8 +176,13 @@ func (s *indexServer) Search(req *indexv1.SearchRequest, stream indexv1.Index_Se
 // resets a followed topic's LRU clock. The client's next call is what counts
 // as use — a Search when the coverage serves the query, a Follow when it does
 // not — so a topic that is only ever probed still ages out at evictAfter.
-func (s *indexServer) Coverage(_ context.Context, req *indexv1.CoverageRequest) (*indexv1.CoverageResponse, error) {
+func (s *indexServer) Coverage(ctx context.Context, req *indexv1.CoverageRequest) (*indexv1.CoverageResponse, error) {
 	topic := req.GetTopic()
+	// Coverage says whether, and how far, a topic is indexed, so it needs the
+	// same grant as a Search.
+	if err := s.authorize(ctx, endpointauth.ActionSearch, topic); err != nil {
+		return nil, err
+	}
 	w := s.mgr.peek(topic)
 	if w == nil {
 		// Only a Search (or an explicit Follow) warms a topic, so probing
@@ -178,8 +203,11 @@ func (s *indexServer) Coverage(_ context.Context, req *indexv1.CoverageRequest) 
 // Search: an allowed topic is accepted (and begins following if it wasn't
 // already); a denied topic is refused with a reason, and the daemon never
 // persists its payloads.
-func (s *indexServer) Follow(_ context.Context, req *indexv1.FollowRequest) (*indexv1.FollowResponse, error) {
+func (s *indexServer) Follow(ctx context.Context, req *indexv1.FollowRequest) (*indexv1.FollowResponse, error) {
 	topic := req.GetTopic()
+	if err := s.authorize(ctx, endpointauth.ActionFollow, topic); err != nil {
+		return nil, err
+	}
 	// Registration runs on the daemon-lifetime ctx, not this RPC's ctx — the
 	// whole point of Follow is to warm a topic that outlives this call.
 	if s.mgr.ensureFollowed(topic) { //nolint:contextcheck // intentional: see comment
@@ -191,6 +219,21 @@ func (s *indexServer) Follow(_ context.Context, req *indexv1.FollowRequest) (*in
 		Accepted: false,
 		Reason:   "topic is not in the daemon's follow allowlist (--allow)",
 	}, nil
+}
+
+// authorize applies --authz-policy: PermissionDenied when the caller's grant
+// does not cover action on topic. The refusal names the caller's policy entry
+// and the topic, never a credential. A client treats any error from the
+// daemon as "not covered" and scans with its own Kafka credentials, so a
+// refusal costs the caller the index, not the answer.
+func (s *indexServer) authorize(ctx context.Context, action endpointauth.Action, topic string) error {
+	err := s.authz.Check(ctx, action, topic)
+	if err == nil {
+		return nil
+	}
+	log.Warn("refused by the authorization policy", "action", action.String(), "topic", topic,
+		"caller", endpointauth.GrantFromContext(ctx).Caller())
+	return status.Error(codes.PermissionDenied, err.Error())
 }
 
 func sendCoverage(stream indexv1.Index_SearchServer, cov *indexv1.Coverage) error {

@@ -23,11 +23,22 @@ import (
 
 // PKI is the set of PEM file paths a test hands to the options under test.
 type PKI struct {
+	ca         *x509.Certificate
+	caKey      *ecdsa.PrivateKey
+	dir        string
 	CA         string
 	ServerCert string
 	ServerKey  string
+	// ClientCert's subject common name is "k4a test client".
 	ClientCert string
 	ClientKey  string
+}
+
+// Client issues another client certificate from the same CA, with subject
+// common name "k4a test <name>" and the DNS SAN "<name>.clients.test".
+func (p PKI) Client(t *testing.T, name string) (certFile, keyFile string) {
+	t.Helper()
+	return leaf(t, p.dir, name, p.ca, p.caKey, x509.ExtKeyUsageClientAuth)
 }
 
 // New writes a fresh CA plus a server and a client certificate it signed.
@@ -54,7 +65,7 @@ func New(t *testing.T) PKI {
 		t.Fatal(err)
 	}
 
-	p := PKI{CA: writePEM(t, dir, "ca.crt", "CERTIFICATE", caDER)}
+	p := PKI{ca: ca, caKey: caKey, dir: dir, CA: writePEM(t, dir, "ca.crt", "CERTIFICATE", caDER)}
 	p.ServerCert, p.ServerKey = leaf(t, dir, "server", ca, caKey, x509.ExtKeyUsageServerAuth)
 	p.ClientCert, p.ClientKey = leaf(t, dir, "client", ca, caKey, x509.ExtKeyUsageClientAuth)
 	return p
@@ -85,7 +96,7 @@ func leaf(
 		NotAfter:     time.Now().Add(time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
-		DNSNames:     []string{"localhost"},
+		DNSNames:     []string{"localhost", name + ".clients.test"},
 		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, &key.PublicKey, caKey)

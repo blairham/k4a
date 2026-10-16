@@ -6,6 +6,7 @@ package endpointauth
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net/http"
 	"strings"
 
@@ -23,8 +24,12 @@ import (
 const healthMethodPrefix = "/grpc.health.v1.Health/"
 
 // Guard enforces a listener's caller credentials: the bearer token when one is
-// configured, and a verified client certificate when a client CA is.
+// configured, a verified client certificate when a client CA is, and, under an
+// authorization policy, that the caller matches one of its entries. An admitted
+// caller's grant rides on the request context for the handler's per-topic
+// check (Authorizer).
 type Guard struct {
+	policy     *Policy
 	token      string
 	clientCert bool
 }
@@ -32,27 +37,40 @@ type Guard struct {
 // NewGuard returns the guard for o. A guard over the zero options admits
 // everything, which is the unauthenticated default.
 func NewGuard(o ServerOptions) *Guard {
-	return &Guard{token: o.Token, clientCert: o.ClientCAFile != ""}
+	return &Guard{token: o.Token, clientCert: o.ClientCAFile != "", policy: o.Policy}
 }
 
-// check reports why a caller is refused, or "" to admit it. authz is the
-// Authorization value presented; verified reports a client certificate that
-// the handshake verified against the client CA.
-func (g *Guard) check(authz string, verified bool) string {
-	if g.clientCert && !verified {
-		return "a client certificate signed by the configured client CA is required"
+// noPolicyMatch is the refusal for a caller the policy does not name. It says
+// nothing about which identities the policy does name.
+const noPolicyMatch = "the caller matches no entry in the authorization policy"
+
+// check reports why a caller is refused, or "" to admit it, with the caller's
+// grant when a policy is configured. authz is the Authorization value
+// presented; leaf is the client certificate the handshake verified against the
+// client CA, or nil.
+func (g *Guard) check(authz string, leaf *x509.Certificate) (string, *Grant) {
+	if g.clientCert && leaf == nil {
+		return "a client certificate signed by the configured client CA is required", nil
 	}
 	if g.token != "" && !tokenMatches(authz, g.token) {
-		return "a valid bearer token is required"
+		return "a valid bearer token is required", nil
 	}
-	return ""
+	if g.policy == nil {
+		return "", nil
+	}
+	grant := g.policy.Identify(authz, leaf)
+	if grant == nil {
+		return noPolicyMatch, nil
+	}
+	return "", grant
 }
 
 // UnaryInterceptor refuses an unauthenticated unary RPC with Unauthenticated.
 func (g *Guard) UnaryInterceptor(
 	ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler,
 ) (any, error) {
-	if err := g.checkGRPC(ctx, info.FullMethod); err != nil {
+	ctx, err := g.checkGRPC(ctx, info.FullMethod)
+	if err != nil {
 		return nil, err
 	}
 	return handler(ctx, req)
@@ -62,15 +80,29 @@ func (g *Guard) UnaryInterceptor(
 func (g *Guard) StreamInterceptor(
 	srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler,
 ) error {
-	if err := g.checkGRPC(ss.Context(), info.FullMethod); err != nil {
+	ctx, err := g.checkGRPC(ss.Context(), info.FullMethod)
+	if err != nil {
 		return err
+	}
+	if ctx != ss.Context() {
+		ss = &grantStream{ServerStream: ss, ctx: ctx}
 	}
 	return handler(srv, ss)
 }
 
-func (g *Guard) checkGRPC(ctx context.Context, method string) error {
+// grantStream carries the caller's grant into a streaming handler.
+type grantStream struct {
+	grpc.ServerStream
+	ctx context.Context //nolint:containedctx // the stream's own context, with the grant added
+}
+
+func (s *grantStream) Context() context.Context { return s.ctx }
+
+// checkGRPC admits or refuses one RPC, returning ctx with the caller's grant
+// attached when a policy is configured.
+func (g *Guard) checkGRPC(ctx context.Context, method string) (context.Context, error) {
 	if strings.HasPrefix(method, healthMethodPrefix) {
-		return nil
+		return ctx, nil
 	}
 	var authz string
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -78,16 +110,20 @@ func (g *Guard) checkGRPC(ctx context.Context, method string) error {
 			authz = v[0]
 		}
 	}
-	verified := false
+	var leaf *x509.Certificate
 	if p, ok := peer.FromContext(ctx); ok {
 		if ti, ok := p.AuthInfo.(credentials.TLSInfo); ok {
-			verified = len(ti.State.VerifiedChains) > 0
+			leaf = verifiedLeaf(&ti.State)
 		}
 	}
-	if why := g.check(authz, verified); why != "" {
-		return status.Error(codes.Unauthenticated, why)
+	why, grant := g.check(authz, leaf)
+	if why != "" {
+		return ctx, status.Error(codes.Unauthenticated, why)
 	}
-	return nil
+	if grant != nil {
+		ctx = WithGrant(ctx, grant)
+	}
+	return ctx, nil
 }
 
 // Middleware refuses an unauthenticated HTTP request with 401, except on the
@@ -101,17 +137,26 @@ func (g *Guard) Middleware(next http.Handler, open ...string) http.Handler {
 				return
 			}
 		}
-		if why := g.check(r.Header.Get("Authorization"), verifiedHTTP(r.TLS)); why != "" {
-			if g.token != "" {
+		why, grant := g.check(r.Header.Get("Authorization"), verifiedLeaf(r.TLS))
+		if why != "" {
+			if g.token != "" || (g.policy != nil && g.policy.HasTokenCallers()) {
 				w.Header().Set("WWW-Authenticate", `Bearer realm="k4a"`)
 			}
 			http.Error(w, why, http.StatusUnauthorized)
 			return
 		}
+		if grant != nil {
+			r = r.WithContext(WithGrant(r.Context(), grant))
+		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func verifiedHTTP(cs *tls.ConnectionState) bool {
-	return cs != nil && len(cs.VerifiedChains) > 0
+// verifiedLeaf is the client certificate the handshake verified against the
+// client CA, or nil. An offered but unverified certificate never counts.
+func verifiedLeaf(cs *tls.ConnectionState) *x509.Certificate {
+	if cs == nil || len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
+		return nil
+	}
+	return cs.VerifiedChains[0][0]
 }
