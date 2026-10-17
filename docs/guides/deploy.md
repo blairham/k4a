@@ -32,24 +32,6 @@ docker build --target mcp   -t <registry>/k4a-mcp:<tag>   .
 
 Both images are distroless `nonroot`; the charts run them as UID 65532.
 
-Each image also carries a **gated `/bin/sh`** ([`cmd/sh`](../../cmd/sh),
-from [`github.com/blairham/sh/gated`](https://github.com/blairham/sh/blob/main/gated/README.md)):
-a shell that cannot exec, signal or write anything, and reads only `/proc` and
-`/sys/fs/cgroup` (`/proc/*/environ` is refused). It is there so `kubectl exec`
-has something to read the container with:
-
-```sh
-# ps, with no ps
-kubectl exec <pod> -- /bin/sh -c 'for d in /proc/[0-9]*; do read -r c < "$d/comm"; echo "${d#/proc/} $c"; done'
-# memory ceiling, from cgroup v2
-kubectl exec <pod> -- /bin/sh -c 'read -r m < /sys/fs/cgroup/memory.max; echo $m'
-```
-
-Refusals are summarized on stderr, because an empty answer and a refused one
-look the same on stdout. The gate holds only while the image has no other
-userland and the pod runs no `exec` probes or lifecycle hooks; the charts use
-gRPC, HTTP and TCP probes only, so keep it that way when overriding them.
-
 ## Installing
 
 Each chart has a single `values.yaml` holding the defaults; supply your
@@ -413,7 +395,7 @@ NetworkPolicy is on. There is still no pprof endpoint.
 - **Silence is the failure mode, not restarts.** The drain-stall watchdog
   exists because a wedged drain serves *nothing*, silently, for as long as
   nobody notices. If the daemon exits with a goroutine dump on stderr, that
-  dump is the artifact — the distroless image has no general shell and no pprof,
+  dump is the artifact — the distroless image has no shell and no pprof,
   so it's the only root-cause evidence you'll get. Before it fires,
   `k4a_index_topic_buffered_records` climbing while
   `k4a_index_topic_indexed_records_total` stands still is the same wedge
