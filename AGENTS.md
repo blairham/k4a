@@ -472,8 +472,11 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   `gh workflow run chart.yml -f tag=<tag>`. Read
   `.claude/commands/release-tag.md` before cutting a tag.
 - The go-vulncheck commit hook fails a commit whose module graph reaches a
-  known vulnerability; there is no `osv-scanner.toml` ignore list. Before
-  adding one, prefer dropping the dependency (as #17 did for go-selfupdate).
+  known vulnerability. `osv-scanner.toml` (read by osv-scanner and Scorecard's
+  Vulnerabilities check) ignores only GO-2026-5932, the blanket x/crypto/openpgp
+  advisory with no fixed version, which nothing here imports. Every entry states
+  its evidence; before adding one, prefer dropping the dependency (as #17 did
+  for go-selfupdate).
 
 ## Key Dependencies
 
