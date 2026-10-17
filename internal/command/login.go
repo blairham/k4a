@@ -43,8 +43,9 @@ func (c *LoginCommand) Help() string {
   in ahead of time, after a handshake reports that a login is required (for
   example on a context switch inside the TUI), or to switch accounts.
 
-  The token and its refresh token are cached owner-only under the user
-  config directory, not ~/.k4a, and refreshed as they expire.
+  The token and its refresh token are cached in the OS keychain (or an
+  owner-only file under the user config directory when the keychain cannot
+  take them), never under ~/.k4a, and refreshed as they expire.
 
 ` + clusterFlagsHelp + `
       --oauth-issuer=URL   OIDC issuer (discovery at /.well-known/openid-configuration)
@@ -123,7 +124,7 @@ func (f *LoginFlags) loginAuth() (kafka.AuthConfig, error) {
 		if auth.Method == "" {
 			auth.Method = kafka.AuthOAuthBearer
 		}
-		return auth, nil
+		return withTokenStore(auth, secretStore()), nil
 	}
 	_, auth, err := f.Resolve()
 	return auth, err

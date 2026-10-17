@@ -48,7 +48,18 @@ func fillSecrets(ctx *config.Context, who string, auth kafka.AuthConfig) (kafka.
 			return auth, err
 		}
 	}
-	return promptPassword(auth, who)
+	auth, err := promptPassword(auth, who)
+	return withTokenStore(auth, secretStore()), err
+}
+
+// withTokenStore caches an interactive OIDC login's tokens in the keychain
+// (the test store under TestMain), or the owner-only file store when the
+// keychain cannot take them.
+func withTokenStore(auth kafka.AuthConfig, store secrets.Store) kafka.AuthConfig {
+	if auth.OAuth.Interactive() && auth.OAuth.Store == nil && store != nil {
+		auth.OAuth.Store = kafka.KeychainTokenStore{Keychain: store, Fallback: kafka.DefaultTokenStore()}
+	}
+	return auth
 }
 
 // promptPassword asks for a missing SASL password when stdin is a terminal.

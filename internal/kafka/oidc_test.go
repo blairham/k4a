@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+
+	"github.com/blairham/k4a/internal/secrets"
 )
 
 // memStore is a TokenStore that never touches the disk.
@@ -514,5 +516,62 @@ func TestDefaultTokenStore_UnderUserConfigDir(t *testing.T) {
 	}
 	if strings.Contains(dir, ".k4a") {
 		t.Fatalf("default token dir %q is under ~/.k4a, which state export copies", dir)
+	}
+}
+
+// brokenKeychain is a keychain that is not there, as on a headless Linux host.
+type brokenKeychain struct{}
+
+func (brokenKeychain) Get(string) (string, error) { return "", errors.New("no secret service") }
+func (brokenKeychain) Set(string, string) error   { return errors.New("no secret service") }
+func (brokenKeychain) Delete(string) error        { return errors.New("no secret service") }
+
+func TestKeychainTokenStore_PrefersKeychainFallsBackToFile(t *testing.T) {
+	t.Parallel()
+
+	key := tokenCacheKey(OAuthConfig{Issuer: "https://idp.example", ClientID: "c"})
+	tok := &oauth2.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}
+
+	// With a keychain, the token lives there and nowhere on disk; a file copy
+	// left from a keychain-less run is dropped once the keychain takes it.
+	file := FileTokenStore{Dir: t.TempDir()}
+	if err := file.Save(key, &oauth2.Token{AccessToken: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	kc := secrets.NewMemory()
+	s := KeychainTokenStore{Keychain: kc, Fallback: file}
+	if err := s.Save(key, tok); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := kc.Get("oauth/" + key); err != nil || !strings.Contains(v, `"refresh_token":"r"`) {
+		t.Fatalf("keychain entry = %q, %v", v, err)
+	}
+	if onDisk, _ := file.Load(key); onDisk != nil {
+		t.Fatalf("a file copy survived the keychain save: %+v", onDisk)
+	}
+	if got, err := s.Load(key); err != nil || got.AccessToken != "a" {
+		t.Fatalf("Load = %+v, %v", got, err)
+	}
+	if err := s.Delete(key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.Get("oauth/" + key); !errors.Is(err, secrets.ErrNotFound) {
+		t.Fatalf("keychain entry after Delete: %v", err)
+	}
+
+	// Without one, the file takes the token and logout still succeeds.
+	file = FileTokenStore{Dir: t.TempDir()}
+	s = KeychainTokenStore{Keychain: brokenKeychain{}, Fallback: file}
+	if err := s.Save(key, tok); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Load(key); err != nil || got == nil || got.AccessToken != "a" {
+		t.Fatalf("Load from the fallback = %+v, %v", got, err)
+	}
+	if err := s.Delete(key); err != nil {
+		t.Fatalf("Delete without a keychain: %v", err)
+	}
+	if got, _ := s.Load(key); got != nil {
+		t.Fatalf("Load after Delete = %+v", got)
 	}
 }

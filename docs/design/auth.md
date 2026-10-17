@@ -212,20 +212,28 @@ rather than retrying a dead token. `k4a login` logs in ahead of time,
 cached token. `k4a-index` refuses an issuer outright: a daemon has nobody to
 log in and must not ride on a person's refresh token.
 
-**Token cache.** `kafka.TokenStore` is injected through
-`OAuthConfig.Store`; the default, `FileTokenStore`, keeps one JSON file per
-login in `os.UserConfigDir()/k4a/oauth/` (`~/Library/Application
-Support/k4a/oauth` on macOS, `$XDG_CONFIG_HOME/k4a/oauth` on Linux), the
-file `0600` in a `0700` directory, written atomically through a temp file
-and a rename. It is keyed by a hash of issuer, client ID and sorted scopes,
-so two contexts that share an IdP client share one login. It is
-deliberately **not** under `~/.k4a`, which holds nothing secret and is what
-`k4a state export` archives. It holds the access token, its expiry and the
-refresh token: anyone who can read files as this user can use them until
-they expire or are revoked, the same exposure as a cloud CLI's cache. A
-platform keychain store (#119) can replace the file store behind the same
-interface. Tests inject a memory store or point `HOME` / `XDG_CONFIG_HOME`
-at a temp dir.
+**Token cache.** A login is cached as JSON (access token, expiry, refresh
+token), keyed by a hash of issuer, client ID and sorted scopes, so two
+contexts that share an IdP client share one login. `kafka.TokenStore` is
+injected through `OAuthConfig.Store`. The command layer (`withTokenStore`,
+from `fillSecrets` and `k4a login`) and a context switch in the TUI give it
+a `KeychainTokenStore` over the same `secrets.Store` as the context
+credentials: the entry is account `oauth/<hash>` under the service `k4a`.
+When the keychain refuses the write — no Secret Service on a headless Linux
+host, or a token past the macOS (~3 KB) or Windows (2.5 KB) entry limit,
+which large Entra ID tokens can reach — it falls back to `FileTokenStore`:
+one file per login in `os.UserConfigDir()/k4a/oauth/` (`~/Library/Application
+Support/k4a/oauth` on macOS, `$XDG_CONFIG_HOME/k4a/oauth` on Linux), `0600`
+in a `0700` directory, written atomically through a temp file and a rename.
+A keychain save deletes any file copy, a load reads the keychain and then
+the file, and `--logout` clears both. `FileTokenStore` alone is also what a
+nil `Store` means. Neither copy is under `~/.k4a`, which holds nothing
+secret and is what `k4a state export` archives. Whoever can read this
+user's keychain or files can use the tokens until they expire or are
+revoked, the same exposure as a cloud CLI's cache. Tests reach neither:
+`internal/command`'s `TestMain` keychain is `secrets.NewMemory()`, the
+kafka tests inject a memory store, and the file store is pointed at a temp
+dir through `HOME` / `XDG_CONFIG_HOME`.
 
 ### SASL extensions and authorization ID
 

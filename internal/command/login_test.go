@@ -83,13 +83,13 @@ contexts:
 	if !strings.Contains(out.String(), "ABCD-EFGH") || !strings.Contains(out.String(), "Logged in.") {
 		t.Fatalf("login printed %q", out.String())
 	}
+	// The token went to the keychain (testStore under TestMain), not to disk.
 	dir := kafka.DefaultTokenStore().Dir
 	if !strings.HasPrefix(dir, home) {
 		t.Fatalf("token store %q escaped the test's home %q", dir, home)
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("token cache = %v, %v; want one entry", entries, err)
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("token cached on disk (%d entries) although the keychain took it", len(entries))
 	}
 
 	out.Reset()
@@ -103,8 +103,15 @@ contexts:
 	if code := cmd.Run([]string{"--config", cfg, "--logout"}); code != 0 {
 		t.Fatalf("logout = %d", code)
 	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-		t.Fatalf("logout left %d cached tokens", len(entries))
+	// Logged out, the next login has to ask the IdP again.
+	if code := cmd.Run([]string{"--config", cfg}); code != 0 {
+		t.Fatalf("login after logout = %d", code)
+	}
+	if n := logins.Load(); n != 2 {
+		t.Fatalf("device logins = %d after a logout, want 2", n)
+	}
+	if code := cmd.Run([]string{"--config", cfg, "--logout"}); code != 0 {
+		t.Fatalf("second logout = %d", code)
 	}
 }
 
@@ -151,6 +158,11 @@ contexts:
 		Issuer: "https://idp.example", ClientID: "k4a", Flow: kafka.FlowBrowser, RedirectPort: "8765",
 		AuthzID: "ctx-principal", Extensions: "logicalCluster=lkc-flag,identityPoolId=pool-1",
 	}
+	// An interactive login caches in the keychain, falling back to a file.
+	if _, ok := got.OAuth.Store.(kafka.KeychainTokenStore); !ok {
+		t.Fatalf("token store = %T, want kafka.KeychainTokenStore", got.OAuth.Store)
+	}
+	got.OAuth.Store = nil
 	if got.OAuth != want {
 		t.Fatalf("oauth = %+v\nwant    %+v", got.OAuth, want)
 	}

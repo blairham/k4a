@@ -135,8 +135,8 @@ For a person rather than a service account, name an OIDC issuer instead of
 a token URL and k4a logs you in: the `device` flow (the default) prints a
 code to enter on any device, and the `browser` flow opens your browser
 (authorization code with PKCE, redirected to a loopback port). The token is
-cached owner-only under your user config directory and refreshed as it
-expires (ask for `offline_access` if your IdP needs it for a refresh
+cached in the OS keychain (or an owner-only file under your user config
+directory when the keychain cannot take it) and refreshed as it expires (ask for `offline_access` if your IdP needs it for a refresh
 token). Commands log in by themselves when needed; `k4a login` does it
 ahead of time, `--force` again, and `--logout` forgets the token:
 
