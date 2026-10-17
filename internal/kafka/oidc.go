@@ -6,12 +6,12 @@ package kafka
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"html"
 	"io"
 	"net"
@@ -137,14 +137,18 @@ func newOIDCSource(cfg OAuthConfig) (*oidcSource, error) {
 }
 
 // tokenCacheKey identifies a login: the same issuer, client and scopes share
-// a token whichever context or flow asked for it.
+// a token whichever context or flow asked for it. The key only has to be
+// stable and safe as a file or keychain name; every input is the user's own
+// config, so it needs no collision resistance, and FNV keeps a cryptographic
+// hash away from a struct CodeQL tracks as holding a typed password.
 func tokenCacheKey(cfg OAuthConfig) string {
 	scopes := splitScopes(cfg.Scopes)
 	slices.Sort(scopes)
-	sum := sha256.Sum256([]byte(strings.Join([]string{
+	h := fnv.New128a()
+	h.Write([]byte(strings.Join([]string{ //nolint:errcheck,gosec // hash.Hash writes never fail
 		strings.TrimSuffix(cfg.Issuer, "/"), cfg.ClientID, strings.Join(scopes, " "),
 	}, "\n")))
-	return hex.EncodeToString(sum[:16])
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *oidcSource) token(ctx context.Context) (string, error) {
