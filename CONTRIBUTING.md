@@ -63,10 +63,15 @@ including that no employer holds rights to it.
   it is the release: it tags `vX.Y.Z`, and `release-please.yml` publishes the
   archives, images and charts. Never tag by hand. `Release-As: X.Y.Z` in a PR
   body forces a version. A title that went wrong after the merge is fixed on
-  the merged pull request: add the messages it should have had, one per line,
-  between `BEGIN_COMMIT_OVERRIDE` and `END_COMMIT_OVERRIDE` in its body. The
-  PR title check on the release pull request fails on any commit in the
-  release that is neither a Conventional Commit nor overridden.
+  the merged pull request: add the messages it should have had between
+  `BEGIN_COMMIT_OVERRIDE` and `END_COMMIT_OVERRIDE` in its body, **separated
+  by blank lines** (one message per line reads as a single message with the
+  rest as its body). release-please starts at the first `BEGIN_COMMIT_OVERRIDE`
+  anywhere in the body, so never write that word elsewhere in a PR body, even
+  in backticks, and the block replaces the subject even of a conventional
+  commit. The PR title check on the release pull request reads each commit as
+  release-please will and fails on any message that is not a Conventional
+  Commit.
 - `pre-commit install` once per checkout. The hooks format, lint and scan for
   secrets on every commit; never bypass
   them with `--no-verify`.
