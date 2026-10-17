@@ -13,6 +13,11 @@ spec:
     metadata:
       labels:
         {{- include "k4a-mcp.labels" . | nindent 8 }}
+      {{- with .Values.listener.authz.policy }}
+      annotations:
+        # Roll the pods when the inline policy changes: it is read at startup.
+        checksum/authz-policy: {{ toYaml . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "k4a-mcp.serviceAccountName" . }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
@@ -49,6 +54,14 @@ spec:
             {{- with .Values.listener.token.existingSecret }}
             - name: K4A_MCP_TOKEN_FILE
               value: /etc/k4a/listener-token/{{ $.Values.listener.token.key }}
+            {{- end }}
+            {{- if and .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+            {{- fail "listener.authz: set policy or existingConfigMap, not both" }}
+            {{- end }}
+            {{- if or .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+            # Per-caller authorization policy.
+            - name: K4A_MCP_AUTHZ_POLICY
+              value: /etc/k4a/authz/{{ ternary .Values.listener.authz.key "policy.yaml" (not (empty .Values.listener.authz.existingConfigMap)) }}
             {{- end }}
             {{- if and .Values.index.token.existingSecret (not .Values.index.tls.enabled) }}
             {{- fail "index.token.existingSecret needs index.tls.enabled: k4a-mcp never sends a token over plaintext" }}
@@ -106,6 +119,11 @@ spec:
               readOnly: true
             {{- end }}
             {{- end }}
+            {{- if or .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+            - name: authz
+              mountPath: /etc/k4a/authz
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir:
@@ -117,4 +135,10 @@ spec:
             secretName: {{ $secret }}
             defaultMode: 0440
         {{- end }}
+        {{- end }}
+        {{- if or .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+        - name: authz
+          configMap:
+            name: {{ .Values.listener.authz.existingConfigMap | default (printf "%s-authz" (include "k4a-mcp.fullname" .)) }}
+            defaultMode: 0440
         {{- end }}

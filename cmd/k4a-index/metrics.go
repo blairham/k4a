@@ -25,7 +25,8 @@ var (
 	searchesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k4a_index_searches_total",
 		Help: "Search RPCs by outcome: served (from a followed index), warming (allowlisted, " +
-			"now following, client scans), denied (not allowlisted), error.",
+			"now following, client scans), denied (not allowlisted), forbidden (the caller's " +
+			"--authz-policy grant does not cover the topic), error.",
 	}, []string{"outcome"})
 	searchDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "k4a_index_search_duration_seconds",
@@ -49,10 +50,11 @@ const (
 
 // Search outcomes, as the label values of k4a_index_searches_total.
 const (
-	searchServed  = "served"
-	searchWarming = "warming"
-	searchDenied  = "denied"
-	searchError   = "error"
+	searchServed    = "served"
+	searchWarming   = "warming"
+	searchDenied    = "denied"
+	searchForbidden = "forbidden"
+	searchError     = "error"
 )
 
 // followSetCollector reads the follow-set at scrape time, so a gauge can never

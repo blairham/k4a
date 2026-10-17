@@ -122,10 +122,12 @@ fails on authorization. Watch for asymmetry between the two: if
 enumerates exact topic names, a *new* topic matching the glob is allowed by
 the daemon but not followable until its exact name is added to the grant.
 
-**Do not add sensitive topics.** Orders, fills, and PII-bearing topics stay
-off both lists until per-caller authorization (Phase 5) lands. Reaching the
-daemon grants broad read over everything it follows, and the index persists
-decrypted payloads to disk.
+**Do not add sensitive topics without a per-caller policy.** Without
+`listener.authz` (see [Authorizing callers](#authorizing-callers)), reaching
+the daemon grants broad read over everything it follows, and the index
+persists decrypted payloads to disk. Orders, fills, and PII-bearing topics
+go on the lists only together with a policy that grants them to the callers
+who may read them.
 
 Two more things worth checking when you widen the set:
 
@@ -218,9 +220,8 @@ Both `k4a-index` and `k4a-mcp` can ask callers for a credential. **Nothing
 is required by default**, so upgrading an install changes nothing on the
 wire; each instead logs a warning at startup that its listener is plaintext
 and unauthenticated. What it authenticates is "a caller holding this
-deployment's credential" — there is still no per-caller authorization
-(Phase 5 of the design doc), so every authenticated caller reads every
-followed topic.
+deployment's credential"; without a policy (next section) every
+authenticated caller reads every followed topic.
 
 `k4a-index` chart values:
 
@@ -267,6 +268,49 @@ Service name, e.g. `k4a-index.<namespace>.svc`).
 
 MCP clients send the token as `Authorization: Bearer <token>`; for Claude
 Code, see [`mcp-setup.md`](mcp-setup.md).
+
+## Authorizing callers
+
+Both charts take a per-caller authorization policy under `listener.authz`
+(`--authz-policy`; the format and semantics are in
+[`design/shared-index-service.md`](../design/shared-index-service.md#per-caller-authorization-phase-5-118)).
+**Unset, nothing changes**: every authenticated caller reaches every topic
+the daemon follows. Once set it is default-deny — a caller the policy does
+not name is refused, and a named caller reaches only the topics it grants.
+
+| Value | Renders | Notes |
+|---|---|---|
+| `listener.authz.policy` | ConfigMap `<fullname>-authz`, `K4A_INDEX_AUTHZ_POLICY` / `K4A_MCP_AUTHZ_POLICY` | The policy inline. Changing it rolls the pods (it is read at startup). |
+| `listener.authz.existingConfigMap` (`.key`) | `K4A_INDEX_AUTHZ_POLICY` / `K4A_MCP_AUTHZ_POLICY` | A ConfigMap you manage, mounted at `/etc/k4a/authz`; key defaults to `policy.yaml`. Restart the pods after changing it. Set this or `policy`, not both. |
+
+```yaml
+listener:
+  tls:
+    existingSecret: k4a-index-tls
+    clientCAKey: ca.crt        # certificate entries need a client CA
+  authz:
+    policy:
+      callers:
+        - name: payments-oncall
+          cert: {cn: payments-oncall}
+          search: ["payments.*"]
+          follow: ["payments.*"]
+        - name: k4a-mcp        # the daemon sees k4a-mcp, not the people behind it
+          cert: {cn: k4a-mcp}
+          search: ["telemetry.*"]
+          follow: ["telemetry.*"]
+        - name: ci
+          tokenSHA256: <printf %s "$TOKEN" | sha256sum>
+          search: ["telemetry.*"]
+```
+
+Token entries hold the token's SHA-256, never the token, and replace
+`listener.token` (the daemon refuses both). Hand each caller its own token;
+clients send it exactly as they send the shared one. A refused k4a client
+scans with its own Kafka credentials instead, so a too-narrow policy is
+slower, never wrong. Behind `k4a-mcp`, give `k4a-mcp`'s identity the union
+of what its callers may reach in the daemon's policy, and the per-person
+grants in `k4a-mcp`'s own.
 
 ## Networking
 
@@ -320,7 +364,7 @@ With `metrics.enabled` (default on in the chart, port `metrics.port`
 | `k4a_index_topic_newest_record_timestamp_seconds{topic}` | gauge | Newest indexed record; `time() -` this is staleness. |
 | `k4a_index_topic_stored_bytes{topic}` | gauge | Bytes the index holds (what `--topic-max-bytes` caps). |
 | `k4a_index_topic_pinned{topic}` | gauge | 1 for a `--topic` pin. |
-| `k4a_index_searches_total{outcome}` | counter | `served`, `warming`, `denied`, `error`. |
+| `k4a_index_searches_total{outcome}` | counter | `served`, `warming`, `denied` (not in `--allow`), `forbidden` (outside the caller's `--authz-policy` grant), `error`. |
 | `k4a_index_search_duration_seconds` | histogram | Latency of searches served from an index. |
 | `k4a_index_evictions_total{reason}` | counter | `cap`, `idle`, `disk_budget`, `tail_exit`. |
 

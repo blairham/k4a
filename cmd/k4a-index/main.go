@@ -81,6 +81,7 @@ type flags struct {
 	TLSKey        string        `long:"tls-key"                 env:"K4A_INDEX_TLS_KEY"                 description:"Server private key PEM file (with --tls-cert)"`
 	TLSClientCA   string        `long:"tls-client-ca"           env:"K4A_INDEX_TLS_CLIENT_CA"           description:"Require a client certificate signed by this CA on every RPC except health checks (mTLS; needs --tls-cert)"`
 	TokenFile     string        `long:"token-file"              env:"K4A_INDEX_TOKEN_FILE"              description:"File holding the bearer token every RPC except health checks must present. K4A_INDEX_TOKEN sets it directly."`
+	AuthzPolicy   string        `long:"authz-policy"            env:"K4A_INDEX_AUTHZ_POLICY"            description:"Per-caller authorization policy (YAML): maps client certificates and bearer tokens to the topics each caller may search and follow. Unset, every authenticated caller reaches every topic --allow admits (SECURITY.md)."`
 	MaxLimit      int           `long:"max-search-limit"        env:"K4A_INDEX_MAX_SEARCH_LIMIT"        description:"Most matches one Search returns; a larger or unset request limit is lowered to this and the answer reports capped."                                                                                                                                                                                                                     default:"10000"`
 	AdminListen   string        `long:"admin-listen"            env:"K4A_INDEX_ADMIN_LISTEN"            description:"Plain-HTTP address for /metrics (Prometheus), /healthz and /readyz, separate from the gRPC port. Empty disables it."`
 	FollowTopic   string        `long:"followset-topic"         env:"K4A_INDEX_FOLLOWSET_TOPIC"         description:"Compacted Kafka topic that holds the follow-set, shared by every pod and replica, so a new pod re-follows what the deployment followed and replicas converge (created compacted if absent). Needs read and write on it (and create, to create it). Empty keeps only the local file under --data-dir."`
@@ -270,11 +271,19 @@ func listenerAuth(f *flags) (endpointauth.ServerOptions, *tls.Config, error) {
 	if err != nil {
 		return endpointauth.ServerOptions{}, nil, err
 	}
+	policy, err := endpointauth.LoadPolicy(f.AuthzPolicy)
+	if err != nil {
+		return endpointauth.ServerOptions{}, nil, err
+	}
 	o := endpointauth.ServerOptions{
 		CertFile:     f.TLSCert,
 		KeyFile:      f.TLSKey,
 		ClientCAFile: f.TLSClientCA,
 		Token:        token,
+		Policy:       policy,
+	}
+	if perr := o.CheckPolicy(); perr != nil {
+		return endpointauth.ServerOptions{}, nil, perr
 	}
 	cfg, err := endpointauth.ServerTLS(o)
 	if err != nil {
@@ -296,6 +305,10 @@ func warnListenerExposure(o endpointauth.ServerOptions) {
 			"is terminated in front of it; set --tls-cert/--tls-key to serve TLS here")
 	case !o.Authenticated():
 		log.Warn("gRPC listener serves TLS but asks no caller credential: set --token-file or --tls-client-ca")
+	}
+	if o.Policy == nil && o.Authenticated() {
+		log.Info("no --authz-policy: every authenticated caller may search every followed topic and start " +
+			"follows within --allow")
 	}
 }
 
@@ -321,6 +334,7 @@ func logStartup(f *flags, lim startupLimits) {
 		"tls", lim.listener.TLSEnabled(),
 		"client_ca", lim.listener.ClientCAFile != "",
 		"token", lim.listener.Token != "",
+		"authz_policy", lim.listener.Policy != nil,
 		"max_search_limit", f.MaxLimit,
 		"data_dir", f.dataRoot(),
 		"auth", f.Auth,
@@ -371,6 +385,7 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 	srv, hs := newGRPCServer(lim)
 	is := newIndexServer(mgr)
 	is.maxLimit = f.MaxLimit
+	is.authz = endpointauth.Authorizer{Policy: lim.listener.Policy}
 	indexv1.RegisterIndexServer(srv, is)
 	warnListenerExposure(lim.listener)
 

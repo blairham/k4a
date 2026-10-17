@@ -1,0 +1,13 @@
+{{- if and .Values.listener.authz.policy (not .Values.listener.authz.existingConfigMap) }}
+# The per-caller authorization policy (--authz-policy). It holds token hashes,
+# never tokens, so a ConfigMap rather than a Secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "k4a-index.fullname" . }}-authz
+  labels:
+    {{- include "k4a-index.labels" . | nindent 4 }}
+data:
+  policy.yaml: |
+    {{- toYaml .Values.listener.authz.policy | nindent 4 }}
+{{- end }}

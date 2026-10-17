@@ -68,7 +68,8 @@ resources:
 # Caller authentication on the MCP HTTP listener. Off by default, which keeps
 # an upgraded install serving plaintext with no caller credential (k4a-mcp
 # logs a warning saying so). This authenticates "a caller holding the
-# deployment's credential"; it does not authorize per caller (SECURITY.md).
+# deployment's credential"; listener.authz below authorizes per caller
+# (SECURITY.md).
 listener:
   # Serve HTTPS from an existing kubernetes.io/tls Secret, mounted at
   # /etc/k4a/listener-tls; the probes switch to HTTPS. A renewed certificate
@@ -86,6 +87,28 @@ listener:
   token:
     existingSecret: ""
     key: token
+  # Per-caller authorization (--authz-policy, SECURITY.md). Off by default:
+  # every authenticated caller reaches every topic k4a-index answers for. Once a policy is set it is
+  # default-deny: a caller its entries do not name is refused, and a named
+  # caller reaches only the topics its entries grant. Give the policy inline
+  # (rendered into a ConfigMap; changing it rolls the pods) or name an
+  # existing ConfigMap holding it under `key`. The policy holds SHA-256 hashes
+  # of tokens, never the tokens. Certificate entries need
+  # listener.tls.clientCAKey; token entries replace listener.token. Example:
+  #   policy:
+  #     callers:
+  #       - name: payments-oncall
+  #         cert: {cn: payments-oncall}   # or san: ..., or subject: "CN=...,O=..."
+  #         search: ["payments.*"]
+  #         follow: ["payments.*"]
+  #       - name: ci
+  #         tokenSHA256: <sha256 of the token, e.g. printf %s "$TOKEN" | sha256sum>
+  #         search: ["telemetry.*"]
+  authz:
+    policy: {}
+    existingConfigMap: ""
+    key: policy.yaml
+
 
 # What k4a-mcp presents to k4a-index, for a k4a-index whose listener asks
 # for credentials (its listener.* values). Default: plaintext, no token.

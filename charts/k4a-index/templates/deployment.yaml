@@ -16,6 +16,11 @@ spec:
     metadata:
       labels:
         {{- include "k4a-index.labels" . | nindent 8 }}
+      {{- with .Values.listener.authz.policy }}
+      annotations:
+        # Roll the pods when the inline policy changes: it is read at startup.
+        checksum/authz-policy: {{ toYaml . | sha256sum }}
+      {{- end }}
     spec:
       serviceAccountName: {{ include "k4a-index.serviceAccountName" . }}
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
@@ -202,6 +207,14 @@ spec:
             - name: K4A_INDEX_TOKEN_FILE
               value: /etc/k4a/listener-token/{{ $.Values.listener.token.key }}
             {{- end }}
+            {{- if and .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+            {{- fail "listener.authz: set policy or existingConfigMap, not both" }}
+            {{- end }}
+            {{- if or .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+            # Per-caller authorization policy.
+            - name: K4A_INDEX_AUTHZ_POLICY
+              value: /etc/k4a/authz/{{ ternary .Values.listener.authz.key "policy.yaml" (not (empty .Values.listener.authz.existingConfigMap)) }}
+            {{- end }}
             - name: K4A_INDEX_LISTEN
               value: ":{{ .Values.service.port }}"
             - name: K4A_INDEX_DATA_DIR
@@ -274,6 +287,11 @@ spec:
               mountPath: /etc/k4a/listener-token
               readOnly: true
             {{- end }}
+            {{- if or .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+            - name: authz
+              mountPath: /etc/k4a/authz
+              readOnly: true
+            {{- end }}
       volumes:
         # Disposable index storage — rebuilt from the broker on restart.
         - name: index
@@ -298,5 +316,11 @@ spec:
         - name: listener-token
           secret:
             secretName: {{ . }}
+            defaultMode: 0440
+        {{- end }}
+        {{- if or .Values.listener.authz.policy .Values.listener.authz.existingConfigMap }}
+        - name: authz
+          configMap:
+            name: {{ .Values.listener.authz.existingConfigMap | default (printf "%s-authz" (include "k4a-index.fullname" .)) }}
             defaultMode: 0440
         {{- end }}

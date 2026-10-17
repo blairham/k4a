@@ -6,8 +6,10 @@
 // them: server TLS with an optional client CA (mTLS), and an optional shared
 // bearer token.
 //
-// It authenticates a caller as "someone holding the deployment's credential";
-// it does not authorize per caller. Every authenticated caller still reads
+// It authenticates a caller as "someone holding the deployment's credential"
+// and, when a Policy is configured, authorizes per caller: the caller's
+// certificate or token picks the topic globs it may search and follow
+// (authz.go). Without a policy every authenticated caller still reads
 // everything the daemon follows (SECURITY.md).
 package endpointauth
 
@@ -36,13 +38,37 @@ type ServerOptions struct {
 	ClientCAFile string
 	// Token is the bearer token callers must present; empty disables the check.
 	Token string
+	// Policy, when set, authorizes per caller (authz.go): a caller must match
+	// one of its entries, and handlers check the matched grant per topic.
+	Policy *Policy
 }
 
 // TLSEnabled reports whether the listener serves TLS.
 func (o ServerOptions) TLSEnabled() bool { return o.CertFile != "" }
 
 // Authenticated reports whether any caller credential is required.
-func (o ServerOptions) Authenticated() bool { return o.Token != "" || o.ClientCAFile != "" }
+func (o ServerOptions) Authenticated() bool {
+	return o.Token != "" || o.ClientCAFile != "" || o.Policy != nil
+}
+
+// CheckPolicy refuses a policy the listener could never satisfy as written:
+// certificate entries without a client CA to verify certificates against,
+// and per-caller tokens alongside the shared token (a request carries one
+// Authorization header, so it could not present both).
+func (o ServerOptions) CheckPolicy() error {
+	if o.Policy == nil {
+		return nil
+	}
+	if o.Policy.HasCertCallers() && o.ClientCAFile == "" {
+		return errors.New("the authorization policy names client certificates, but no client CA is set " +
+			"to verify them: set the listener's client CA (mTLS)")
+	}
+	if o.Policy.HasTokenCallers() && o.Token != "" {
+		return errors.New("the authorization policy names per-caller tokens, which replace the shared " +
+			"bearer token: drop the token file or the policy's tokenSHA256 entries")
+	}
+	return nil
+}
 
 // ServerTLS builds the listener's TLS config, or nil for plaintext.
 //
