@@ -38,15 +38,15 @@ type SearchFlags struct {
 	Path       string `          long:"path"                                             description:"JSON-path predicate on the key/value, e.g. '.order.status == \"failed\"' (scan-only)"`
 	Decode     string `          long:"decode"                                           description:"auto matches schema-registry payloads on their decoded JSON when a registry is configured; raw matches the bytes" default:"auto"      choice:"auto" choice:"raw"`
 	Format     string `          long:"format"                                           description:"Output format: text or json"                                                                                      default:"text"`
+	MaxBytes   string `          long:"max-bytes"                                        description:"With --archive: refuse or stop a query over this many bytes (overrides archive.max-bytes)"`
 	ConnectionFlags
 	Cap            int  `          long:"cap"                                              description:"Maximum matches (0 = library default)"`
 	CaseSensitive  bool `          long:"case-sensitive"                                   description:"Don't add (?i) prefix to the pattern"`
 	Quiet          bool `short:"q" long:"quiet"                                            description:"Suppress progress messages on stderr"`
 	SchemaRegistry SchemaRegistryFlags
-	MaxBytes      string `          long:"max-bytes"                                        description:"With --archive: refuse or stop a query over this many bytes (overrides archive.max-bytes)"`
-	Archive       bool   `          long:"archive"                                          description:"Search the topic's S3 archive with Athena instead of Kafka (needs --since and one exact topic, not a glob)"`
-	Explain       bool   `          long:"explain"                                          description:"With --archive: print the SQL and estimate prefixes, run nothing"`
-	Yes           bool   `short:"y" long:"yes"                                              description:"With --archive: run without asking, still refusing over max-bytes"`
+	Archive        bool `          long:"archive"                                          description:"Search the topic's S3 archive with Athena instead of Kafka (needs --since and one exact topic, not a glob)"`
+	Explain        bool `          long:"explain"                                          description:"With --archive: print the SQL and estimate prefixes, run nothing"`
+	Yes            bool `short:"y" long:"yes"                                              description:"With --archive: run without asking, still refusing over max-bytes"`
 }
 
 // formatSummary is the --format that buffers one JSON document.
