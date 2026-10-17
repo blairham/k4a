@@ -1,0 +1,80 @@
+name: Release Please
+
+# Every push to main updates one standing release pull request, "chore(main):
+# release X.Y.Z": release-please reads the Conventional Commit subjects since
+# the last release (each one a squash-merged PR title), works out the bump
+# (CONTRIBUTING.md), writes the version's CHANGELOG.md section and sets
+# `version` and `appVersion` in both charts (the lines marked
+# x-release-please-version). Merging that pull request is the release:
+# release-please tags it and creates the GitHub release, and the jobs below
+# publish the archives, images and charts.
+#
+# The token is a GitHub App's, not GITHUB_TOKEN: a pull request GITHUB_TOKEN
+# opens never triggers workflows, so the release PR's required checks would
+# never report and the main ruleset would block it forever. The App needs
+# contents, pull requests and issues (labels) write on this repository; its
+# client ID is the RELEASE_APP_CLIENT_ID variable and its key the
+# RELEASE_APP_PRIVATE_KEY secret.
+#
+# The release jobs are called from here rather than started by the tag: one
+# path to a release, and it does not depend on whether a tag created through
+# the API fires a push event for the token that created it.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release PR
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
+        with:
+          token: ${{ steps.app.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  release:
+    name: Release
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
+
+  charts:
+    name: Charts
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/chart.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag_name }}

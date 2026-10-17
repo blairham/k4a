@@ -488,22 +488,34 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   `scorecard.yml` run alongside. Every action is pinned by commit SHA with a
   `# vX.Y.Z` comment; Dependabot moves the pins, the Go modules (aws-sdk,
   franz-go, Charm and gRPC as groups) and the Dockerfile bases.
-- A **`v*` tag is what publishes**: `release.yml` calls `go-release.yml`,
-  which runs GoReleaser to publish `k4a` archives for Linux, macOS and
-  Windows (amd64, arm64), a cosign-signed `checksums.txt`, SLSA provenance
-  for the archives, the `k4a` formula in `blairham/homebrew-tap`, and the
-  multi-arch images `ghcr.io/blairham/k4a-index` and
-  `ghcr.io/blairham/k4a-mcp`, each signed and attested. The notes are the
-  tag's `CHANGELOG.md` section. The release refuses to publish when the
-  CHANGELOG has no section for the tag or either chart's `appVersion` does
-  not match it. `gh workflow run release.yml -f dry-run=true` builds it all
-  as a snapshot and publishes nothing.
-- The same tag runs `chart.yml` (`go-chart.yml`), which pushes `k4a-index`
-  and `k4a-mcp` to `oci://ghcr.io/blairham/charts/...` and signs each by
-  digest; it refuses unless both `version` and `appVersion` in each
-  `Chart.yaml` match the tag. Rerun it alone with
-  `gh workflow run chart.yml -f tag=<tag>`. Read
-  `.claude/commands/release-tag.md` before cutting a tag.
+- **Every pull request title is a Conventional Commit** (`feat:` minor,
+  `fix:` patch, `!` breaking — minor before 1.0; `docs:`/`ci:`/`build:`/
+  `refactor:`/`test:`/`chore:`/`style:` for nothing a user can see): the
+  required **PR title** check (`pr-title.yml`) fails anything else, and the
+  repository squash-merges with the title as the commit subject, so the title
+  *is* the changelog entry and the bump. See `CONTRIBUTING.md`.
+- **Merging release-please's release PR is what publishes.**
+  `release-please.yml` (on a GitHub App's token: `RELEASE_APP_CLIENT_ID`
+  variable, `RELEASE_APP_PRIVATE_KEY` secret — a PR opened with
+  `GITHUB_TOKEN` never triggers the required checks) keeps one release PR
+  open with the next version, its `CHANGELOG.md` section and both charts'
+  `version`/`appVersion` (the `x-release-please-version` lines;
+  `release-please-config.json`, `.release-please-manifest.json`). Never tag
+  by hand or edit the manifest. When it merges, release-please tags `vX.Y.Z`
+  and calls `release.yml` and `chart.yml`. `release.yml` calls
+  `go-release.yml`, which runs GoReleaser to publish `k4a` archives for
+  Linux, macOS and Windows (amd64, arm64), a cosign-signed `checksums.txt`,
+  SLSA provenance for the archives, the `k4a` formula in
+  `blairham/homebrew-tap`, and the multi-arch images
+  `ghcr.io/blairham/k4a-index` and `ghcr.io/blairham/k4a-mcp`, each signed
+  and attested. The notes are the tag's `CHANGELOG.md` section. The release
+  refuses to publish when the CHANGELOG has no section for the tag or either
+  chart's `appVersion` does not match it. `gh workflow run release.yml -f
+  dry-run=true` builds it all as a snapshot and publishes nothing.
+- `chart.yml` (`go-chart.yml`) pushes `k4a-index` and `k4a-mcp` to
+  `oci://ghcr.io/blairham/charts/...` and signs each by digest; it refuses
+  unless both `version` and `appVersion` in each `Chart.yaml` match the tag.
+  Rerun it alone with `gh workflow run chart.yml -f tag=<tag>`.
 - The go-vulncheck commit hook fails a commit whose module graph reaches a
   known vulnerability. `osv-scanner.toml` (read by osv-scanner and Scorecard's
   Vulnerabilities check) ignores only GO-2026-5932, the blanket x/crypto/openpgp

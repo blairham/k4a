@@ -7,14 +7,18 @@ name: Publish charts
 # the charts that install them. go-chart.yml refuses a chart whose `version`
 # or `appVersion` does not match the tag.
 #
-# A separate workflow, not a step in release.yml, so a tag that predates it
-# (or a push that failed) can be published by hand without re-running a
-# release whose GitHub release and images already exist:
+# release-please.yml calls it beside release.yml when the release pull request
+# merges. A separate workflow, not a step in release.yml, so a tag whose
+# charts failed can be published by hand without re-running a release whose
+# GitHub release and images already exist:
 #   gh workflow run chart.yml -f tag=v0.0.0
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag whose charts to publish (e.g. v0.1.0). Must already exist."
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
