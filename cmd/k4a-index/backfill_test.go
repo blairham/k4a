@@ -184,7 +184,7 @@ func TestRestartResumesPersistedFollowSet(t *testing.T) {
 
 	second := newManager(ctx, root, "test-cluster", client, mustPolicy(t, testTopic), cfg)
 	defer second.stopAll()
-	if n := second.restoreFollowSet(); n != 1 {
+	if n := second.restoreFollowSet(ctx); n != 1 {
 		t.Fatalf("restored %d topics, want 1", n)
 	}
 	w := second.lookup(testTopic)
@@ -217,13 +217,13 @@ func TestRestoreHonorsTodaysAllowlist(t *testing.T) {
 
 	second := newManager(ctx, root, "test-cluster", client, mustPolicy(t, topicA), managerConfig{})
 	defer second.stopAll()
-	if n := second.restoreFollowSet(); n != 1 || !second.followed(topicA) || second.followed(topicB) {
+	if n := second.restoreFollowSet(ctx); n != 1 || !second.followed(topicA) || second.followed(topicB) {
 		t.Errorf("restored %d; followed A=%v B=%v, want only A", n, second.followed(topicA), second.followed(topicB))
 	}
 
 	other := newManager(ctx, state.NewRoot(root.Path()), "another-cluster", client, mustPolicy(t, topicA), managerConfig{})
 	defer other.stopAll()
-	if n := other.restoreFollowSet(); n != 0 {
+	if n := other.restoreFollowSet(ctx); n != 0 {
 		t.Errorf("another cluster restored %d topics from this one's set", n)
 	}
 }
@@ -250,7 +250,7 @@ func TestStaleIndexStartsOver(t *testing.T) {
 
 	second := newManager(ctx, root, "test-cluster", client, mustPolicy(t, testTopic), cfg)
 	defer second.stopAll()
-	second.restoreFollowSet()
+	second.restoreFollowSet(ctx)
 	w := second.lookup(testTopic)
 	if w == nil {
 		t.Fatal("the persisted topic was not re-followed")

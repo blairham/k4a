@@ -11,8 +11,8 @@ deletable optimization") is preserved, not weakened.
 **Depends on:** [`deep-search.md`](deep-search.md) — the client keeps the
 scan path as the correctness floor; the service never replaces it.
 **Code:** `cmd/k4a-index/` (the daemon: `main.go`, `server.go`,
-`manager.go`, `worker.go`, `policy.go`) reusing `internal/index` +
-`internal/kafka` unchanged; `internal/remoteindex` (the client backend);
+`manager.go`, `worker.go`, `policy.go`, `followset.go`, `followstore.go`) reusing `internal/index`
+unchanged and `internal/kafka` (whose `keyedlog.go` holds the follow-set store); `internal/remoteindex` (the client backend);
 `internal/indexwire` (+ `proto/`) for the gRPC contract; `charts/k4a-index`
 for the deploy. The MCP frontend is `cmd/k4a-mcp` + `charts/k4a-mcp`.
 
@@ -168,9 +168,10 @@ Owns the set of topics currently being followed. Responsibilities:
   today's allowlist and only for topics used within `evictAfter`, restoring
   each LRU clock (`cmd/k4a-index/followset.go`). It survives what the
   indexes survive — a container restart, such as the drain-stall watchdog's
-  exit — and not a new pod's empty volume; cross-pod persistence is still
-  the open question below. This is metadata only — the *index* itself is
-  disposable.
+  exit — and not a new pod's empty volume. With `--followset-topic` the set
+  is also kept in a compacted Kafka topic that a new pod reads on startup and
+  every replica tails (see *Follow-set persistence across pods*). This is
+  metadata only — the *index* itself is disposable.
 - **LRU eviction.** A topic not searched within `evictAfter` (default
   **7 days**) is dropped. A Search, or a Follow of a topic already followed
   (the client scanned because coverage fell short), counts as use; a
@@ -419,12 +420,11 @@ resumes where it stopped; a new pod re-follows its pinned set and
 re-backfills, with a transient scan-fallback window while it warms. This deliberately sidesteps
 PVC lifecycle pain: for a service whose local state is authoritative,
 emptyDir loss is a correctness incident; here it is by-design disposable.
-The one durable bit — the follow-set metadata — is tiny; today it lives on
-the same volume, and the design leans on moving it *outside* the pod (a
-compacted Kafka topic, so it both persists and converges across replicas;
-see Open questions), so that a new pod could re-follow the set even on
-empty local storage. Worst case, even that is lost: the daemon
-forgets what to follow and re-learns on the next search.
+The one durable bit — the follow-set metadata — is tiny. It lives on the
+same volume, and with `--followset-topic` also *outside* the pod, in a
+compacted Kafka topic, so a new pod re-follows the set on empty local storage
+(see *Follow-set persistence across pods* below). Worst case, even that is
+lost: the daemon forgets what to follow and re-learns on the next search.
 
 **Sizing the volume — on-disk is ~3x the cap** (measured).
 `config.topicMaxBytes` bounds *stored* bytes, which is what the trimmer can
@@ -511,6 +511,90 @@ One consequence worth designing around, still open:
 - **Naming:** repo/module/binary stay `k4a` / `k4a-index`; everything
   deployed is `k4a-index`.
 
+## Follow-set persistence across pods (#123)
+
+**Decision: a compacted Kafka topic, opt-in with `--followset-topic`
+(`config.followSetTopic`), with the local file kept underneath it.** Code:
+`cmd/k4a-index/followstore.go` (the store and its entry format),
+`cmd/k4a-index/followset.go` (restore, publish, apply), and
+`internal/kafka/keyedlog.go` (a compacted topic read as a key-value table).
+
+The local file answers a container restart. It cannot answer the two cases
+this section is about: a **brand-new pod** (a reschedule, a node drain, an
+upgrade — each starts on an empty `emptyDir`) and a **replica set**, whose
+pods each learned their follow-set from the searches that happened to reach
+them. Before this, both fell back to `prefollow` plus re-learning, so after
+every rollout the first search of each on-demand topic was a scan again.
+
+**How it works.** Each entry is keyed by the followed topic, its value
+`{"v":1,"lastUse":<unix millis>}`; a tombstone means "no longer followed".
+
+- *Startup.* The daemon reads the topic to its current end, merges it with
+  the local file by the newer clock, and restores the union exactly as the
+  local file was restored before: through today's `--allow`, only topics used
+  within `evictAfter`, LRU clocks carried over. Then it tails the topic from
+  where the read stopped.
+- *Publishing.* Every registration, eviction and one-minute sweep wakes a
+  publisher that writes, off the request path, an entry for each followed
+  topic whose clock moved and a tombstone for each topic this replica stopped
+  following. Writes are at most one per topic per minute per replica. The
+  shutdown path makes one last write while the set is still whole, and never
+  writes tombstones for the shutdown itself.
+- *Applying.* A replica that reads an entry for an allowed, recently used
+  topic follows it too, with the entry's clock; for a topic it already
+  follows it moves the clock forward (never back, never into the future).
+  So registration on one replica warms every replica, and every replica ages
+  a topic out on its most recent use anywhere — their idle evictions line up
+  instead of one replica dropping a topic that is busy on another.
+- *Tombstones are not applied.* Each replica evicts on its own LRU and cap.
+  Acting on another replica's eviction would let two replicas at the cap
+  evict each other's topics back and forth: A drops X for Y, B (whose
+  coldest is W) re-asserts X, A follows X again and drops W, and so on. The
+  cost is that the store can briefly lack a topic one replica still follows;
+  that replica writes it back on its next use.
+- *Stale echoes.* A replica remembers the clock each topic had when it
+  dropped it, and ignores entries no newer — its own write read back after
+  an eviction, or another replica's equally old one. Only a genuinely newer
+  use brings a dropped topic back.
+- *Narrower replicas never delete others' entries.* At restore a replica
+  adopts as "already written" only the entries it now follows and the stale
+  ones (past `evictAfter`, which its first sync deletes). A fresh entry it
+  does not follow — another replica's wider `--allow`, or an index that
+  failed to open — is left alone.
+
+**Failure modes.** The store is an accelerator for the follow-set, which is
+itself an accelerator. If the topic cannot be opened at startup the daemon
+logs an error and keeps the local file only; it does not refuse to start. A
+failed read or write is logged and retried (the tail reconnects every 30s,
+the publisher on the next change). The worst case is what the design had
+before: a pod that re-learns its set from searches.
+
+**What it costs.** One more topic on the cluster the daemon already reads,
+and three grants on it for the daemon's identity: read, write, and describe
+(on MSK IAM, `kafka-cluster:ReadData`, `WriteData`, `DescribeTopic`), plus
+create unless an operator creates it with `cleanup.policy=compact` first.
+The producer runs with idempotence off — every write is a whole-value
+overwrite, so a duplicate is harmless — so it needs no cluster-level
+idempotent-write grant. **This is the one place the daemon writes to Kafka**,
+and it is opt-in: without `--followset-topic` it stays read-only. The topic
+holds topic names and timestamps, never record content; anyone who can
+write to it can make the daemon follow a topic, but only one `--allow`
+already admits, which is no more than any caller of the `Follow` RPC can do.
+
+**Alternatives considered.**
+
+| Option | Verdict | Why |
+|---|---|---|
+| **Compacted Kafka topic** | **Chosen** | Persists *and* converges: every replica writes and tails one log, so a follow on one pod warms all pods. Reuses the cluster and credentials the daemon already has — no new infrastructure, no new client library, no Kubernetes API access. Compaction bounds it to one entry per topic. |
+| ConfigMap | Rejected | Needs the Kubernetes API from the pod (a client library the daemon does not carry, a Role and RoleBinding to write a ConfigMap), and read-modify-write of one object from N replicas is a write race that wants optimistic-concurrency retries. A 1 MiB object cap is fine for names but the watch-and-merge logic would duplicate what a Kafka log gives for free. It also ties the daemon to Kubernetes, while `k4a-index` runs anywhere. |
+| Declarative seed in chart values | Already exists, not sufficient | That is `config.prefollow` (pinned topics). It covers the hot set an operator knows about, but not the demand-driven set, which is the whole point of on-demand follow; and it changes only with a deploy. It stays the right tool for "always warm". |
+| PVC for the data dir | Rejected | The index is disposable by design (*Storage* above); a PVC brings back the lifecycle pain this design avoids, and still does not converge replicas. |
+| Learn from searches only (the old behavior) | Kept as the fallback | No new grant, but every new pod and every replica re-learns from scratch; the default when `--followset-topic` is unset. |
+
+**Why off by default.** It needs new grants on the daemon's identity, and a
+chart upgrade must not turn a working install into one logging write errors.
+Set `config.followSetTopic` once the grant is in place.
+
 ## Availability model — fan-out replicas, not consensus
 
 HA here is **read-only fan-out replicas with Kafka as the replication
@@ -522,8 +606,10 @@ partition on its own with no group membership to rebalance and no
 per-replica group ACL to provision:
 
 - Any replica serves any query — there is nothing to fence. This service
-  never produces or writes anywhere but its own disposable index; it is pure
-  read, so there is no single-writer requirement and no leadership to elect
+  never produces or writes anywhere but its own disposable index (and, with
+  `--followset-topic`, the follow-set store, whose entries every replica
+  writes and merges without coordination); it is pure read for the data it
+  serves, so there is no single-writer requirement and no leadership to elect
   for correctness.
 - Lose a pod and the survivors are **already warm** — no promotion, no
   failover backfill, no election. That is the entire HA story.
@@ -589,6 +675,7 @@ the rare failover's N× backfill is even a problem.
 | Transport | **gRPC server-streaming** | REST request/response | Results already stream with progress; a coverage-frame-then-matches stream maps directly onto the existing channels |
 | Registration | **Demand-driven + allowlist** | Static config list | Zero-ceremony ("search it, it warms"); allowlist contains the security surface |
 | Storage | **emptyDir** | PVC | Index is rebuildable; disposable storage avoids all PVC lifecycle pain |
+| Follow-set across pods | **Compacted Kafka topic (opt-in)** | ConfigMap; chart-values seed | Persists and converges replicas on the cluster the daemon already reaches; a ConfigMap needs the Kubernetes API and races between replicas, and a seed cannot carry the demand-driven set |
 | Freshness | **Coverage frame, client tops up the tail** | Trust the daemon's index as current | Never serve stale as current; staleness worse than latency |
 | HA | **Fan-out replicas, Kafka as replication log** | Raft-replicated index | Index is reconstructable from the broker → consensus buys nothing; Raft is for state that *isn't* reconstructable |
 
@@ -734,11 +821,11 @@ fallback at every step, so nothing regresses if the daemon is absent.
   see *The tail workers* above. Before it, a new topic's coverage started at
   its first search.
 - **Follow-set persistence is per container** (#56): the set is saved beside
-  the indexes and restored on a container restart. **Cross-pod persistence
-  is NOT included** (still the open question below): each replica, and each
-  new pod, learns its follow-set from the searches it serves and self-heals;
-  the pinned pre-follow set covers new-pod warmth for the hot topics. A
-  compacted-topic follow-set is the convergence upgrade.
+  the indexes and restored on a container restart. **Cross-pod persistence**
+  (#123) is the opt-in compacted topic of *Follow-set persistence across
+  pods*; without it each replica, and each new pod, learns its follow-set
+  from the searches it serves, and the pinned pre-follow set covers new-pod
+  warmth for the hot topics.
 - **Ships:** "search it and it warms; idle topics fall out."
 
 ### Phase 3 — client remote backend (≈ half a week) — **IMPLEMENTED**
@@ -788,17 +875,8 @@ fallback at every step, so nothing regresses if the daemon is absent.
   may retain records compaction has since removed from the broker. For
   "did this ever happen?" that's a feature; the shared render must mark
   compacted-source hits so nobody reads them as current state.
-- **Follow-set persistence store — leaning compacted Kafka topic.** With
-  fan-out replicas the follow-set also wants to *converge* across pods, not
-  just persist. A **compacted Kafka topic** (`k4a-index.followset`) does
-  both: each daemon publishes "now following X" and all replicas consume
-  the union, so registration on one pod warms every pod, it survives
-  restarts, and it reuses Kafka as the coordination substrate a third time
-  — no ConfigMap write-races, no consensus. The fallback if that's
-  over-built: each replica learns independently from the searches it serves
-  and self-heals (a pod that never saw a search for X just follows X the
-  first time it does; client fallback covers the gap). Both beat a
-  ConfigMap; flag which for review.
+- ~~**Follow-set persistence store.**~~ *(Decided in #123.)* A compacted
+  Kafka topic, opt-in; see *Follow-set persistence across pods*.
 - **Backfill window default.** 24h / 1M records (`--backfill-window`, `--backfill-max-records`) is a guess. During incidents the
   interesting window may be longer; per-topic overrides (as in
   `local-index.md`'s retention config) probably belong here too.

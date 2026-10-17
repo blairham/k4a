@@ -143,6 +143,12 @@ searches over gRPC for anyone who can reach it.
   are written, as the consumer received them (after TLS, so decrypted), to an
   index under `--data-dir`. Protect that volume as you would the topics, and
   bound it with `--topic-max-bytes` and `--max-total-bytes`.
+- **It writes to Kafka only with `--followset-topic`.** Then it keeps the
+  follow-set (topic names and last-use times, never record content) in that
+  compacted topic and follows what it finds there. Whoever can write to the
+  topic can make every replica follow a topic, but only one `--allow`
+  already admits, which is no more than a `Follow` call can do; give that
+  write grant to the daemon's identity alone.
 - Its Kafka credentials and TLS options are the CLI's (above), including
   `--insecure` and `--no-tls`.
 
