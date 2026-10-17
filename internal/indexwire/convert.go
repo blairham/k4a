@@ -29,8 +29,9 @@ import (
 // state the caller stamps separately (they are not derivable from the book).
 func CoverageFromBookkeeper(b index.Bookkeeper) *indexv1.Coverage {
 	cov := &indexv1.Coverage{
-		Partitions: make([]*indexv1.PartitionCoverage, 0, len(b.NewestOffsetPerPartition)),
-		Decoder:    b.Decoder,
+		Partitions:    make([]*indexv1.PartitionCoverage, 0, len(b.NewestOffsetPerPartition)),
+		Decoder:       b.Decoder,
+		SchemaVersion: int32(b.SchemaVersion), //nolint:gosec // a small version number
 	}
 	for p, hiOff := range b.NewestOffsetPerPartition {
 		cov.Partitions = append(cov.Partitions, &indexv1.PartitionCoverage{
@@ -58,8 +59,10 @@ func CoverageFromBookkeeper(b index.Bookkeeper) *indexv1.Coverage {
 // (ByteSize, FirstIndexedAt, …) are left zero — they are not part of the
 // decision and must not be invented here.
 func BookkeeperFromCoverage(cov *indexv1.Coverage) index.Bookkeeper {
+	// The daemon's own version, not ours: CanServe asks whether that index
+	// holds field terms. 0 from a daemon predating the field.
 	b := index.Bookkeeper{
-		SchemaVersion:            index.SchemaVersion,
+		SchemaVersion:            int(cov.GetSchemaVersion()),
 		NewestOffsetPerPartition: make(map[int32]int64),
 		OldestOffsetPerPartition: make(map[int32]int64),
 		NewestTimePerPartition:   make(map[int32]int64),
@@ -95,6 +98,7 @@ func RequestToQueryParams(req *indexv1.SearchRequest) (index.QueryParams, error)
 		Partitions: req.GetPartitions(),
 		Limit:      int(req.GetLimit()),
 		Decoder:    req.GetDecoder(),
+		JSONPath:   req.GetPath(),
 	}
 	if p := req.GetPattern(); p != "" {
 		re, err := regexp.Compile(p)
@@ -119,6 +123,7 @@ func QueryParamsToRequest(topic string, params index.QueryParams) *indexv1.Searc
 		SinceMs:    timeToMS(params.Since),
 		UntilMs:    timeToMS(params.Until),
 		Decoder:    params.Decoder,
+		Path:       params.JSONPath,
 	}
 	if params.Pattern != nil {
 		req.Pattern = params.Pattern.String()

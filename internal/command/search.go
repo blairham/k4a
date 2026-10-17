@@ -35,7 +35,7 @@ type SearchFlags struct {
 	Since      string `          long:"since"                                            description:"Lower time bound (e.g., 1h, 24h, 7d) or RFC3339 timestamp"`
 	Until      string `          long:"until"                                            description:"Upper time bound (same format as --since)"`
 	Partitions string `short:"P" long:"partitions"                                       description:"Comma-separated partition IDs (default: all)"`
-	Path       string `          long:"path"                                             description:"JSON-path predicate on the key/value, e.g. '.order.status == \"failed\"' (scan-only)"`
+	Path       string `          long:"path"                                             description:"JSON-path predicate on the key/value, e.g. '.order.status == \"failed\"' or order.status:failed"`
 	Decode     string `          long:"decode"                                           description:"auto matches schema-registry payloads on their decoded JSON when a registry is configured; raw matches the bytes" default:"auto"      choice:"auto" choice:"raw"`
 	Format     string `          long:"format"                                           description:"Output format: text or json"                                                                                      default:"text"`
 	MaxBytes   string `          long:"max-bytes"                                        description:"With --archive: refuse or stop a query over this many bytes (overrides archive.max-bytes)"`
@@ -72,8 +72,11 @@ func (c *SearchCommand) Help() string {
   then exists (the default), ==, !=, <, <=, > or >= against a JSON string,
   number, true, false or null. It is evaluated on the key and value
   (not headers), compares numbers numerically and strings exactly, and a
-  record whose path is missing never matches, not even with !=. The index
-  cannot answer it, so it always scans the broker.
+  record whose path is missing never matches, not even with !=.
+  field:value is short for an equality: orderId:42 is .orderId == 42,
+  order.status:failed is .order.status == "failed" (the value is a JSON
+  scalar if it reads as one, else a string). An equality is answered from
+  an index when one covers the window; every other predicate scans.
 
   --topic may be a glob (*, ? and [...]; Kafka topic names cannot contain
   them): every topic it selects is searched, at most four at a time, each
@@ -167,6 +170,9 @@ Examples:
 
   # Last quarter, from the S3 archive (asks before a large scan)
   k4a search "order-41000017" -t orders --since 90d --archive --context production
+
+  # The same, as field:value (served from an index when one covers the hour)
+  k4a search --path order.status:failed -t orders --since 1h
 
   # Case-sensitive header search
   k4a search "X-Trace-Id" -t requests --scope key+value+headers --case-sensitive`

@@ -372,17 +372,42 @@ strings compare exactly (case-sensitive) and order bytewise. A comparison
 between different JSON types is never `<`/`>`/`==`, and is `!=`. **A missing
 path matches nothing, `!=` included** — `.status != "ok"` does not select
 records that have no status, unlike jq's `null != "ok"`. With a regex as
-well, both must match. Decoded (Schema Registry) values are not searched:
-that is the decoded-search follow-up.
+well, both must match. With a schema registry, a framed key or value is
+evaluated as its decoded JSON (schema-registry.md § *Search and the
+indexes*).
 
-**Scan-only, by construction.** The index holds analyzed terms of flattened
-text, so it can neither find every record whose structure matches nor prove
-one does not. `QueryParams.JSONPath` reaches `Bookkeeper.CanServe`, which
-declines first, before coverage — the same method the local dispatcher and
-`remoteindex` use, so neither can serve a path query. The result cache
-keys on the canonical path (`Expr.String`), so equivalent spellings share an
-entry. `k4a-mcp` has no scan: it filters the daemon's records by the path
-and reports `path_recall` (see shared-index-service.md).
+**`field:value` shorthand.** A predicate that does not start with `.` may be
+`name(.name)*:value`, short for an equality: `orderId:42` is
+`.orderId == 42`, `order.status:failed` is `.order.status == "failed"`. The
+value is a JSON scalar when it reads as one (`42`, `true`, `null`,
+`"quoted"`), else the rest as a string, so `id:007` is the string `"007"`
+and `flag:"true"` the string. It canonicalizes to the long form, so the two
+share a cache entry.
+
+**Equalities are index-served (Tier 5); everything else scans.** The index
+stores, beside the analyzed text, one keyword term per JSON scalar leaf of
+each key and value (`jsonpath.Terms`: canonical path, then a typed canonical
+value, numbers in exact binary at the comparison precision so `42`, `42.0`
+and `4.2e1` agree). An equality has exactly one term it could equal
+(`Expr.Term`), so `Bookkeeper.CanServe` serves it when coverage holds, and
+`Query` looks it up, then re-checks every candidate with `kafka.PathMatches`
+on the stored text, the scan's own rule. A key or value with more than 1024
+leaves gets only `jsonpath.PartialTerm`, which makes it a candidate for
+every path; a string leaf over 256 bytes gets no term, and an equality with
+a longer literal is declined. `!=`, the orderings and `exists` still decline
+(`ReasonJSONPathScanOnly`), as does any path against an index older than
+`index.FieldsSchemaVersion`, which a daemon reports as
+`Coverage.schema_version`. `FuzzTerms` is the recall proof: whenever `Match`
+holds for an indexable predicate, its term is among the document's. The
+result cache keys on the canonical path (`Expr.String`), so equivalent
+spellings share an entry. `k4a-mcp` still filters the daemon's records by
+the path itself and reports `path_recall` (see shared-index-service.md).
+
+Like the regex, the field terms come from the text the index stores. A key
+or value the display renders as `hex:` (invalid UTF-8 or a control byte)
+holds no terms, while a scan parses its bytes; Go's decoder accepts such
+JSON, so an index can miss a record a scan matches there. It is the same
+gap the regex has on those payloads.
 
 `FuzzParsePath` checks that any predicate that parses has a canonical form
 that re-parses to itself and matches exactly the same records.

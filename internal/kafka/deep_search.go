@@ -84,8 +84,9 @@ const (
 type SearchParams struct {
 	Pattern *regexp.Regexp
 	// Path is a JSON-path predicate evaluated on the key and/or value in
-	// scope, as decoded text when Decoder decodes them (never headers). The index cannot answer it exactly, so
-	// every index backend declines it and it is always scanned.
+	// scope, as decoded text when Decoder decodes them (never headers). An index answers it only when it is an
+	// equality (`.a.b == 42`, `a.b:42`), from its field terms; every other
+	// predicate scans.
 	Path *jsonpath.Expr
 	// Decoder, when set, matches a schema-registry framed key or value on
 	// its decoded text instead of its bytes. Every index backend serves only

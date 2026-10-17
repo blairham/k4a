@@ -388,8 +388,12 @@ or any topic that fails, exits 1.
 
 `--path` matches a JSON-path predicate on the key/value instead of (or,
 with a pattern, as well as) the regex — a jq-style path, then `exists` (the
-default), `==`, `!=`, `<`, `<=`, `>` or `>=` against a JSON scalar. It always
-scans the broker. In the TUI, type `path:` before the path in the search bar.
+default), `==`, `!=`, `<`, `<=`, `>` or `>=` against a JSON scalar.
+`field:value` is short for an equality: `orderId:42` is `.orderId == 42`,
+`order.status:failed` is `.order.status == "failed"`. An equality is answered
+from the local or shared index when one covers the window (each JSON key and
+value is indexed field by field); every other predicate scans the broker. In
+the TUI, type `path:` before the path in the search bar (`path:orderId:42`).
 
 | Flag | Description |
 |------|-------------|
@@ -398,7 +402,7 @@ scans the broker. In the TUI, type `path:` before the path in the search bar.
 | `--since` / `--until` | Time bounds — a duration (`1h`, `24h`, `7d`, `2w`) or an RFC3339 timestamp |
 | `-P`, `--partitions` | Comma-separated partition IDs (default: all) |
 | `--cap` | Maximum matches before stopping (`0` = the built-in 10,000 default) |
-| `--path` | JSON-path predicate, e.g. `'.items[0].qty >= 10'` (scan-only) |
+| `--path` | JSON-path predicate, e.g. `'.items[0].qty >= 10'`, or `field:value` (`orderId:42`); an equality is index-served |
 | `--case-sensitive` | Don't prepend `(?i)` to the pattern |
 | `--decode` | `auto` (default) matches registry-framed payloads as decoded JSON when a registry is configured; `raw` matches the bytes |
 | `--schema-registry-*` | The registry to decode with, over the context's `schema-registry:` block |

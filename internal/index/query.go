@@ -12,6 +12,7 @@ import (
 	"github.com/blevesearch/bleve/v2"
 	"github.com/blevesearch/bleve/v2/search/query"
 
+	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
 )
 
@@ -23,9 +24,9 @@ type QueryParams struct {
 	Since   time.Time
 	Until   time.Time
 	Pattern *regexp.Regexp
-	// JSONPath is the canonical text of a JSON-path predicate, or "". The
-	// index never serves one (CanServe declines), so only its presence
-	// matters here.
+	// JSONPath is the canonical text of a JSON-path predicate, or "". An
+	// equality (`.a.b == 42`, `a.b:42`) is answered from the field terms;
+	// CanServe declines every other predicate.
 	JSONPath string
 	// Decoder is the identity of the decoder the search's own scan would
 	// match with (kafka.SearchParams.DecoderIdentity), or "" for none.
@@ -35,8 +36,26 @@ type QueryParams struct {
 	Limit      int      // 0 = unlimited
 }
 
-// ReasonJSONPathScanOnly is CanServe's reason for declining a JSON-path query.
-const ReasonJSONPathScanOnly = "JSON path queries are scan-only"
+// ReasonJSONPathScanOnly is CanServe's reason for declining a JSON-path query
+// the field terms cannot answer.
+const ReasonJSONPathScanOnly = "only == JSON paths (field:value) are indexed; this one is scan-only"
+
+// ReasonNoFieldTerms is CanServe's reason for declining a JSON path against
+// an index (a daemon, in practice) built before field terms existed.
+const ReasonNoFieldTerms = "index predates field terms; JSON paths scan"
+
+// path parses JSONPath, nil when there is none or it does not parse (a
+// request from a client the index cannot vouch for; CanServe declines it).
+func (p QueryParams) path() *jsonpath.Expr {
+	if p.JSONPath == "" {
+		return nil
+	}
+	e, err := jsonpath.Parse(p.JSONPath)
+	if err != nil {
+		return nil
+	}
+	return e
+}
 
 // queryDefaultLimit caps how many hits we return from a single Query()
 // call. Matches the deep-search default match cap.
@@ -80,7 +99,12 @@ func (b Bookkeeper) CanServe(params QueryParams) (bool, string) {
 	// analyzed terms of flattened text: it can neither find every match nor
 	// prove a non-match, so the dispatcher must scan.
 	if params.JSONPath != "" {
-		return false, ReasonJSONPathScanOnly
+		if e := params.path(); e == nil || !e.Indexable() {
+			return false, ReasonJSONPathScanOnly
+		}
+		if b.SchemaVersion < FieldsSchemaVersion {
+			return false, ReasonNoFieldTerms
+		}
 	}
 	// The index holds text as its decoder rendered it. A search that would
 	// match other text (raw bytes, or another registry's decoding) must scan,
@@ -201,7 +225,8 @@ func (ix *Indexer) Query(ctx context.Context, params QueryParams) (QueryResult, 
 		return QueryResult{}, fmt.Errorf("indexer closed")
 	}
 
-	q := buildBleveQuery(params)
+	path := params.path()
+	q := buildBleveQuery(params, path)
 	limit := params.Limit
 	if limit <= 0 {
 		limit = queryDefaultLimit
@@ -227,7 +252,7 @@ func (ix *Indexer) Query(ctx context.Context, params QueryParams) (QueryResult, 
 
 	hits := make([]kafka.ConsumedMessage, 0, len(res.Hits))
 	for _, h := range res.Hits {
-		msg, ok := hitToConsumed(&bleveSearchHit{Fields: h.Fields}, topic, params.Pattern, params.Scopes)
+		msg, ok := hitToConsumed(&bleveSearchHit{Fields: h.Fields}, topic, params.Pattern, path, params.Scopes)
 		if !ok {
 			continue
 		}
@@ -239,8 +264,8 @@ func (ix *Indexer) Query(ctx context.Context, params QueryParams) (QueryResult, 
 // buildBleveQuery composes the Bleve query from the search params:
 // partition range filter ∩ time range filter ∩ regex on selected
 // text fields.
-func buildBleveQuery(params QueryParams) query.Query {
-	must := make([]query.Query, 0, 3)
+func buildBleveQuery(params QueryParams, path *jsonpath.Expr) query.Query {
+	must := make([]query.Query, 0, 4)
 
 	if len(params.Partitions) > 0 {
 		parts := make([]query.Query, 0, len(params.Partitions))
@@ -279,6 +304,10 @@ func buildBleveQuery(params QueryParams) query.Query {
 		must = append(must, bleve.NewDisjunctionQuery(shoulds...))
 	}
 
+	if q := pathQuery(path, params.Scopes); q != nil {
+		must = append(must, q)
+	}
+
 	if len(must) == 0 {
 		return bleve.NewMatchAllQuery()
 	}
@@ -295,7 +324,9 @@ func buildBleveQuery(params QueryParams) query.Query {
 // widened candidate pattern (case-folded, unanchored — see pattern.go), so
 // this is where precision — exact case, cross-token position, and scope —
 // is restored to match the scan path.
-func hitToConsumed(h *bleveSearchHit, topic string, re *regexp.Regexp, scopes []string) (kafka.ConsumedMessage, bool) {
+func hitToConsumed(
+	h *bleveSearchHit, topic string, re *regexp.Regexp, path *jsonpath.Expr, scopes []string,
+) (kafka.ConsumedMessage, bool) {
 	msg := kafka.ConsumedMessage{Topic: topic}
 
 	if v, ok := h.Fields[fieldPartition].(float64); ok {
@@ -320,6 +351,11 @@ func hitToConsumed(h *bleveSearchHit, topic string, re *regexp.Regexp, scopes []
 	}
 	if re != nil && !matchesScopes(re, &msg, scopes) {
 		// A candidate the exact regex doesn't actually match — drop.
+		return kafka.ConsumedMessage{}, false
+	}
+	// The scan's own rule on the stored text, so a partial document, or a
+	// term that only looked equal, is held to exactly what a scan returns.
+	if path != nil && !kafka.PathMatches(path, []byte(msg.Key), []byte(msg.Value), scopeMask(scopes)) {
 		return kafka.ConsumedMessage{}, false
 	}
 	return msg, true
@@ -408,4 +444,55 @@ func indexByte(s string, b byte) int {
 // bleve/search.DocumentMatch.
 type bleveSearchHit struct {
 	Fields map[string]any
+}
+
+// pathQuery is the candidate filter for an equality JSON path: documents
+// whose key or value (as scoped; headers hold no JSON documents here) has the
+// predicate's term, or that were too large to enumerate. Nil when there is no
+// path or it is not an equality, leaving the exact check to filter alone.
+func pathQuery(path *jsonpath.Expr, scopes []string) query.Query {
+	if path == nil {
+		return nil
+	}
+	term, ok := path.Term()
+	if !ok {
+		return nil
+	}
+	mask := scopeMask(scopes)
+	var fields []string
+	if mask&kafka.ScopeKey != 0 {
+		fields = append(fields, fieldKeyTerms)
+	}
+	if mask&kafka.ScopeValue != 0 {
+		fields = append(fields, fieldValTerms)
+	}
+	shoulds := make([]query.Query, 0, 2*len(fields))
+	for _, f := range fields {
+		for _, t := range []string{term, jsonpath.PartialTerm} {
+			tq := bleve.NewTermQuery(t)
+			tq.SetField(f)
+			shoulds = append(shoulds, tq)
+		}
+	}
+	return bleve.NewDisjunctionQuery(shoulds...)
+}
+
+// scopeMask turns the index's scope names back into the scan's bitmask; none
+// means key and value, as everywhere else.
+func scopeMask(scopes []string) kafka.SearchScope {
+	if len(scopes) == 0 {
+		return kafka.ScopeKey | kafka.ScopeValue
+	}
+	var m kafka.SearchScope
+	for _, s := range scopes {
+		switch s {
+		case fieldKey:
+			m |= kafka.ScopeKey
+		case fieldValue:
+			m |= kafka.ScopeValue
+		case fieldHeaders:
+			m |= kafka.ScopeHeaders
+		}
+	}
+	return m
 }

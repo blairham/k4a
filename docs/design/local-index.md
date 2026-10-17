@@ -2,13 +2,13 @@
 
 **Status:** shipped — `internal/index` exists and the index is opt-in via
 `index.enabled` in `~/.k4a/config.yaml`. The tier plan at the bottom is
-kept as the record of what shipped in which order; Tier 5 remains
-unbuilt, and Tier 6 shipped as archive search
-([`archive-search.md`](archive-search.md)). The shared deployment of the same machinery is
+kept as the record of what shipped in which order; Tier 5 shipped as
+equality JSON paths served from field terms (#116), and Tier 6 as archive
+search ([`archive-search.md`](archive-search.md)). The shared deployment of the same machinery is
 [`shared-index-service.md`](shared-index-service.md).
 **Depends on:** [`state-management.md`](state-management.md) — this design
 adds Tier 3 state per that doc's tiering model.
-**Code:** `internal/index/` (`index.go`, `query.go`, `pattern.go`,
+**Code:** `internal/jsonpath/terms.go` (field terms); `internal/index/` (`index.go`, `query.go`, `pattern.go`,
 `async.go`, `catchup.go`, `inventory.go`, `clear.go`); dispatch from
 `internal/tui/actions.go` and `internal/searchcache/wrap.go`; the scan
 floor in `internal/kafka/deep_search.go`.
@@ -119,6 +119,8 @@ type indexDoc struct {
     Key       string    `json:"key"`
     Value     string    `json:"value"`
     Headers   string    `json:"headers"`   // serialized "k=v\nk=v"
+    KeyFields   []string `json:"key_fields"`   // Tier 5: one term per JSON leaf
+    ValueFields []string `json:"value_fields"` // (keyword, indexed, not stored)
 }
 ```
 
@@ -188,7 +190,7 @@ Tracks:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "decoder": "schemareg/1:5f0c2a9e41d7b3c8",
   "newest_offset_per_partition": {"0": 12345678, "1": 12345012},
   "oldest_offset_per_partition": {"0": 12000000},
@@ -207,8 +209,8 @@ The dispatcher reads this on every search to decide coverage. The indexer
 writes it on every flush. `decoder` is the identity of the decoder the
 stored text came from, absent for none; `CanServe` serves only a search whose
 own decoder matches it, and opening an index with a different decoder
-rebuilds it (version 3 introduced the field, so every older index rebuilds
-once). Recovery: if state.json is corrupt, the indexer
+rebuilds it (version 3 introduced the field, and version 4 the field terms,
+so every older index rebuilds once). Recovery: if state.json is corrupt, the indexer
 rebuilds from the Bleve index directly (it has the data; the bookkeeper
 is just a cache).
 
@@ -326,11 +328,8 @@ dispatcher knows the new floor.
 
 ## What's intentionally NOT here (v1)
 
-- **Schema-aware field extraction.** `key:1234567` as a structured query
-  rather than a substring is Tier 5 (#116). The index stores raw bytes, or
-  with a registry the decoded JSON (#115), as one text field per key and
-  value; Bleve full-text catches "1234567" as a token within it, so the
-  common case still works.
+- **Field ranges.** `field:value` equality is Tier 5 (#116); ranges and
+  `!=` over a field still scan.
 - **A cross-topic index.** Indexes are per-topic. A cross-topic search
   (`-t 'orders.*'`, `:search orders.*`) asks each topic's index or scan in
   turn and reports coverage per topic (see deep-search.md); one query over a
@@ -423,14 +422,25 @@ behavior at any step.
 - **Ships:** users have control of disk usage; index isn't a runaway
   silent resource hog.
 
-### Tier 5 (optional) — Schema-aware field indexing (≈ 2–3 weeks)
-- Detect JSON values, parse, emit individual fields into Bleve as typed
-  fields
-- Search bar accepts `field:value` syntax (`orderId:1234567`,
-  `customerId:42`)
-- Topic-config UI for "treat this topic's values as JSON"
-- **Ships:** structured search on top of the substring search. Huge UX
-  win for users who know their schema.
+### Tier 5 — Schema-aware field indexing — **IMPLEMENTED** (#116)
+- Every key and value that is JSON (raw, or decoded by the schema
+  registry, #115) contributes one keyword term per scalar leaf to
+  `key_fields` / `value_fields` (`jsonpath.Terms`), indexed but not stored.
+  No per-topic opt-in: a value that is not JSON simply has no terms.
+- The query is the existing JSON-path predicate. Its equality, and the
+  `field:value` shorthand for it (`orderId:1234567`, `order.status:failed`),
+  is served from the index by one term lookup, then held to the scan's own
+  check (`kafka.PathMatches`) on the stored text. The CLI and MCP take it as
+  `--path` / `path`, and the TUI bar as `path:orderId:42`.
+- Recall is the contract, proved by `FuzzTerms`: a document an equality
+  matches always has that equality's term. Documents with more than 1024
+  leaves are marked partial and are candidates for every path; string
+  leaves over 256 bytes get no term, and equalities against them scan.
+- `!=`, orderings and `exists` still scan, as does any path against an
+  index older than schema version 4. A daemon reports its version in
+  `Coverage.schema_version`.
+- Not built: a topic-config toggle (no topic needs one) and typed numeric
+  range queries (`.total > 100` would need numeric fields per path).
 
 ### Tier 6 (optional) — External-sink integration (≈ 1–2 weeks)
 - Search an existing S3 archive of a topic (written by a sink connector,

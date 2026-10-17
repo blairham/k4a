@@ -107,7 +107,11 @@ func TestSearchParamsFor(t *testing.T) {
 	if _, err := searchParamsFor(`path:.order.status ==`); err == nil {
 		t.Error("an invalid path was searched as something else instead of reported")
 	}
-	for _, q := range []string{`path: /api/v1`, `order.status`} {
+	p, err = searchParamsFor(`path:orderId:42`)
+	if err != nil || p.Path == nil || p.Path.String() != `.orderId == 42` {
+		t.Errorf("field:value shorthand: Path=%v err=%v, want .orderId == 42", p.Path, err)
+	}
+	for _, q := range []string{`path: /api/v1`, `order.status`, `orderId:42`} {
 		p, err := searchParamsFor(q)
 		if err != nil || p.Path != nil || p.Pattern == nil {
 			t.Errorf("%q: Path=%v Pattern=%v err=%v, want a regex", q, p.Path, p.Pattern, err)

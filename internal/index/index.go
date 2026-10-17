@@ -39,6 +39,7 @@ import (
 	"github.com/blevesearch/bleve/v2/index/scorch"
 	"github.com/blevesearch/bleve/v2/mapping"
 
+	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/state"
 )
@@ -50,7 +51,20 @@ const (
 	// 3: a schema-registry framed key or value may be stored decoded, and
 	// the bookkeeper's decoder field says which decoding produced the text.
 	// A version 2 index never recorded one, so it cannot vouch for it.
-	SchemaVersion = 3
+	// 4: key_fields / value_fields hold a term per JSON scalar leaf, so an
+	// equality JSON path (Tier 5, `field:value`) is answered from the index.
+	SchemaVersion = 4
+
+	// FieldsSchemaVersion is the first version whose documents carry field
+	// terms. A shared daemon reports its version in coverage; one older than
+	// this cannot answer a JSON path, and an older daemon ignores the path in
+	// a request altogether, so CanServe declines rather than trust it.
+	FieldsSchemaVersion = 4
+
+	// maxFieldTerms bounds the field terms one key or value contributes. A
+	// document with more leaves gets only jsonpath.PartialTerm, which makes it
+	// a candidate for every path query; the exact check sorts it out.
+	maxFieldTerms = 1024
 
 	// bookkeeperFile is the per-topic state file inside the index dir.
 	bookkeeperFile = "state.json"
@@ -63,17 +77,19 @@ const (
 // as text for full-text search; offset/partition/timestamp are stored
 // (and queryable) for filtering by time range or partition.
 //
-// We deliberately keep this shape simple in v1 — no schema-aware JSON
-// field extraction. That's a v2 follow-up per the design doc's "Phase F
-// schema-aware indexing" section.
+// KeyFields and ValueFields are the jsonpath.Terms of the key and value
+// text (Tier 5): indexed, never stored, so an equality JSON path finds its
+// candidates by one term lookup.
 type Doc struct {
-	Timestamp time.Time `json:"timestamp"`
-	Topic     string    `json:"topic"`
-	Key       string    `json:"key,omitempty"`
-	Value     string    `json:"value,omitempty"`
-	Headers   string    `json:"headers,omitempty"`
-	Offset    int64     `json:"offset"`
-	Partition int32     `json:"partition"`
+	Timestamp   time.Time `json:"timestamp"`
+	Topic       string    `json:"topic"`
+	Key         string    `json:"key,omitempty"`
+	Value       string    `json:"value,omitempty"`
+	Headers     string    `json:"headers,omitempty"`
+	KeyFields   []string  `json:"key_fields,omitempty"`
+	ValueFields []string  `json:"value_fields,omitempty"`
+	Offset      int64     `json:"offset"`
+	Partition   int32     `json:"partition"`
 }
 
 // Bleve field names. They are Doc's JSON names, which is how a Doc's fields
@@ -84,6 +100,8 @@ const (
 	fieldKey       = "key"
 	fieldValue     = "value"
 	fieldHeaders   = "headers"
+	fieldKeyTerms  = "key_fields"
+	fieldValTerms  = "value_fields"
 	fieldOffset    = "offset"
 	fieldPartition = "partition"
 )
@@ -473,13 +491,15 @@ func (ix *Indexer) IndexBatch(ctx context.Context, msgs []kafka.ConsumedMessage)
 	seen := make(map[string]struct{}, len(msgs))
 	for _, m := range msgs {
 		doc := Doc{
-			Topic:     m.Topic,
-			Key:       m.Key,
-			Value:     m.Value,
-			Headers:   serializeHeaders(m.Headers),
-			Timestamp: m.Time,
-			Partition: int32(m.Partition), //nolint:gosec // partition IDs fit in int32
-			Offset:    m.Offset,
+			Topic:       m.Topic,
+			Key:         m.Key,
+			Value:       m.Value,
+			Headers:     serializeHeaders(m.Headers),
+			KeyFields:   fieldTerms(m.Key),
+			ValueFields: fieldTerms(m.Value),
+			Timestamp:   m.Time,
+			Partition:   int32(m.Partition), //nolint:gosec // partition IDs fit in int32
+			Offset:      m.Offset,
 		}
 		id := DocID(doc.Partition, doc.Offset)
 		if err := batch.Index(id, doc); err != nil {
@@ -526,6 +546,13 @@ func (ix *Indexer) countsTowardByteSizeLocked(id string, part int32, offset int6
 	// dropped on overflow).
 	d, err := ix.idx.Document(id)
 	return err != nil || d == nil
+}
+
+// fieldTerms is the field terms of one key or value: the text the index
+// stores, which is what the exact JSON-path check runs on too.
+func fieldTerms(text string) []string {
+	terms, _ := jsonpath.Terms([]byte(text), maxFieldTerms)
+	return terms
 }
 
 // payloadBytes estimates the stored payload size of one indexed record — the
@@ -671,6 +698,14 @@ func buildMapping() mapping.IndexMapping {
 	doc.AddFieldMappingsAt(fieldKey, textField)
 	doc.AddFieldMappingsAt(fieldValue, textField)
 	doc.AddFieldMappingsAt(fieldHeaders, textField)
+	// Field terms are looked up whole and never returned, so they are
+	// keywords and not stored.
+	termField := bleve.NewKeywordFieldMapping()
+	termField.Store = false
+	termField.IncludeInAll = false
+	termField.DocValues = false
+	doc.AddFieldMappingsAt(fieldKeyTerms, termField)
+	doc.AddFieldMappingsAt(fieldValTerms, termField)
 	doc.AddFieldMappingsAt(fieldTimestamp, dateField)
 	doc.AddFieldMappingsAt(fieldPartition, numField)
 	doc.AddFieldMappingsAt(fieldOffset, numField)

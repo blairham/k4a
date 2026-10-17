@@ -174,7 +174,8 @@ func (c *MCPCommand) Run(args []string) int {
 			Name: "search",
 			Description: "Search a Kafka topic for records matching a regex " +
 				"(or literal substring on regex parse failure) and/or a JSON-path " +
-				"predicate (path, e.g. .order.status == \"failed\"; always a scan). Matching is " +
+				"predicate (path, e.g. .order.status == \"failed\" or order.status:failed; an == is " +
+				"index-served, others scan). Matching is " +
 				"grep-style — the pattern can hit anywhere inside the " +
 				"key/value/headers, a schema-registry framed key or value as its " +
 				"decoded JSON when a registry is configured — regardless of whether the answer is served " +
@@ -220,7 +221,7 @@ func isCleanShutdown(ctx context.Context, err error) bool {
 type mcpSearchInput struct {
 	Topic         string  `json:"topic"                    jsonschema:"name of the Kafka topic to search (required)"`
 	Query         string  `json:"query,omitempty"          jsonschema:"regex pattern OR literal substring; falls back to literal on regex parse failure. Required unless path is set; with path, both must match"`
-	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the key/value (a schema-registry framed one as its decoded JSON), jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. Always answered by a broker scan, never the index"`
+	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the key/value (a schema-registry framed one as its decoded JSON), jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. field:value (orderId:42) is short for ==. An == is answered from an index when one covers the window; every other predicate scans"`
 	Since         string  `json:"since,omitempty"          jsonschema:"lower time bound; relative duration like 24h/7d or RFC3339 timestamp"`
 	Until         string  `json:"until,omitempty"          jsonschema:"upper time bound; same format as since"`
 	Scope         string  `json:"scope,omitempty"          jsonschema:"match scope: key, value, key+value (default), or key+value+headers"`

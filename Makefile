@@ -65,6 +65,7 @@ fuzz: ## Run each fuzz target for FUZZTIME (default 30s)
 	go test ./internal/kafka -run '^$$' -fuzz '^FuzzParseTopicSchema$$' -fuzztime $(or $(FUZZTIME),30s)
 	go test ./internal/schemareg -run '^$$' -fuzz '^FuzzParseWire$$' -fuzztime $(or $(FUZZTIME),30s)
 	go test ./internal/jsonpath -run '^$$' -fuzz '^FuzzParsePath$$' -fuzztime $(or $(FUZZTIME),30s)
+	go test ./internal/jsonpath -run '^$$' -fuzz '^FuzzTerms$$' -fuzztime $(or $(FUZZTIME),30s)
 
 .PHONY: vet
 vet: ## go vet
