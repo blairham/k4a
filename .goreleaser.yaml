@@ -62,6 +62,22 @@ builds:
       - -X github.com/blairham/k4a/internal/version.Version={{.Version}}
       - -X github.com/blairham/k4a/internal/version.Commit={{.Commit}}
       - -X github.com/blairham/k4a/internal/version.Date={{.Date}}
+  # /bin/sh for the images only: the gated shell (cmd/sh). Linux only, and in
+  # no archive or formula; it exists to be copied into both containers.
+  - id: sh
+    binary: sh
+    main: ./cmd/sh
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
 
 archives:
   - id: k4a
@@ -99,6 +115,7 @@ dockers_v2:
   - id: k4a-index
     ids:
       - k4a-index
+      - sh
     images:
       - ghcr.io/blairham/k4a-index
     dockerfile: Dockerfile
@@ -124,6 +141,7 @@ dockers_v2:
   - id: k4a-mcp
     ids:
       - k4a-mcp
+      - sh
     images:
       - ghcr.io/blairham/k4a-mcp
     dockerfile: Dockerfile
