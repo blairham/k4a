@@ -1,0 +1,94 @@
+name: PR title
+
+# The pull request title is the changelog entry and the version bump: a squash
+# merge makes it the commit subject on main (the repository's squash title is
+# set to PR_TITLE, so a one-commit PR cannot slip its own subject in instead),
+# and release-please reads the bump from it (CONTRIBUTING.md). So the title
+# must be a Conventional Commit — `feat(builds): …`, `fix: …`, `feat!: …` —
+# and this check, required by the main ruleset, fails one that is not.
+#
+# On release-please's own pull request it also re-checks every commit the
+# release would carry. release-please skips a subject it cannot parse without
+# a word, so a commit that reached main some other way would silently miss the
+# changelog and the bump; here it fails the release instead, naming the commit.
+#
+# Gate steps, never the job: a required check whose job is skipped never
+# reports and stays pending forever.
+on:
+  pull_request:
+    # `edited` re-runs the check when only the title changes.
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read # the merged PR behind each commit, for its override block
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # One definition for both steps. The types are the Conventional Commits set;
+  # which of them appear in the changelog is release-please-config.json's.
+  CONVENTIONAL: '^(feat|fix|perf|revert|docs|ci|build|refactor|test|chore|style)(\([[:alnum:]_./-]+\))?!?: [^[:space:]]'
+
+jobs:
+  title:
+    name: PR title
+    runs-on: ubuntu-latest
+    steps:
+      - name: The title is a Conventional Commit
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          # Dependabot titles its PRs "Bump …" until the baseline's
+          # dependabot.yml gives it a commit-message prefix.
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then
+            echo "::notice::dependabot pull request; title not checked"
+            exit 0
+          fi
+          if ! printf '%s' "$TITLE" | grep -Eq "$CONVENTIONAL"; then
+            echo "::error::the title must be a Conventional Commit: 'feat(scope): …' (minor), 'fix: …' (patch), 'feat!: …' (breaking), or docs/ci/build/refactor/test/chore/style for a change nobody using k4a can see. See CONTRIBUTING.md."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: startsWith(github.head_ref, 'release-please--')
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Every commit in the release is a Conventional Commit
+        if: startsWith(github.head_ref, 'release-please--')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --tags origin main
+          # The range is what this release carries: since the last tag, or —
+          # before the first release-please release — since release-please was
+          # set up, so the history before it is not held to a rule it predates.
+          tag="$(git describe --tags --abbrev=0 --match 'v*' origin/main)"
+          setup="$(git log --format=%H --diff-filter=A -1 origin/main -- release-please-config.json)"
+          if git merge-base --is-ancestor "$setup" "$tag"; then base="$tag"; else base="$setup^"; fi
+
+          bad=0
+          while IFS=$'\t' read -r sha author subject; do
+            [ "$author" = "dependabot[bot]" ] && continue
+            printf '%s' "$subject" | grep -Eq "$CONVENTIONAL" && continue
+            # release-please's own fix for a bad subject: edit the merged PR's
+            # body to carry the messages it should have had, between
+            # BEGIN_COMMIT_OVERRIDE and END_COMMIT_OVERRIDE, one per line.
+            override="$(gh api "repos/$REPO/commits/$sha/pulls" -q '.[0].body // ""' |
+              tr -d '\r' | sed -n '/^BEGIN_COMMIT_OVERRIDE$/,/^END_COMMIT_OVERRIDE$/p' |
+              sed '1d;$d' | grep -v '^[[:space:]]*$' || true)"
+            if [ -n "$override" ] && ! printf '%s\n' "$override" | grep -Evq "$CONVENTIONAL"; then
+              continue
+            fi
+            echo "::error::${sha:0:7} \"$subject\" is not a Conventional Commit, so release-please leaves it out of this release. Edit its merged pull request's body to add a BEGIN_COMMIT_OVERRIDE block (CONTRIBUTING.md), then re-run this check."
+            bad=1
+          done < <(git log --format='%H%x09%an%x09%s' "$base..origin/main")
+          exit "$bad"

@@ -39,7 +39,7 @@ jobs:
     name: Changes
     uses: blairham/.github/.github/workflows/go-changes.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
 
-  # Build only; a v* tag publishes (release.yml). Both images, one after the
+  # Build only; the release publishes (release.yml). Both images, one after the
   # other: the second shares the build stage, so it is mostly cache.
   image:
     name: Image

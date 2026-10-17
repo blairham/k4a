@@ -27,6 +27,6 @@ whether this change updates it.
 ---
 
 - [ ] I have signed the CLA (see CLA.md)
-- [ ] CHANGELOG.md has an entry under [Unreleased]
+- [ ] The title is a Conventional Commit (`feat:`, `fix:`, `feat!:`, `docs:` …) — it becomes the changelog entry
 
 Closes #
