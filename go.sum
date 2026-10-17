@@ -136,6 +136,8 @@ github.com/bits-and-blooms/bitset v1.24.6 h1:qcrftZUVBIwfs+m+nhoCBAPT+ZPZZjti8Sb
 github.com/bits-and-blooms/bitset v1.24.6/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/bkielbasa/cyclop v1.2.3 h1:faIVMIGDIANuGPWH031CZJTi2ymOQBULs9H21HSMa5w=
 github.com/bkielbasa/cyclop v1.2.3/go.mod h1:kHTwA9Q0uZqOADdupvcFJQtp/ksSnytRMe8ztxG8Fuo=
+github.com/blairham/sh v0.0.36 h1:UotRYLmw8DG4lkaCP6jB+uzx1AuKQm17wLQ7b4yCBLc=
+github.com/blairham/sh v0.0.36/go.mod h1:eZlpy8Q8EujBYRiYQtrtWAaIhGIcHcJn1FQCfXOj/gA=
 github.com/blairham/tuikit v0.0.24 h1:SLwbhu43N2fEeZD4f+IQgMlXqWeb5F793wbIrtWvK4o=
 github.com/blairham/tuikit v0.0.24/go.mod h1:IFkrgO1h3dmbbMxOhFigo0/zAc73As1iCMBI0mLksMk=
 github.com/blevesearch/bleve/v2 v2.6.1 h1:47vLskRTqxvQEtxVPYHjf5KpOgzD2msslXFjvUQCgWQ=

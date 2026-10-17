@@ -37,6 +37,8 @@ cmd/
   k4a-index/         # Shared index daemon (gRPC): server, follow-set manager,
                      # tail workers, the --allow policy
   k4a-mcp/           # MCP server over the daemon (streamable HTTP)
+  sh/                # /bin/sh in both images: the gated shell (blairham/sh/gated);
+                     # cannot exec, reads only /proc and /sys/fs/cgroup
 internal/
   app/               # The one subcommand table (hashicorp/cli), shared by both entry points
   awscreds/          # AWS shared-config loading for a named profile + the SSO login hint
@@ -525,6 +527,7 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - `jessevdk/go-flags` — CLI flag parsing; `hashicorp/cli` — subcommand framework
 - `twmb/franz-go/pkg/sr`, `linkedin/goavro/v2`, `bufbuild/protocompile` — Schema Registry client, Avro decoding, Protobuf schema compilation (`internal/schemareg`; see `docs/design/schema-registry.md`)
 - `zalando/go-keyring` — OS keychain for context secrets (`internal/secrets`); tests use `secrets.NewMemory`, never the real keychain
+- `blairham/sh` (`gated` only) — the gated `/bin/sh` in both images (`cmd/sh`); standard library only at runtime
 - `golang.org/x/mod/semver` — version comparison for `k4a upgrade`, which is otherwise standard library (`internal/upgrade/release.go`)
 
 ## Testing

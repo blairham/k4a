@@ -17,10 +17,12 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     export CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH && \
     go build -trimpath -ldflags "-s -w -X github.com/blairham/k4a/internal/version.Version=${VERSION}" -o /out/k4a-index ./cmd/k4a-index && \
-    go build -trimpath -ldflags "-s -w -X github.com/blairham/k4a/internal/version.Version=${VERSION}" -o /out/k4a-mcp ./cmd/k4a-mcp
+    go build -trimpath -ldflags "-s -w -X github.com/blairham/k4a/internal/version.Version=${VERSION}" -o /out/k4a-mcp ./cmd/k4a-mcp && \
+    go build -trimpath -ldflags="-s -w" -o /out/sh ./cmd/sh
 
 # The distroless `nonroot` variant runs as uid 65532 and carries system CAs,
-# which the TLS handshake with the brokers needs.
+# which the TLS handshake with the brokers needs. Nothing else is copied in:
+# the only binaries are the daemon and the gated /bin/sh below.
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime
 LABEL org.opencontainers.image.source="https://github.com/blairham/k4a" \
       org.opencontainers.image.licenses="Apache-2.0"
@@ -45,14 +47,21 @@ ENTRYPOINT ["/usr/local/bin/k4a-mcp"]
 FROM index-runtime AS index-release
 ARG TARGETOS TARGETARCH
 COPY ${TARGETOS}/${TARGETARCH}/k4a-index /usr/local/bin/k4a-index
+# /bin/sh is a GATED shell (cmd/sh), not a general one: it cannot exec,
+# signal or write anything, and reads only /proc and /sys/fs/cgroup, with
+# /proc/*/environ refused. See github.com/blairham/sh gated/README.md.
+COPY ${TARGETOS}/${TARGETARCH}/sh /bin/sh
 
 FROM mcp-runtime AS mcp-release
 ARG TARGETOS TARGETARCH
 COPY ${TARGETOS}/${TARGETARCH}/k4a-mcp /usr/local/bin/k4a-mcp
+COPY ${TARGETOS}/${TARGETARCH}/sh /bin/sh
 
 # Built from source: `docker build --target index .` / `--target mcp`.
 FROM index-runtime AS index
 COPY --from=build /out/k4a-index /usr/local/bin/k4a-index
+COPY --from=build /out/sh /bin/sh
 
 FROM mcp-runtime AS mcp
 COPY --from=build /out/k4a-mcp /usr/local/bin/k4a-mcp
+COPY --from=build /out/sh /bin/sh
