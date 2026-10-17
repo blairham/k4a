@@ -289,6 +289,7 @@ func toQueryParams(p kafka.SearchParams) index.QueryParams {
 		Until:      p.Until,
 		Partitions: p.Partitions,
 		Limit:      p.EffectiveCap(),
+		Decoder:    p.DecoderIdentity(),
 	}
 	scope := p.Scope
 	if scope == 0 {

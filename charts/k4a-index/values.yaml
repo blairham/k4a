@@ -110,6 +110,21 @@ aws:
   # to us-east-1 otherwise.
   region: ""
 
+# Confluent Schema Registry. With a url, the daemon indexes registry-framed
+# Avro, Protobuf and JSON-Schema keys and values as their decoded JSON, and
+# serves a client's search only when the client decodes with the same
+# registry (its context's schema-registry block): every other search scans.
+# Credentials, HTTP basic (usernameKey + passwordKey) or a bearer token
+# (tokenKey), come from an existing Secret; set one kind, not both. The
+# registry's certificate must chain to the system roots. Rendered as
+# K4A_SCHEMA_REGISTRY_*.
+schemaRegistry:
+  url: ""
+  existingSecret: ""
+  usernameKey: ""
+  passwordKey: ""
+  tokenKey: ""
+
 # Rendered as K4A_INDEX_LOG_LEVEL: debug, info, warn, error.
 logLevel: info
 

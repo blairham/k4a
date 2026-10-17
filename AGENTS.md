@@ -408,8 +408,10 @@ nested `keychain:` block (`password`, `oauth-token`, `oauth-client-secret`:
 OS keychain accounts under service `k4a`, written by `k4a set-credential
 CONTEXT [--field F]` and removed by `delete-credential`), and the
 nested `schema-registry:` block (`url`, `username`, `password`, `token`, `ca`),
-overridden by `--schema-registry-*` on `ui` and `consume` (see
-`docs/design/schema-registry.md`).
+overridden by `--schema-registry-*` on `ui`, `consume`, `search`, `mcp` and
+`k4a-index` (see `docs/design/schema-registry.md`). With a registry, search
+matches decoded text, and an index serves only a search that decodes with
+the same registry identity (`Bookkeeper.Decoder`, `Coverage.decoder`).
 
 The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,
@@ -454,7 +456,7 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - **Async enrichment pattern**: Expensive data (topic message counts, group lag/coordinator) is fetched asynchronously after the initial metadata load, following the `TopicCountsMsg` / `GroupEnrichmentMsg` pattern. Data is preserved across 2-second refresh cycles.
 - **Batched ListOffsets**: High watermarks for lag calculation use a single batched `ListOffsets` call instead of per-partition TCP dials.
 - **The index is an accelerator, never the source of truth.** `internal/index/pattern.go` decides whether a regex can be answered from analyzed terms with full recall; anything it cannot prove goes to a scan. `isTokenRune` asks the index's own tokenizer rather than modeling UAX#29, and text fields use `textAnalyzer` (`internal/index/analyzer.go`): Bleve's standard analyzer with a lowercase filter that does not corrupt terms. A change to the analyzer bumps `SchemaVersion`, which rebuilds existing indexes.
-- **Coverage parity**: `internal/indexwire` round-trips exactly the fields `Bookkeeper.CanServe` reads, so a client makes the same index-vs-scan decision against a daemon's coverage as against its local index.
+- **Coverage parity**: `internal/indexwire` round-trips exactly the fields `Bookkeeper.CanServe` reads, so a client makes the same index-vs-scan decision against a daemon's coverage as against its local index. That includes the decoder identity: the scan and the indexer decode framed records with the same `kafka.RecordDecoder`, and an index built with another decoder (or none) never serves the search.
 
 ## CI/CD
 

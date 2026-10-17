@@ -1,7 +1,7 @@
 # Design: Filter and search across a topic
 
 **Status:** shipped
-**Code:** `internal/tui/views/messages.go`, `internal/tui/views/search.go`, `internal/tui/views/search_topics.go`, `internal/tui/search_view.go`, `internal/kafka/deep_search.go`, `internal/kafka/multi_search.go`, `internal/command/search.go`, `internal/command/search_topics.go`, `internal/searchcli/`, `internal/jsonpath/`
+**Code:** `internal/tui/views/messages.go`, `internal/tui/views/search.go`, `internal/tui/views/search_topics.go`, `internal/tui/search_view.go`, `internal/kafka/deep_search.go`, `internal/kafka/decoder.go`, `internal/kafka/multi_search.go`, `internal/command/search.go`, `internal/command/search_topics.go`, `internal/searchcli/`, `internal/jsonpath/`
 
 ## Purpose
 
@@ -122,6 +122,16 @@ and used as a `bytes.Contains` necessary-condition gate before the full
 regex engine runs. Common substring searches (`foo`, `^foo.*bar`) skip
 the regex engine entirely on the negative case.
 
+With a schema registry configured (`SearchParams.Decoder`), a record whose
+key or value could be registry framed (a leading zero byte, or a schema-ID
+header) is decoded first and the decoded key or value is matched as text,
+the text Messages shows and the indexes store; the prefilter applies to it
+unchanged, since a match contains its literal prefix whatever it is matched
+against. Every other record, and every field that did not decode, is
+matched on its bytes, so a topic without registry framing pays nothing.
+The JSON-path predicate reads the same decoded text. See
+[`schema-registry.md`](schema-registry.md) § *Search and the indexes*.
+
 ### 4. Big fetch batches
 
 Scan readers hard-code MinBytes=1 MiB, MaxBytes=10 MiB, MaxWait=100 ms —
@@ -195,6 +205,7 @@ type SearchParams struct {
     Until       time.Time     // zero = no upper bound
     Partitions  []int32       // nil = all
     Cap         int           // 0 = default 10,000
+    Decoder     RecordDecoder // nil = match the bytes as consumed
 }
 ```
 
@@ -226,6 +237,7 @@ each partition (because of reverse-chunked scan). We do not buffer-and-sort.
 | Failure | Behavior |
 |---|---|
 | Chunk cannot be fully read | `DeepSearchProgress.Truncated` is set; header/CLI say `INCOMPLETE`, and the result is **not** written to the query cache. A scan that ends short must never look like a clean completion |
+| Schema registry cannot answer for a framed record (search with a decoder) | The record is matched on its bytes and `Truncated` is set, as for a short read: once the registry answers, the same search may match it decoded, so this result is neither cached nor presented as complete |
 | Auth error mid-search | abort scan, show formatted error in header, keep already-found matches visible |
 | One partition unreachable | that partition's worker exits; others continue. Header: `scanned 11/12 partitions` |
 | Invalid regex | caught at form submit; the form rejects with inline error |

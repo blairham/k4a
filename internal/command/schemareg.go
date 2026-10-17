@@ -56,6 +56,22 @@ func registryConfig(f SchemaRegistryFlags, configFile, contextName string, direc
 	return ctx.SchemaRegistry.Config().Overlay(f.config())
 }
 
+// searchDecoder is the decoder a headless search matches with: the
+// connection's registry (context block, then flags) under --decode=auto, and
+// none under raw or when no registry is configured. It is the decoder the TUI
+// searches with for the same context, so the CLI, MCP and TUI share cache
+// entries and index coverage.
+func searchDecoder(decode string, f SchemaRegistryFlags, conn *ConnectionFlags) (kafka.RecordDecoder, error) {
+	if decode == decodeRaw {
+		return nil, nil //nolint:nilnil // no decoder is a valid answer: match the bytes as consumed
+	}
+	reg, err := schemareg.NewIfSet(registryConfig(f, conn.ConfigFile, conn.Context, conn.Brokers != ""))
+	if err != nil {
+		return nil, err
+	}
+	return reg.SearchDecoder(), nil
+}
+
 // maxWarnings bounds the distinct "not decoded" reasons consume reports, so
 // a topic of garbage naming a new schema ID per record cannot flood stderr.
 const maxWarnings = 20

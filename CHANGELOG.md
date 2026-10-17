@@ -39,11 +39,27 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   of time. SASL extensions (`--oauth-extensions`) and an authorization ID
   (`--oauth-authzid`) for any token source, per context, in `k4a-index` and
   its chart (#121).
+- Search matches schema-registry decoded text. With a registry configured,
+  the TUI search, `k4a search` and `k4a mcp` match a framed Avro, Protobuf
+  or JSON-Schema key or value as its decoded JSON, the text Messages shows,
+  and the local index and `k4a-index` store it decoded. `search`, `mcp` and
+  `k4a-index` take `--schema-registry-*` (and the context's block);
+  `--decode raw` matches bytes instead; the `k4a-index` chart has
+  `schemaRegistry` values. An index serves a search only when it decoded
+  with the same registry, which the coverage contract now carries
+  (`Coverage.decoder`, a hash, never the URL) (#115).
 
 ### Fixed
 
 - Starting a second TUI search no longer leaves the first scanning unseen,
   and its late matches no longer leak into the new results (#114).
+
+### Changed
+
+- The index schema version is now 3, so existing local and shared indexes
+  rebuild once on upgrade. A client older than this release ignores
+  `Coverage.decoder`: upgrade clients before giving `k4a-index` a registry
+  (#115).
 
 ## [0.0.3] - 2026-10-15
 

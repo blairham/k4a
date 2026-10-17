@@ -30,16 +30,18 @@ import (
 // is the search pattern; everything else tunes the search.
 type SearchFlags struct {
 	Topic      string `short:"t" long:"topic"          env:"KAFKA_TOPIC" required:"true" description:"Topic to search, or a glob (orders.*) to search every topic it selects (required)"`
-	Scope      string `          long:"scope"                                            description:"Match in: key, value, key+value, key+value+headers"                                       default:"key+value"`
+	Scope      string `          long:"scope"                                            description:"Match in: key, value, key+value, key+value+headers"                                                               default:"key+value"`
 	Since      string `          long:"since"                                            description:"Lower time bound (e.g., 1h, 24h, 7d) or RFC3339 timestamp"`
 	Until      string `          long:"until"                                            description:"Upper time bound (same format as --since)"`
 	Partitions string `short:"P" long:"partitions"                                       description:"Comma-separated partition IDs (default: all)"`
-	Path       string `          long:"path"                                             description:"JSON-path predicate on the raw key/value, e.g. '.order.status == \"failed\"' (scan-only)"`
-	Format     string `          long:"format"                                           description:"Output format: text or json"                                                              default:"text"`
+	Path       string `          long:"path"                                             description:"JSON-path predicate on the key/value, e.g. '.order.status == \"failed\"' (scan-only)"`
+	Decode     string `          long:"decode"                                           description:"auto matches schema-registry payloads on their decoded JSON when a registry is configured; raw matches the bytes" default:"auto"      choice:"auto" choice:"raw"`
+	Format     string `          long:"format"                                           description:"Output format: text or json"                                                                                      default:"text"`
 	ConnectionFlags
-	Cap           int  `          long:"cap"                                              description:"Maximum matches (0 = library default)"`
-	CaseSensitive bool `          long:"case-sensitive"                                   description:"Don't add (?i) prefix to the pattern"`
-	Quiet         bool `short:"q" long:"quiet"                                            description:"Suppress progress messages on stderr"`
+	Cap            int  `          long:"cap"                                              description:"Maximum matches (0 = library default)"`
+	CaseSensitive  bool `          long:"case-sensitive"                                   description:"Don't add (?i) prefix to the pattern"`
+	Quiet          bool `short:"q" long:"quiet"                                            description:"Suppress progress messages on stderr"`
+	SchemaRegistry SchemaRegistryFlags
 }
 
 // SearchCommand implements the "search" CLI subcommand. It mirrors the
@@ -54,13 +56,13 @@ func (c *SearchCommand) Help() string {
   Run a deep search against a Kafka topic. The bare positional argument
   is the search term (regex by default; falls back to literal substring
   if the regex is invalid). Matching is grep-style — the pattern can hit
-  anywhere inside the raw key/value/headers — whether the answer comes
+  anywhere inside the key/value/headers — whether the answer comes
   from an index or a broker scan. All tuning happens via flags.
 
   --path matches a JSON-path predicate instead of (or, with a PATTERN, as
   well as) the regex: a jq-style path of .name, ["any name"] and [N] steps,
   then exists (the default), ==, !=, <, <=, > or >= against a JSON string,
-  number, true, false or null. It is evaluated on the raw key and value
+  number, true, false or null. It is evaluated on the key and value
   (not headers), compares numbers numerically and strings exactly, and a
   record whose path is missing never matches, not even with !=. The index
   cannot answer it, so it always scans the broker.
@@ -71,6 +73,12 @@ func (c *SearchCommand) Help() string {
   topics are only selected by a glob that starts with "_". Text output then
   names the topic on each match, stderr reports each topic's coverage, and
   --format summary emits one summary per topic under "topics".
+
+  With a schema registry configured (the context's schema-registry block or
+  --schema-registry-url), a registry-framed Avro, Protobuf or JSON-Schema key
+  or value is matched, and printed, as its decoded JSON, the text the TUI
+  shows; --decode=raw matches the bytes instead. An index is used only when
+  it decoded with the same registry.
 
   Identical to the TUI search (s in Messages, or :search), just non-interactive — useful
   for scripts, CI, "did this message ever happen" one-liners.
@@ -111,6 +119,12 @@ Search:
       --path=EXPR                 JSON-path predicate (see above)
       --case-sensitive            Don't add (?i) prefix to the pattern
       --cap=N                     Maximum matches before stopping
+      --decode=auto|raw           Match registry-framed payloads decoded (auto,
+                                  the default, when a registry is configured)
+                                  or as bytes (raw)
+      --schema-registry-url=URL   Registry URL (or the context's schema-registry.url),
+                                  with --schema-registry-username/-password,
+                                  -token and -ca as for consume
 
 Output:
       --format=FORMAT             text (default), json (NDJSON, one match per
@@ -163,6 +177,10 @@ func (c *SearchCommand) Run(args []string) int {
 	params, err := buildSearchParams(pattern, &flags)
 	if err != nil {
 		log.Error("invalid search parameters", "err", err)
+		return 1
+	}
+	if params.Decoder, err = searchDecoder(flags.Decode, flags.SchemaRegistry, &flags.ConnectionFlags); err != nil {
+		log.Error(err.Error())
 		return 1
 	}
 

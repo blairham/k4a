@@ -156,7 +156,8 @@ contexts:
 
 Records written by Confluent serializers (Avro, Protobuf or JSON Schema, framed
 with the registry's 5-byte header) are decoded to JSON in Messages, Message
-Detail and `k4a consume` when a context names a registry:
+Detail, `k4a consume` and search (the TUI, `k4a search` and `k4a mcp` match
+the decoded JSON) when a context names a registry:
 
 ```yaml
 contexts:
@@ -174,10 +175,12 @@ contexts:
 `--schema-registry-url`, `--schema-registry-username`, `--schema-registry-password`,
 `--schema-registry-token` and `--schema-registry-ca` (env `K4A_SCHEMA_REGISTRY_URL`,
 `_USERNAME`, `_PASSWORD`, `_TOKEN`, `_CA`) override the context's block field by field,
-on `k4a` and `k4a consume`. Credentials are sent only over https (or http to
+on `k4a`, `k4a consume`, `k4a search`, `k4a mcp` and `k4a-index`. Credentials are sent only over https (or http to
 localhost) and are never logged or written to disk. A payload that cannot be
 decoded shows as it always has, with the reason beside it; `x` toggles raw and
-decoded in the TUI, and `k4a consume --decode raw` turns decoding off. See
+decoded in the TUI, and `--decode raw` on `consume`, `search` and `mcp` turns
+decoding off. An index (local or shared) answers a search only when it decoded
+with the same registry; any other search scans the broker. See
 [`docs/design/schema-registry.md`](docs/design/schema-registry.md).
 
 ### SSM parameter resolution
@@ -363,7 +366,8 @@ the same scanner and the same matching semantics as the in-TUI search
 (opened with `s` from the Messages view). The positional argument is the
 pattern: a regex by default, falling back to a literal substring if the
 regex doesn't compile. Matching is grep-style — the pattern can hit
-anywhere inside the raw key/value/headers.
+anywhere inside the key/value/headers, and with a schema registry
+configured a registry-framed key or value is matched as its decoded JSON.
 
 ```bash
 k4a search "4100000017" -t example.ingest.prices.v1 --since 24h
@@ -382,7 +386,7 @@ searched, and `--format summary` emits `{"topic_glob", "topics": [...],
 "incomplete"}` with one full summary per topic. A glob that selects nothing,
 or any topic that fails, exits 1.
 
-`--path` matches a JSON-path predicate on the raw key/value instead of (or,
+`--path` matches a JSON-path predicate on the key/value instead of (or,
 with a pattern, as well as) the regex — a jq-style path, then `exists` (the
 default), `==`, `!=`, `<`, `<=`, `>` or `>=` against a JSON scalar. It always
 scans the broker. In the TUI, type `path:` before the path in the search bar.
@@ -396,6 +400,8 @@ scans the broker. In the TUI, type `path:` before the path in the search bar.
 | `--cap` | Maximum matches before stopping (`0` = the built-in 10,000 default) |
 | `--path` | JSON-path predicate, e.g. `'.items[0].qty >= 10'` (scan-only) |
 | `--case-sensitive` | Don't prepend `(?i)` to the pattern |
+| `--decode` | `auto` (default) matches registry-framed payloads as decoded JSON when a registry is configured; `raw` matches the bytes |
+| `--schema-registry-*` | The registry to decode with, over the context's `schema-registry:` block |
 | `--format` | `text` (default), `json` (NDJSON, one match per line), or `summary` (a single JSON document with stats + matches — best for `jq` or an LLM) |
 | `-q`, `--quiet` | Suppress the progress/summary line on stderr |
 
@@ -409,7 +415,8 @@ distinguishes the two ways a result can be short:
   matches than were returned.
 - `(INCOMPLETE — could not read the whole range; results are missing
   records)` — a chunk could not be fully read, so the scan did not cover
-  its whole offset range.
+  its whole offset range, or the schema registry could not answer for a
+  framed record, which was then matched on its bytes.
 
 An incomplete or capped result is **never written to the on-disk query
 cache**, so a short read can't be re-served later as if it were a clean

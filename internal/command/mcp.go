@@ -29,7 +29,9 @@ import (
 // from ConnectionFlags so the server runs against the user's configured
 // cluster the same way every other subcommand does.
 type MCPFlags struct {
+	Decode string `long:"decode" default:"auto" choice:"auto" choice:"raw" description:"auto matches schema-registry payloads on their decoded JSON when a registry is configured; raw matches the bytes"`
 	ConnectionFlags
+	SchemaRegistry SchemaRegistryFlags
 }
 
 // MCPCommand exposes k4a's search (and future ops) as MCP tools over
@@ -97,7 +99,14 @@ Shared index (optional):
       --index-ca=FILE             CA that verifies the daemon's certificate
       --index-cert=FILE           Client certificate, for a daemon that requires mTLS
       --index-key=FILE            Client private key for --index-cert
-      --index-token-file=FILE     Bearer token file (or K4A_INDEX_TOKEN for a context's daemon)`
+      --index-token-file=FILE     Bearer token file (or K4A_INDEX_TOKEN for a context's daemon)
+
+Schema registry (optional):
+      --decode=auto|raw           Match registry-framed payloads as decoded JSON
+                                  (auto, the default, when a registry is configured)
+                                  or as bytes (raw)
+      --schema-registry-url=URL   Registry URL (or the context's schema-registry.url),
+                                  with --schema-registry-username/-password, -token, -ca`
 }
 
 // Synopsis returns the one-line description.
@@ -118,6 +127,12 @@ func (c *MCPCommand) Run(args []string) int {
 		return 1
 	}
 	expandEnvFlags(&flags)
+
+	dec, err := searchDecoder(flags.Decode, flags.SchemaRegistry, &flags.ConnectionFlags)
+	if err != nil {
+		log.Error(err.Error())
+		return 1
+	}
 
 	client, err := flags.BuildClient()
 	if err != nil {
@@ -160,15 +175,16 @@ func (c *MCPCommand) Run(args []string) int {
 			Description: "Search a Kafka topic for records matching a regex " +
 				"(or literal substring on regex parse failure) and/or a JSON-path " +
 				"predicate (path, e.g. .order.status == \"failed\"; always a scan). Matching is " +
-				"grep-style — the pattern can hit anywhere inside the raw " +
-				"key/value/headers — regardless of whether the answer is served " +
+				"grep-style — the pattern can hit anywhere inside the " +
+				"key/value/headers, a schema-registry framed key or value as its " +
+				"decoded JSON when a registry is configured — regardless of whether the answer is served " +
 				"from an index or a broker scan; patterns an index cannot answer " +
 				"with full recall automatically fall back to a scan. Returns " +
 				"matches plus scan stats. Use this for 'did this message ever " +
 				"happen', 'find records mentioning X', or 'recent events for " +
 				"entity Y' questions about Kafka topic data.",
 		},
-		makeSearchHandler(cache, client, remote),
+		makeSearchHandler(cache, client, remote, dec),
 	)
 
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil {
@@ -204,7 +220,7 @@ func isCleanShutdown(ctx context.Context, err error) bool {
 type mcpSearchInput struct {
 	Topic         string  `json:"topic"                    jsonschema:"name of the Kafka topic to search (required)"`
 	Query         string  `json:"query,omitempty"          jsonschema:"regex pattern OR literal substring; falls back to literal on regex parse failure. Required unless path is set; with path, both must match"`
-	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the raw key/value, jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. Always answered by a broker scan, never the index"`
+	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the key/value (a schema-registry framed one as its decoded JSON), jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. Always answered by a broker scan, never the index"`
 	Since         string  `json:"since,omitempty"          jsonschema:"lower time bound; relative duration like 24h/7d or RFC3339 timestamp"`
 	Until         string  `json:"until,omitempty"          jsonschema:"upper time bound; same format as since"`
 	Scope         string  `json:"scope,omitempty"          jsonschema:"match scope: key, value, key+value (default), or key+value+headers"`
@@ -221,6 +237,7 @@ func makeSearchHandler(
 	cache *searchcache.Cache,
 	client *kafka.Client,
 	remote *remoteindex.Client,
+	dec kafka.RecordDecoder,
 ) mcp.ToolHandlerFor[mcpSearchInput, searchcli.Summary] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in mcpSearchInput) (
 		*mcp.CallToolResult, searchcli.Summary, error,
@@ -236,6 +253,7 @@ func makeSearchHandler(
 		if err != nil {
 			return nil, searchcli.Summary{}, err
 		}
+		params.Decoder = dec
 		sum := searchcli.Run(ctx, cache, client, remote, in.Topic, in.Query, params, in.CaseSensitive)
 		return nil, sum, nil
 	}

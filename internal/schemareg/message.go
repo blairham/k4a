@@ -53,8 +53,32 @@ func (r *Registry) DecodeMessage(ctx context.Context, m *kafka.ConsumedMessage) 
 	if r == nil {
 		return
 	}
-	m.KeyDecoding = r.decodeField(ctx, m.Topic, true, m.KeySchemaID, m.RawKey, &m.Key)
-	m.ValueDecoding = r.decodeField(ctx, m.Topic, false, m.ValueSchemaID, m.RawValue, &m.Value)
+	r.DecodeRecord(ctx, m)
+}
+
+// DecodeRecord is DecodeMessage for search and indexing (kafka.RecordDecoder):
+// it reports false when a framed field was left undecoded because the
+// registry could not answer, rather than because of what the record holds,
+// so the same record may decode differently later. A nil Registry decodes
+// nothing and is always settled.
+func (r *Registry) DecodeRecord(ctx context.Context, m *kafka.ConsumedMessage) bool {
+	if r == nil {
+		return true
+	}
+	var keyUnsettled, valueUnsettled bool
+	m.KeyDecoding, keyUnsettled = r.decodeField(ctx, m.Topic, true, m.KeySchemaID, m.RawKey, &m.Key)
+	m.ValueDecoding, valueUnsettled = r.decodeField(ctx, m.Topic, false, m.ValueSchemaID, m.RawValue, &m.Value)
+	return !keyUnsettled && !valueUnsettled
+}
+
+// SearchDecoder is r as the decoder a search and an index match with, or nil
+// when no registry is configured: a nil *Registry inside a non-nil interface
+// would read as "decoding" to every identity check.
+func (r *Registry) SearchDecoder() kafka.RecordDecoder {
+	if r == nil {
+		return nil
+	}
+	return r
 }
 
 func (r *Registry) decodeField(
@@ -63,22 +87,22 @@ func (r *Registry) decodeField(
 	isKey bool,
 	schemaID, raw []byte,
 	shown *string,
-) kafka.Decoding {
+) (d kafka.Decoding, unsettled bool) {
 	if raw == nil {
-		return kafka.Decoding{}
+		return kafka.Decoding{}, false
 	}
-	d, err := r.DecodeWithHeader(ctx, topic, isKey, schemaID, raw)
+	dec, err := r.DecodeWithHeader(ctx, topic, isKey, schemaID, raw)
 	switch {
 	case errors.Is(err, ErrNotFramed):
-		return kafka.Decoding{}
+		return kafka.Decoding{}, false
 	case errors.Is(err, context.DeadlineExceeded):
 		// The lookup carries on in the background; later records with this
 		// schema decode once it lands.
-		return kafka.Decoding{Reason: "schema registry did not answer in time"}
+		return kafka.Decoding{Reason: "schema registry did not answer in time"}, true
 	case err != nil:
-		return kafka.Decoding{Reason: err.Error()}
+		return kafka.Decoding{Reason: err.Error()}, isUnavailable(err)
 	}
-	out := kafka.Decoding{Raw: *shown, Schema: d.Ref()}
-	*shown = d.JSON
-	return out
+	out := kafka.Decoding{Raw: *shown, Schema: dec.Ref()}
+	*shown = dec.JSON
+	return out, false
 }

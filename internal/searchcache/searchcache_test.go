@@ -6,6 +6,9 @@ package searchcache
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"regexp"
 	"testing"
@@ -447,5 +450,47 @@ func TestBuildKey_PathIsPartOfTheKey(t *testing.T) {
 	}
 	if key(`.a==1`) != key(`.["a"] == 1`) {
 		t.Error("equivalent JSON paths got different cache keys")
+	}
+}
+
+type namedDecoder string
+
+func (d namedDecoder) Identity() string { return string(d) }
+
+func (namedDecoder) DecodeRecord(context.Context, *kafka.ConsumedMessage) bool { return true }
+
+// TestBuildKey_DecoderIsPartOfTheKey: a decoded search matches other text
+// than a raw one, and two registries decode differently, so none of them may
+// replay another's entry. A raw key must hash as it did before decoding, or
+// every existing entry would be orphaned for nothing.
+func TestBuildKey_DecoderIsPartOfTheKey(t *testing.T) {
+	t.Parallel()
+	re := regexp.MustCompile("x")
+	key := func(dec kafka.RecordDecoder) Key {
+		return BuildKey("c", "t", kafka.SearchParams{Pattern: re, Decoder: dec})
+	}
+	if key(nil).Hash() == key(namedDecoder("sr:a")).Hash() {
+		t.Error("a decoded search shares a cache key with a raw one")
+	}
+	if key(namedDecoder("sr:a")).Hash() == key(namedDecoder("sr:b")).Hash() {
+		t.Error("two registries' searches share a cache key")
+	}
+	first, again := key(namedDecoder("sr:a")), key(namedDecoder("sr:a"))
+	if first.Hash() != again.Hash() {
+		t.Error("the same decoder produced different cache keys")
+	}
+	legacy := struct {
+		Cluster, Topic, Pattern string
+		PartitionsCSV           string
+		SinceMS, UntilMS        int64
+		Scope                   uint8
+	}{Cluster: "c", Topic: "t", Pattern: "x"}
+	canon, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(canon)
+	if got, want := key(nil).Hash(), hex.EncodeToString(sum[:16]); got != want {
+		t.Errorf("raw key hash %s changed from the pre-decoder %s", got, want)
 	}
 }

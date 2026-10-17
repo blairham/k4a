@@ -30,6 +30,7 @@ import (
 func CoverageFromBookkeeper(b index.Bookkeeper) *indexv1.Coverage {
 	cov := &indexv1.Coverage{
 		Partitions: make([]*indexv1.PartitionCoverage, 0, len(b.NewestOffsetPerPartition)),
+		Decoder:    b.Decoder,
 	}
 	for p, hiOff := range b.NewestOffsetPerPartition {
 		cov.Partitions = append(cov.Partitions, &indexv1.PartitionCoverage{
@@ -67,6 +68,7 @@ func BookkeeperFromCoverage(cov *indexv1.Coverage) index.Bookkeeper {
 	if cov == nil {
 		return b
 	}
+	b.Decoder = cov.GetDecoder()
 	for _, pc := range cov.GetPartitions() {
 		b.NewestOffsetPerPartition[pc.GetPartition()] = pc.GetOffsetHi()
 		b.OldestOffsetPerPartition[pc.GetPartition()] = pc.GetOffsetLo()
@@ -92,6 +94,7 @@ func RequestToQueryParams(req *indexv1.SearchRequest) (index.QueryParams, error)
 		Scopes:     req.GetScopes(),
 		Partitions: req.GetPartitions(),
 		Limit:      int(req.GetLimit()),
+		Decoder:    req.GetDecoder(),
 	}
 	if p := req.GetPattern(); p != "" {
 		re, err := regexp.Compile(p)
@@ -115,6 +118,7 @@ func QueryParamsToRequest(topic string, params index.QueryParams) *indexv1.Searc
 		Limit:      int32(params.Limit), //nolint:gosec // search limit fits in int32
 		SinceMs:    timeToMS(params.Since),
 		UntilMs:    timeToMS(params.Until),
+		Decoder:    params.Decoder,
 	}
 	if params.Pattern != nil {
 		req.Pattern = params.Pattern.String()

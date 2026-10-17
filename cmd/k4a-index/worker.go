@@ -71,6 +71,9 @@ type workerOptions struct {
 	WipeStrikes int
 	// Backfill bounds the history read before the live tail.
 	Backfill backfillOptions
+	// Decoder renders framed records before they are indexed; nil indexes
+	// them as consumed. Its identity is what Coverage reports to clients.
+	Decoder kafka.RecordDecoder
 }
 
 // newTopicWorker opens (or re-opens) the topic's on-disk index, plans where
@@ -80,11 +83,11 @@ type workerOptions struct {
 func newTopicWorker(
 	ctx context.Context, root *state.Root, cluster, topic string, src tailSource, opts workerOptions,
 ) (*topicWorker, error) {
-	ix, err := index.Open(root, cluster, topic)
+	ix, err := index.OpenDecoding(root, cluster, topic, opts.Decoder)
 	if err != nil {
 		return nil, err
 	}
-	plan, ix, err := planTail(ctx, root, cluster, topic, src, opts.Backfill, ix)
+	plan, ix, err := planTail(ctx, root, cluster, topic, src, opts, ix)
 	if err != nil {
 		return nil, err
 	}
@@ -115,9 +118,10 @@ func newTopicWorker(
 // cannot be resumed without a hole it is deleted and reopened empty, and the
 // plan made again from nothing, so coverage never spans records it lacks.
 func planTail(
-	ctx context.Context, root *state.Root, cluster, topic string, src tailSource, opts backfillOptions,
+	ctx context.Context, root *state.Root, cluster, topic string, src tailSource, wopts workerOptions,
 	ix *index.Indexer,
 ) (*backfillPlan, *index.Indexer, error) {
+	opts := wopts.Backfill
 	bs, ok := src.(backfillSource)
 	if !ok {
 		return nil, ix, nil
@@ -130,7 +134,7 @@ func planTail(
 		// already holds records would claim one range across what it missed.
 		log.Warn("backfill: cannot plan, tailing from the latest records", "topic", topic, "err", err)
 		if len(ix.BookkeeperSnapshot().NewestOffsetPerPartition) > 0 {
-			if ix, err = reopenEmpty(root, cluster, topic, ix); err != nil {
+			if ix, err = reopenEmpty(root, cluster, topic, ix, wopts.Decoder); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -139,7 +143,7 @@ func planTail(
 	plan, stale := planBackfill(ix.BookkeeperSnapshot(), bounds, opts)
 	if stale {
 		log.Warn("backfill: the index on disk cannot be resumed without a hole — starting it over", "topic", topic)
-		if ix, err = reopenEmpty(root, cluster, topic, ix); err != nil {
+		if ix, err = reopenEmpty(root, cluster, topic, ix, wopts.Decoder); err != nil {
 			return nil, nil, err
 		}
 		plan, _ = planBackfill(ix.BookkeeperSnapshot(), bounds, opts)
@@ -154,7 +158,9 @@ func planTail(
 }
 
 // reopenEmpty deletes a topic's index and opens a fresh one in its place.
-func reopenEmpty(root *state.Root, cluster, topic string, ix *index.Indexer) (*index.Indexer, error) {
+func reopenEmpty(
+	root *state.Root, cluster, topic string, ix *index.Indexer, dec kafka.RecordDecoder,
+) (*index.Indexer, error) {
 	dir := ix.Dir()
 	if err := ix.Close(); err != nil {
 		return nil, err
@@ -162,7 +168,7 @@ func reopenEmpty(root *state.Root, cluster, topic string, ix *index.Indexer) (*i
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, err
 	}
-	return index.Open(root, cluster, topic)
+	return index.OpenDecoding(root, cluster, topic, dec)
 }
 
 // run drives the live tail until ctx is canceled. Each consumed record is

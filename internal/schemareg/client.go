@@ -9,8 +9,10 @@ package schemareg
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -52,10 +54,11 @@ const (
 // Registry resolves schema IDs to decoders, caching each compiled schema for
 // the life of the process. It is safe for concurrent use.
 type Registry struct {
-	cl      *sr.Client
-	entries map[string]*entry // by schemaRef.cacheKey
-	now     func() time.Time
-	mu      sync.Mutex
+	cl       *sr.Client
+	entries  map[string]*entry // by schemaRef.cacheKey
+	now      func() time.Time
+	identity string
+	mu       sync.Mutex
 }
 
 // entry is one schema ID's lookup. done closes when sch/err are final, so
@@ -78,7 +81,33 @@ func New(cfg Config) (*Registry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("schema registry client: %w", err)
 	}
-	return &Registry{cl: cl, entries: map[string]*entry{}, now: time.Now}, nil
+	return &Registry{cl: cl, entries: map[string]*entry{}, now: time.Now, identity: identityFor(cfg.URL)}, nil
+}
+
+// decodingVersion names how decoded text is rendered. Bump it when a change
+// makes the same payload decode to different text (a new Avro union
+// rendering, say): every index built with the old rendering then stops
+// matching a client's identity and is rebuilt or scanned around.
+const decodingVersion = "1"
+
+// Identity names what this registry decodes with (kafka.RecordDecoder): a
+// hash of the rendering version and the registry URL with its credentials,
+// query and fragment dropped, so a client and a daemon pointed at the same
+// registry agree and neither learns the other's URL from the coverage it
+// reports. Two URLs for one registry read as different decoders, which costs
+// a scan, never a wrong answer.
+func (r *Registry) Identity() string { return r.identity }
+
+func identityFor(raw string) string {
+	canon := raw
+	if u, err := url.Parse(raw); err == nil {
+		u.User, u.RawQuery, u.Fragment = nil, "", ""
+		u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
+		u.Path = strings.TrimRight(u.Path, "/")
+		canon = u.String()
+	}
+	sum := sha256.Sum256([]byte(decodingVersion + "\x00" + canon))
+	return "schemareg/" + decodingVersion + ":" + hex.EncodeToString(sum[:8])
 }
 
 func clientOpts(cfg Config) ([]sr.ClientOpt, error) {

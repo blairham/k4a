@@ -115,6 +115,34 @@ spec:
             - name: AWS_REGION
               value: {{ .Values.aws.region | quote }}
             {{- end }}
+            {{- with .Values.schemaRegistry }}
+            {{- if .url }}
+            # Decode registry-framed keys and values before indexing them.
+            - name: K4A_SCHEMA_REGISTRY_URL
+              value: {{ .url | quote }}
+            {{- if and .existingSecret .usernameKey }}
+            - name: K4A_SCHEMA_REGISTRY_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .usernameKey }}
+            {{- end }}
+            {{- if and .existingSecret .passwordKey }}
+            - name: K4A_SCHEMA_REGISTRY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .passwordKey }}
+            {{- end }}
+            {{- if and .existingSecret .tokenKey }}
+            - name: K4A_SCHEMA_REGISTRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .tokenKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             # Follow allowlist (default-deny) — the v1 authorization boundary.
             - name: K4A_INDEX_ALLOW
               value: {{ required "config.allow is required (the follow allowlist is default-deny)" .Values.config.allow | quote }}

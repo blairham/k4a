@@ -26,7 +26,10 @@ type QueryParams struct {
 	// JSONPath is the canonical text of a JSON-path predicate, or "". The
 	// index never serves one (CanServe declines), so only its presence
 	// matters here.
-	JSONPath   string
+	JSONPath string
+	// Decoder is the identity of the decoder the search's own scan would
+	// match with (kafka.SearchParams.DecoderIdentity), or "" for none.
+	Decoder    string
 	Scopes     []string // any of: "key", "value", "headers"
 	Partitions []int32  // empty = all
 	Limit      int      // 0 = unlimited
@@ -79,6 +82,12 @@ func (b Bookkeeper) CanServe(params QueryParams) (bool, string) {
 	if params.JSONPath != "" {
 		return false, ReasonJSONPathScanOnly
 	}
+	// The index holds text as its decoder rendered it. A search that would
+	// match other text (raw bytes, or another registry's decoding) must scan,
+	// or the index and the scan would answer the same query differently.
+	if params.Decoder != b.Decoder {
+		return false, decoderMismatch(b.Decoder, params.Decoder)
+	}
 	// Pattern gate: Bleve regexp queries are term-anchored, so a
 	// pattern the tokenized terms cannot answer with full recall is
 	// unservable no matter how much of the range is indexed —
@@ -120,6 +129,18 @@ func (b Bookkeeper) CanServe(params QueryParams) (bool, string) {
 	}
 
 	return true, ""
+}
+
+// decoderMismatch says why an index cannot serve a search that decodes
+// differently from it.
+func decoderMismatch(indexed, search string) string {
+	name := func(id string) string {
+		if id == "" {
+			return "no schema registry"
+		}
+		return "schema registry " + id
+	}
+	return fmt.Sprintf("index decoded with %s, search with %s", name(indexed), name(search))
 }
 
 // uncoveredPartition checks each requested partition (all indexed ones when

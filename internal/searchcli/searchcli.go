@@ -50,6 +50,9 @@ type Params struct {
 	Partitions    []int32    `json:"partitions,omitempty"`
 	Cap           int        `json:"cap,omitempty"`
 	CaseSensitive bool       `json:"case_sensitive"`
+	// Decoded reports that schema-registry framed keys and values were
+	// matched, and are shown, as their decoded JSON rather than their bytes.
+	Decoded bool `json:"decoded,omitempty"`
 }
 
 // Stats is the post-scan summary stats.
@@ -105,6 +108,7 @@ func Run(
 			Partitions:    p.Partitions,
 			Cap:           p.Cap,
 			CaseSensitive: caseSensitive,
+			Decoded:       p.Decoder != nil,
 		},
 	}
 	if !p.Since.IsZero() {

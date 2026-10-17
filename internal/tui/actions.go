@@ -764,7 +764,9 @@ func (a *App) startIndexer(topic string) {
 		// indexer until we can identify the cluster.
 		return
 	}
-	ix, err := index.Open(a.stateRoot, cluster, topic)
+	// The connection's registry decodes what is indexed, as it decodes what
+	// is searched (searchRunner), so the index can serve those searches.
+	ix, err := index.OpenDecoding(a.stateRoot, cluster, topic, a.registry.SearchDecoder())
 	if err != nil {
 		// ErrLocked is the common case (another k4a is the writer for
 		// this topic). Either way, fall through to scan-only.
@@ -868,6 +870,11 @@ func (a *App) searchRunner() views.SearchFunc {
 	if a.searchFunc != nil {
 		return a.searchFunc
 	}
+	return withDecoder(a.registry.SearchDecoder(), a.sourceRunner())
+}
+
+// sourceRunner chains the shared index in front of the local sources.
+func (a *App) sourceRunner() views.SearchFunc {
 	base := a.localSearchRunner()
 	if a.remoteIndex == nil {
 		return base
@@ -876,6 +883,22 @@ func (a *App) searchRunner() views.SearchFunc {
 	// warm daemon, everything else falls through to the local cache/index/scan.
 	wrapped := a.remoteIndex.Wrap(remoteindex.SearchFunc(base))
 	return views.SearchFunc(wrapped)
+}
+
+// withDecoder makes every search through next match framed records as the
+// connection's registry decodes them, as Messages shows them. Setting it once,
+// outermost, is what keeps the sources in step: the cache key, the shared and
+// local indexes' coverage checks and the scan all read the same decoder.
+func withDecoder(dec kafka.RecordDecoder, next views.SearchFunc) views.SearchFunc {
+	if dec == nil {
+		return next
+	}
+	return func(ctx context.Context, topic string, params kafka.SearchParams) (
+		<-chan kafka.ConsumedMessage, <-chan kafka.DeepSearchProgress, <-chan error,
+	) {
+		params.Decoder = dec
+		return next(ctx, topic, params)
+	}
 }
 
 // localSearchRunner is the in-process source chain: cache → local index → scan.
@@ -920,6 +943,7 @@ func indexParams(p kafka.SearchParams) index.QueryParams {
 		Until:      p.Until,
 		Partitions: p.Partitions,
 		Limit:      p.Cap,
+		Decoder:    p.DecoderIdentity(),
 	}
 	scope := p.Scope
 	if scope == 0 {

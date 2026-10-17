@@ -79,9 +79,15 @@ including deleting topics, consumer groups, ACLs and records.
   registry URL, only over https or http to a loopback host, and are never
   logged. A registry URL with embedded credentials is refused. Schemas the
   registry returns are held in memory and never written to disk. Decoded
-  values are only displayed (or saved, copied or exported, when you ask);
-  the search cache and the local and shared indexes keep the bytes as
-  consumed.
+  values are displayed (or saved, copied or exported, when you ask) and,
+  with a registry configured, searched: the search cache and the local and
+  shared indexes then hold a framed key or value as its decoded JSON, the
+  same record data in another encoding, where they would otherwise hold the
+  bytes. Beside it they keep only a registry identity, a hash of the URL
+  without its credentials, query or fragment, which is also what `k4a-index`
+  reports to its clients. `k4a-index` reads registry credentials from
+  `K4A_SCHEMA_REGISTRY_*` (the chart takes them from an existing Secret) and
+  never logs them.
 - **Copy and export** are explicit: on a local session a copy pipes the
   text to the platform clipboard tool (`pbcopy`, `wl-copy`, `xclip` or
   `xsel`, found on `PATH`, as stdin, never on the command line); over SSH,
