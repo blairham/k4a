@@ -25,6 +25,7 @@ require (
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260721222903-95f7d9a51d6a
 	github.com/twmb/franz-go/pkg/kmsg v1.14.0
 	github.com/twmb/franz-go/pkg/sr v1.8.0
+	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/mod v0.41.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/grpc v1.84.0
@@ -75,6 +76,7 @@ require (
 	github.com/ckaznocha/intrange v0.3.1 // indirect
 	github.com/curioswitch/go-reassign v0.3.0 // indirect
 	github.com/daixiang0/gci v0.13.7 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/dave/dst v0.27.3 // indirect
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
@@ -95,6 +97,7 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/godoc-lint/godoc-lint v0.11.4 // indirect
 	github.com/gofrs/flock v0.13.1 // indirect
 	github.com/golangci/asciicheck v0.5.0 // indirect
@@ -320,7 +323,7 @@ require (
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/term v0.46.0 // indirect
+	golang.org/x/term v0.46.0
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/protobuf v1.36.12

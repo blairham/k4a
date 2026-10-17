@@ -51,6 +51,7 @@ internal/
   indexwire/         # gRPC contract for the shared index (generated indexv1 + conversions)
   remoteindex/       # Client backend that dials a shared k4a-index daemon
   schemareg/         # Confluent Schema Registry client + Avro/Protobuf/JSON-Schema decoding
+  secrets/           # OS keychain Store (go-keyring) + an in-memory one for tests
   searchcache/       # On-disk query-result cache (Tier 2) + the search wrapper
   searchcli/         # Shared search-summary shape (CLI `--format summary` + MCP)
   state/             # ~/.k4a state root: tiers, envelopes, advisory file lock, session
@@ -76,7 +77,7 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 `add-partitions`, `purge-topic`, `list-acls`, `delete-acl`, `list-groups`,
 `describe-group`, `reset-offsets`, `delete-offsets`, `delete-group`,
 `describe-broker-config`, `alter-config`, `alter-replication`, `contexts`,
-`use-context`, `version`, `upgrade`, `state`, `index`, `config`, `search`,
+`use-context`, `set-credential`, `delete-credential`, `version`, `upgrade`, `state`, `index`, `config`, `search`,
 `mcp`. Every TUI operation has a headless command (#52).
 
 Headless commands are flat `verb-noun` names (no `groups list` subcommand
@@ -379,7 +380,10 @@ Full context field set (`internal/config.Context`): `brokers`, `ssm-brokers`,
 `auth`, `region`, `profile`, `username`, `password`, `cert`, `key`, `ca`,
 `insecure`, `no-tls`, `oauth-token`, `oauth-token-file`, `oauth-token-url`,
 `oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `index-endpoint`,
-`index-insecure`, `index-ca`, `index-cert`, `index-key`, `index-token`, and the
+`index-insecure`, `index-ca`, `index-cert`, `index-key`, `index-token`, the
+nested `keychain:` block (`password`, `oauth-token`, `oauth-client-secret`:
+OS keychain accounts under service `k4a`, written by `k4a set-credential
+CONTEXT [--field F]` and removed by `delete-credential`), and the
 nested `schema-registry:` block (`url`, `username`, `password`, `token`, `ca`),
 overridden by `--schema-registry-*` on `ui` and `consume` (see
 `docs/design/schema-registry.md`).
@@ -484,6 +488,7 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - `charm.land/bubbletea`, `bubbles`, `lipgloss`, `huh` — TUI framework, components, styling, forms
 - `jessevdk/go-flags` — CLI flag parsing; `hashicorp/cli` — subcommand framework
 - `twmb/franz-go/pkg/sr`, `linkedin/goavro/v2`, `bufbuild/protocompile` — Schema Registry client, Avro decoding, Protobuf schema compilation (`internal/schemareg`; see `docs/design/schema-registry.md`)
+- `zalando/go-keyring` — OS keychain for context secrets (`internal/secrets`); tests use `secrets.NewMemory`, never the real keychain
 - `golang.org/x/mod/semver` — version comparison for `k4a upgrade`, which is otherwise standard library (`internal/upgrade/release.go`)
 
 ## Testing
@@ -491,7 +496,10 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 - `go test -race ./...` needs no Kafka or network: Kafka-facing code is
   tested against franz-go's in-process fakes and pure functions, the index
   against real Bleve indexes in `t.TempDir()`. Tests never touch real user
-  state — redirect `~/.k4a` with `t.TempDir()` + `t.Setenv`.
+  state — redirect `~/.k4a` with `t.TempDir()` + `t.Setenv`. The keychain is
+  injected: `internal/command`'s `TestMain` swaps `secretStore` for a
+  `secrets.Memory` and stubs the password prompt, and the TUI has no store
+  unless a test sets one.
 - **Fuzz** targets on input that arrives from outside the process:
   `FuzzIndexablePattern` (`internal/index/pattern_fuzz_test.go`; a search
   pattern from the CLI, MCP or a k4a-index client must never be served from

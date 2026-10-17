@@ -62,6 +62,12 @@ Kafka's own `username`; nesting keeps the two sets from being mistaken for
 each other. Its secrets take the same whole-value `$VAR` form. See
 `docs/design/schema-registry.md`.
 
+`keychain:` is the other nested block: it maps `password`, `oauth-token`
+and `oauth-client-secret` to OS keychain accounts, so the file names the
+secret instead of holding it. `k4a set-credential` writes it; a context
+with a username and no password is asked for one instead. See *Keychain and
+typed passwords* in `docs/design/auth.md`.
+
 ## Brokers vs SSM-brokers
 
 Two ways to specify the bootstrap broker list:
@@ -153,11 +159,6 @@ Reasoning:
   HTTP / etc. would be a feature, not a fix; not on the roadmap.
 - **No multi-file config.** kubectl supports `KUBECONFIG=file1:file2`.
   We don't. If we ever need it, follow the same pattern.
-- **No password prompting.** SCRAM `password:` is read literally (or via
-  env expansion). We don't pop a TUI prompt on missing creds. The
-  rationale is that interactive prompting tangles with the bubbletea
-  startup sequence; users with this need can `read -s -p` in their
-  shell wrapper.
 - **No context validation on load.** A context with `auth: iam` but no
   region just fails at connect time, not load time. Validating up
   front would mean refusing to load a file with one bad context just
@@ -177,6 +178,6 @@ Reasoning:
   shapes incompatibly, add a `apiVersion: v2` and key the loader off
   it; don't try to autodetect.
 - **Sensitive context fields:** if you add one (token, key material),
-  remember the file is `0o600` but `git diff` doesn't care. Document
-  it as "do not check this file in" rather than building a separate
-  secret store.
+  remember the file is `0o600` but `git diff` doesn't care. If it should
+  be keychain-capable, add it to `config.Keychain`, `keychainSlot`,
+  `ApplyKeychain` and the `Field*` constants (and the `--field` choices).

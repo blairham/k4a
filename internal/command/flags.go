@@ -159,7 +159,8 @@ func (f *ConnectionFlags) AuthConfig() kafka.AuthConfig {
 // and the specified (or current) context is resolved.
 func (f *ConnectionFlags) Resolve() (string, kafka.AuthConfig, error) {
 	if f.Brokers != "" {
-		return f.Brokers, directAuthConfig(f.AuthConfig()), nil
+		auth, err := fillSecrets(nil, f.Brokers, directAuthConfig(f.AuthConfig()))
+		return f.Brokers, auth, err
 	}
 
 	cfgPath := f.ConfigFile
@@ -184,7 +185,12 @@ func (f *ConnectionFlags) Resolve() (string, kafka.AuthConfig, error) {
 		return "", kafka.AuthConfig{}, err
 	}
 
-	return brokers, overlayAuth(ctx.ToAuthConfig(), f.AuthConfig()), nil
+	who := f.Context
+	if who == "" {
+		who = cfg.CurrentContext
+	}
+	auth, err := fillSecrets(ctx, who, overlayAuth(ctx.ToAuthConfig(), f.AuthConfig()))
+	return brokers, auth, err
 }
 
 // BuildClient resolves connection details and builds a Kafka client.

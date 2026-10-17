@@ -527,12 +527,22 @@ type switchContextMsg struct {
 	info        ConnInfo
 	err         error
 	name        string
+	// needPassword means the context has a username but no password from
+	// the config or the keychain; the App asks for it and switches again.
+	needPassword string
 }
 
 // doSwitchContext resolves brokers and builds a new client in a goroutine.
 func (a *App) doSwitchContext(name string) tea.Cmd {
+	return a.doSwitchContextWith(name, "")
+}
+
+// doSwitchContextWith is doSwitchContext with a password the user typed, used
+// only when the context supplies none of its own.
+func (a *App) doSwitchContextWith(name, typed string) tea.Cmd {
 	cfg := a.cfg
 	srFlags := a.registryFlags
+	store := a.secrets
 	return func() tea.Msg {
 		ctx, ok := cfg.Contexts[name]
 		if !ok {
@@ -544,7 +554,16 @@ func (a *App) doSwitchContext(name string) tea.Cmd {
 			return switchContextMsg{err: fmt.Errorf("resolving brokers for %q: %w", name, err)}
 		}
 
-		authCfg := ctx.ToAuthConfig()
+		authCfg, err := ctx.ApplyKeychain(ctx.ToAuthConfig(), store)
+		if err != nil {
+			return switchContextMsg{err: fmt.Errorf("context %q: %w", name, err)}
+		}
+		if authCfg.NeedsPassword() {
+			if typed == "" {
+				return switchContextMsg{name: name, needPassword: authCfg.Username}
+			}
+			authCfg.Password = typed
+		}
 		client, err := kafka.NewClient(authCfg, brokers)
 		if err != nil {
 			return switchContextMsg{err: fmt.Errorf("client for %q: %w", name, err)}
@@ -651,6 +670,12 @@ func (a *App) reconnect() (tea.Model, tea.Cmd) {
 
 // applySwitchContext swaps in the new client and resets all views.
 func (a *App) applySwitchContext(msg switchContextMsg) (tea.Model, tea.Cmd) {
+	if msg.needPassword != "" {
+		a.loading = false
+		cmd := a.askContextPassword(msg.name, msg.needPassword)
+		a.resizeActiveView()
+		return a, cmd
+	}
 	if msg.err != nil {
 		a.loading = false
 		a.errFlash = msg.err.Error()

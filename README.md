@@ -189,7 +189,16 @@ After renewing, `:reconnect` in the TUI re-resolves credentials without a restar
 ```bash
 k4a contexts           # list all contexts
 k4a use-context prod   # switch current context
+k4a set-credential prod                      # move prod's password into the OS keychain
+k4a set-credential prod --field oauth-client-secret
+k4a delete-credential prod                   # remove it again
 ```
+
+`set-credential` stores the secret in the OS keychain (service `k4a`, account
+`prod/password`) and replaces the context's `password:` with a `keychain:`
+reference. A context with a username but no password asks for one: on the
+terminal (no echo, only when stdin is a terminal), or in the TUI's prompt
+bar when picked from `:context`.
 
 Contexts can also be switched from within the TUI using `:context` or `:ctx`.
 

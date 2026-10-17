@@ -31,13 +31,18 @@ including deleting topics, consumer groups, ACLs and records.
     environment variable, so the file can name one instead of holding the
     password; a `$` anywhere else is literal. Prefer the environment to
     `--password`, which other local users can see in the process list.
+    Better still, `k4a set-credential CONTEXT` moves the password into the OS
+    keychain and leaves the file a `keychain:` reference; a context with no
+    password at all is asked for one on a terminal (or in the TUI's masked
+    prompt), and the typed password is held only by that connection.
   - **OAUTHBEARER** (`--auth oauthbearer`): a static token
     (`--oauth-token`/`KAFKA_OAUTH_TOKEN`), a token file re-read on every
     connection, or the OAuth 2.0 client-credentials grant
     (`--oauth-token-url` with a client ID and secret). The client secret is
     sent only to an `https` token URL (or `http` on a loopback host), and the
     fetched token is held in memory and never written to disk or logged. The
-    same `$VAR` and process-list advice applies to the token and the secret.
+    same `$VAR`, process-list and keychain (`--field oauth-token` /
+    `oauth-client-secret`) advice applies to the token and the secret.
   - **mTLS** (`--auth mtls`): certificate, key and CA PEM files named by path;
     k4a reads them and never copies them.
 - **TLS** is verified against the system roots, plus `--ca` when given, at TLS
