@@ -55,6 +55,8 @@ internal/
   secrets/           # OS keychain Store (go-keyring) + an in-memory one for tests
   searchcache/       # On-disk query-result cache (Tier 2) + the search wrapper
   searchcli/         # Shared search-summary shape (CLI `--format summary` + MCP)
+  archive/           # Archive search: S3-sink tables queried with Athena (Tier 6),
+                     # behind AthenaAPI/S3API interfaces
   state/             # ~/.k4a state root: tiers, envelopes, advisory file lock, session
   timebound/         # Search time bounds (24h / 7d / 2w / RFC3339) for every surface
   upgrade/           # Self-upgrade (`k4a upgrade`, `:upgrade`)
@@ -407,12 +409,15 @@ Full context field set (`internal/config.Context`): `brokers`, `ssm-brokers`,
 `index-token`, the
 nested `keychain:` block (`password`, `oauth-token`, `oauth-client-secret`:
 OS keychain accounts under service `k4a`, written by `k4a set-credential
-CONTEXT [--field F]` and removed by `delete-credential`), and the
+CONTEXT [--field F]` and removed by `delete-credential`), the
 nested `schema-registry:` block (`url`, `username`, `password`, `token`, `ca`),
 overridden by `--schema-registry-*` on `ui`, `consume`, `search`, `mcp` and
 `k4a-index` (see `docs/design/schema-registry.md`). With a registry, search
 matches decoded text, and an index serves only a search that decodes with
 the same registry identity (`Bookkeeper.Decoder`, `Coverage.decoder`).
+The nested `archive:` block (`profile`, `region`, `workgroup`,
+`output-location`, `catalog`, `confirm-bytes`, `max-bytes`, `topics.<topic>`)
+is read only by `k4a search --archive` (see `docs/design/archive-search.md`).
 
 The two non-context blocks are also CLI-writable: `k4a config
 show|path|get <key>|set <key> <value>` over `ui.logoless`, `ui.readonly`,
@@ -510,7 +515,7 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 
 - `twmb/franz-go` — Pure Go Kafka client (`kgo`/`kadm`/`kmsg`; no CGO), including its SASL (SCRAM, PLAIN, OAUTHBEARER) and MSK IAM mechanisms
 - `golang.org/x/oauth2` — the OAUTHBEARER client-credentials grant (`internal/kafka/oauth.go`) and the interactive OIDC device and browser (PKCE) logins with refresh (`internal/kafka/oidc.go`, `k4a login`)
-- `aws-sdk-go-v2` — AWS shared config and credentials for IAM auth, and SSM parameter resolution
+- `aws-sdk-go-v2` — AWS shared config and credentials for IAM auth, SSM parameter resolution, and Athena + S3 for archive search (`internal/archive`)
 - `blevesearch/bleve/v2` — the local and shared index (scorch, pure Go)
 - `google.golang.org/grpc` + `protobuf` — the k4a-index wire contract (and its `grpc.health.v1` service)
 - `prometheus/client_golang` — k4a-index's `/metrics` on the admin port (`cmd/k4a-index/metrics.go`)

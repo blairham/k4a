@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"regexp"
@@ -37,12 +38,19 @@ type SearchFlags struct {
 	Path       string `          long:"path"                                             description:"JSON-path predicate on the key/value, e.g. '.order.status == \"failed\"' (scan-only)"`
 	Decode     string `          long:"decode"                                           description:"auto matches schema-registry payloads on their decoded JSON when a registry is configured; raw matches the bytes" default:"auto"      choice:"auto" choice:"raw"`
 	Format     string `          long:"format"                                           description:"Output format: text or json"                                                                                      default:"text"`
+	MaxBytes   string `          long:"max-bytes"                                        description:"With --archive: refuse or stop a query over this many bytes (overrides archive.max-bytes)"`
 	ConnectionFlags
 	Cap            int  `          long:"cap"                                              description:"Maximum matches (0 = library default)"`
 	CaseSensitive  bool `          long:"case-sensitive"                                   description:"Don't add (?i) prefix to the pattern"`
 	Quiet          bool `short:"q" long:"quiet"                                            description:"Suppress progress messages on stderr"`
 	SchemaRegistry SchemaRegistryFlags
+	Archive        bool `          long:"archive"                                          description:"Search the topic's S3 archive with Athena instead of Kafka (needs --since and one exact topic, not a glob)"`
+	Explain        bool `          long:"explain"                                          description:"With --archive: print the SQL and estimate prefixes, run nothing"`
+	Yes            bool `short:"y" long:"yes"                                              description:"With --archive: run without asking, still refusing over max-bytes"`
 }
+
+// formatSummary is the --format that buffers one JSON document.
+const formatSummary = "summary"
 
 // SearchCommand implements the "search" CLI subcommand. It mirrors the
 // in-TUI search bar (`s` in Messages, or :search) with flags for non-interactive use.
@@ -126,6 +134,17 @@ Search:
                                   with --schema-registry-username/-password,
                                   -token and -ca as for consume
 
+Archive (S3 sink + Athena; see docs/design/archive-search.md):
+      --archive                   Search the context's archive.topics.<TOPIC> table
+                                  with Athena instead of Kafka. Needs --since and a
+                                  pattern with a 3+ character literal. Never reads
+                                  Kafka. The literal and matched records persist in
+                                  the workgroup's query history and result location.
+      --explain                   Print the SQL and estimate prefixes; run nothing
+      --max-bytes=SIZE            Refuse, or stop, a query over SIZE (e.g. 20GiB)
+  -y, --yes                       Skip the confirm-before-run prompt (max-bytes
+                                  still applies)
+
 Output:
       --format=FORMAT             text (default), json (NDJSON, one match per
                                   line), or summary (single JSON document
@@ -145,6 +164,9 @@ Examples:
 
   # Failed orders in the last hour, by field rather than by substring
   k4a search --path '.order.status == "failed"' -t orders --since 1h
+
+  # Last quarter, from the S3 archive (asks before a large scan)
+  k4a search "order-41000017" -t orders --since 90d --archive --context production
 
   # Case-sensitive header search
   k4a search "X-Trace-Id" -t requests --scope key+value+headers --case-sensitive`
@@ -182,6 +204,12 @@ func (c *SearchCommand) Run(args []string) int {
 	if params.Decoder, err = searchDecoder(flags.Decode, flags.SchemaRegistry, &flags.ConnectionFlags); err != nil {
 		log.Error(err.Error())
 		return 1
+	}
+
+	if flags.Archive {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer cancel()
+		return runArchiveSearch(ctx, &flags, pattern, params, defaultArchiveDeps())
 	}
 
 	client, err := flags.BuildClient()
@@ -358,7 +386,7 @@ func runSearch(
 		})
 	}
 
-	if format == "summary" {
+	if format == formatSummary {
 		// Buffer-and-emit-once path. Reuses the shared searchcli.Run
 		// helper so the wire format is identical to the MCP tool.
 		return emitSearchSummary(searchcli.Run(ctx, cache, client, remote, flags.Topic, pattern, params, flags.CaseSensitive))
@@ -493,16 +521,19 @@ func searchSummaryLine(lastProg kafka.DeepSearchProgress, matches int) string {
 // The summary format bypasses this since it emits a single document at end-of-run.
 type searchOutput struct {
 	jsonEnc *json.Encoder
+	w       io.Writer
 	textFmt bool
 	// withTopic names the topic on each text line, for a cross-topic search.
 	withTopic bool
 }
 
-func newSearchOutput(format string) *searchOutput {
+func newSearchOutput(format string) *searchOutput { return newSearchOutputTo(format, os.Stdout) }
+
+func newSearchOutputTo(format string, w io.Writer) *searchOutput {
 	if format == "json" {
-		return &searchOutput{jsonEnc: json.NewEncoder(os.Stdout)}
+		return &searchOutput{jsonEnc: json.NewEncoder(w), w: w}
 	}
-	return &searchOutput{textFmt: true}
+	return &searchOutput{textFmt: true, w: w}
 }
 
 func (o *searchOutput) emit(m kafka.ConsumedMessage) error {
@@ -511,7 +542,7 @@ func (o *searchOutput) emit(m kafka.ConsumedMessage) error {
 		if o.withTopic {
 			topic = m.Topic + " "
 		}
-		_, err := fmt.Printf("[%sp%d o%d %s] %s\t%s\n",
+		_, err := fmt.Fprintf(o.w, "[%sp%d o%d %s] %s\t%s\n",
 			topic, m.Partition, m.Offset,
 			m.Time.Format("2006-01-02T15:04:05.000Z07:00"),
 			m.Key, sanitize(m.Value))

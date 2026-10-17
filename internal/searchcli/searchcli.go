@@ -11,6 +11,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/blairham/k4a/internal/archive"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/remoteindex"
 	"github.com/blairham/k4a/internal/searchcache"
@@ -72,13 +73,16 @@ type Stats struct {
 // Summary is the single self-describing wire-format document. Same shape
 // returned by `k4a search --format=summary` and by the MCP `search` tool.
 type Summary struct {
-	Query         string  `json:"query"`
-	Topic         string  `json:"topic"`
-	Error         string  `json:"error,omitempty"`
-	Matches       []Match `json:"matches"`
-	Params        Params  `json:"params"`
-	Stats         Stats   `json:"stats"`
-	SchemaVersion int     `json:"schema_version"`
+	// Archive is set only for an archive (Athena) search, and says what it
+	// covered; Stats.Source is then "archive".
+	Archive       *archive.Coverage `json:"archive,omitempty"`
+	Query         string            `json:"query"`
+	Topic         string            `json:"topic"`
+	Error         string            `json:"error,omitempty"`
+	Matches       []Match           `json:"matches"`
+	Params        Params            `json:"params"`
+	Stats         Stats             `json:"stats"`
+	SchemaVersion int               `json:"schema_version"`
 }
 
 // Run executes a single search against client and returns a complete
@@ -97,28 +101,7 @@ func Run(
 	p kafka.SearchParams,
 	caseSensitive bool,
 ) Summary {
-	out := Summary{
-		SchemaVersion: SummarySchemaVersion,
-		Query:         query,
-		Topic:         topic,
-		Params: Params{
-			Pattern:       paramPattern(p),
-			Path:          p.PathString(),
-			Scope:         scopeString(p.Scope),
-			Partitions:    p.Partitions,
-			Cap:           p.Cap,
-			CaseSensitive: caseSensitive,
-			Decoded:       p.Decoder != nil,
-		},
-	}
-	if !p.Since.IsZero() {
-		t := p.Since
-		out.Params.Since = &t
-	}
-	if !p.Until.IsZero() {
-		t := p.Until
-		out.Params.Until = &t
-	}
+	out := newSummary(topic, query, p, caseSensitive)
 
 	// Base source: HWM-validated cache → broker scan. When a shared index is
 	// configured, wrap it so a covered query is answered by the warm daemon and
@@ -150,6 +133,64 @@ func Run(
 	}
 	if scanErr != nil {
 		out.Error = scanErr.Error()
+	}
+	return out
+}
+
+// newSummary is a Summary with the request echoed and no results yet.
+func newSummary(topic, query string, p kafka.SearchParams, caseSensitive bool) Summary {
+	out := Summary{
+		SchemaVersion: SummarySchemaVersion,
+		Query:         query,
+		Topic:         topic,
+		Params: Params{
+			Pattern:       paramPattern(p),
+			Path:          p.PathString(),
+			Scope:         scopeString(p.Scope),
+			Partitions:    p.Partitions,
+			Cap:           p.Cap,
+			CaseSensitive: caseSensitive,
+			Decoded:       p.Decoder != nil,
+		},
+	}
+	if !p.Since.IsZero() {
+		t := p.Since
+		out.Params.Since = &t
+	}
+	if !p.Until.IsZero() {
+		t := p.Until
+		out.Params.Until = &t
+	}
+	return out
+}
+
+// ArchiveSummary is the Summary of an archive (Athena) search: the same
+// shape as a Kafka search, with Stats.Source "archive" and the coverage
+// beside it, so a consumer never mistakes it for a Kafka answer.
+func ArchiveSummary(
+	topic, query string,
+	p kafka.SearchParams,
+	caseSensitive bool,
+	matches []kafka.ConsumedMessage,
+	cov *archive.Coverage,
+	elapsed time.Duration,
+	err error,
+) Summary {
+	out := newSummary(topic, query, p, caseSensitive)
+	out.Archive = cov
+	out.Matches = make([]Match, 0, len(matches))
+	for _, m := range matches {
+		out.Matches = append(out.Matches, matchOf(m))
+	}
+	out.Stats = Stats{Source: "archive", ElapsedMs: elapsed.Milliseconds()}
+	if cov != nil {
+		out.Stats.Bytes = cov.ScannedBytes
+		out.Stats.Scanned = int64(cov.Candidates)
+		out.Stats.Partitions = cov.Partitions
+		out.Stats.Capped = cov.Capped
+	}
+	if err != nil {
+		out.Error = err.Error()
 	}
 	return out
 }

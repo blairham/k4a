@@ -108,9 +108,11 @@ chain, which is what an empty profile falls back to.
 
 The one thing the SDK can't do is open a browser, so a *missing or expired*
 SSO session is reported with the command that renews it —
-`granted sso login <profile>` (`awscreds.LoginHint`). This applies to both
-credential paths: the SSM broker lookup (`internal/config`) and the SASL
-mechanism's per-handshake retrieve (`internal/kafka`).
+`granted sso login <profile>` (`awscreds.LoginHint`). This applies to every
+credential path: the SSM broker lookup (`internal/config`), the SASL
+mechanism's per-handshake retrieve (`internal/kafka`), and archive search's
+Athena and S3 calls (`internal/archive`, which loads the archive's own
+`profile` first; see [`archive-search.md`](archive-search.md)).
 
 When IAM tokens go stale (expired role session, rotated profile), the
 symptom is connection errors, not silent data corruption. The TUI's

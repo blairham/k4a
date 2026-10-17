@@ -58,6 +58,15 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 - Starting a second TUI search no longer leaves the first scanning unseen,
   and its late matches no longer leak into the new results (#114).
+- `k4a search --archive` searches a topic's S3 archive (a sink connector's
+  output behind a Glue table) with Athena, configured per context under
+  `archive.topics`. It never connects to Kafka. It requires `--since`, prunes
+  by time partition, estimates the scan from S3 and asks above
+  `archive.confirm-bytes`, refuses above `archive.max-bytes` (or
+  `--max-bytes`), and stops a running query that passes it. The pattern's
+  literal selects candidates and the exact regex is re-applied to each row,
+  and the result reports the archive window it covered, never Kafka's.
+  `--explain` prints the SQL without running it (#117).
 
 ### Changed
 

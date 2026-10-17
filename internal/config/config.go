@@ -18,6 +18,7 @@ import (
 	"github.com/aws/smithy-go"
 	"gopkg.in/yaml.v3"
 
+	"github.com/blairham/k4a/internal/archive"
 	"github.com/blairham/k4a/internal/awscreds"
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/schemareg"
@@ -81,6 +82,9 @@ type Context struct {
 	Keychain Keychain `yaml:"keychain,omitempty"`
 	// SchemaRegistry decodes registry-framed keys and values for display.
 	SchemaRegistry SchemaRegistry `yaml:"schema-registry,omitempty"`
+	// Archive is the cluster's S3 archive, searched with Athena by
+	// `k4a search --archive` (docs/design/archive-search.md).
+	Archive archive.Config `yaml:"archive,omitempty"`
 	// IndexCA, IndexCert and IndexKey verify the shared index's TLS listener
 	// and present a client certificate to it; IndexToken is its bearer token,
 	// best written as $VAR so the file does not hold it.

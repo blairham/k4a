@@ -42,7 +42,7 @@ func runTopicsSearch(ctx context.Context, s topicsSearch) int {
 		return 1
 	}
 
-	if s.format == "summary" {
+	if s.format == formatSummary {
 		sum := searchcli.RunTopics(ctx, s.pattern, s.flags.Topic, topics,
 			func(ctx context.Context, topic string) searchcli.Summary {
 				return searchcli.Run(ctx, s.cache, s.client, s.remote, topic, s.pattern, s.params, s.flags.CaseSensitive)
