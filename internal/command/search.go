@@ -49,6 +49,9 @@ type SearchFlags struct {
 	Yes           bool   `short:"y" long:"yes"                                              description:"With --archive: run without asking, still refusing over max-bytes"`
 }
 
+// formatSummary is the --format that buffers one JSON document.
+const formatSummary = "summary"
+
 // SearchCommand implements the "search" CLI subcommand. It mirrors the
 // in-TUI search bar (`s` in Messages, or :search) with flags for non-interactive use.
 type SearchCommand struct{}
@@ -383,7 +386,7 @@ func runSearch(
 		})
 	}
 
-	if format == "summary" {
+	if format == formatSummary {
 		// Buffer-and-emit-once path. Reuses the shared searchcli.Run
 		// helper so the wire format is identical to the MCP tool.
 		return emitSearchSummary(searchcli.Run(ctx, cache, client, remote, flags.Topic, pattern, params, flags.CaseSensitive))

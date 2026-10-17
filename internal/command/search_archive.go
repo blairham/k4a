@@ -238,7 +238,7 @@ func emitArchive(
 	deps archiveDeps,
 ) int {
 	format := strings.ToLower(strings.TrimSpace(flags.Format))
-	if format == "summary" {
+	if format == formatSummary {
 		sum := searchcli.ArchiveSummary(flags.Topic, pattern, params, flags.CaseSensitive,
 			res.Matches, cov, res.Elapsed, runErr)
 		enc := json.NewEncoder(deps.stdout)
