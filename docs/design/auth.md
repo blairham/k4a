@@ -2,6 +2,7 @@
 
 **Status:** living document — describes current behavior
 **Code:** `internal/kafka/auth.go`, `internal/kafka/oauth.go`,
+`internal/kafka/oidc.go`, `internal/kafka/tokenstore.go`, `internal/command/login.go`,
 `internal/secrets`, `internal/command/credentials.go`, `internal/tui/credentials.go`
 
 ## Purpose
@@ -146,8 +147,12 @@ franz-go's `sasl/oauth` mechanism, fed by exactly one token source:
 | Static token | `--oauth-token` (`KAFKA_OAUTH_TOKEN`) | `oauth-token` |
 | Token file, re-read on every handshake | `--oauth-token-file` (`KAFKA_OAUTH_TOKEN_FILE`) | `oauth-token-file` |
 | Client-credentials grant | `--oauth-token-url`, `--oauth-client-id`, `--oauth-client-secret`, `--oauth-scopes` (`KAFKA_OAUTH_*`) | `oauth-token-url`, `oauth-client-id`, `oauth-client-secret`, `oauth-scopes` |
+| Interactive OIDC login (device or browser) | `--oauth-issuer`, `--oauth-client-id`, optional `--oauth-client-secret`, `--oauth-scopes`, `--oauth-flow`, `--oauth-redirect-port` (`KAFKA_OAUTH_*`) | `oauth-issuer`, `oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `oauth-flow`, `oauth-redirect-port` |
 
-Setting none, or more than one, is an error. The token is resolved on each
+Setting none, or more than one, is an error. `--oauth-flow` names the grant
+(`client-credentials`, `device`, `browser`) and must fit the source: the
+client-credentials grant takes a token URL, the two interactive flows an
+issuer, and an issuer without a flow means `device`. The token is resolved on each
 handshake, not at startup, so an unreachable identity provider is a
 connection error and franz-go's re-authentication at session expiry
 (KIP-368) gets a current token. The token file suits a sidecar or a
@@ -163,6 +168,88 @@ refused, and errors print the URL without userinfo or query.
 Secrets (`oauth-token`, `oauth-client-secret`) take the same whole-value
 `$VAR` form as `password`. No token, secret or token response is logged or
 written under `~/.k4a`.
+
+### Interactive OIDC login
+
+For a person rather than a service account, `oauth-issuer` names an OpenID
+Provider. Its endpoints come from discovery
+(`<issuer>/.well-known/openid-configuration`), which must name the same
+issuer; the issuer and every endpoint k4a sends a code or refresh token to
+pass the same https-or-loopback check as the token URL. Two flows:
+
+- **`device`** (the default; RFC 8628). k4a prints a URL and a code, the
+  person enters the code on any device, and k4a polls until the IdP issues
+  the token. It needs no browser on the machine running k4a, so it works
+  over SSH. The URL and code come from the IdP and have control characters
+  stripped before they reach the terminal.
+- **`browser`** — authorization code with PKCE (RFC 7636, `S256`) and a
+  loopback redirect (RFC 8252). k4a listens on `127.0.0.1`, on a free port
+  or `--oauth-redirect-port` for an IdP that matches redirect URIs exactly,
+  opens the system browser (`open`, `xdg-open`, `rundll32`) and prints the
+  URL as well, and exchanges the code the browser brings back to
+  `http://127.0.0.1:<port>/callback`. A callback without the login's random
+  `state` is answered 400 and ignored, so it cannot end or hijack the wait;
+  the wait gives up after five minutes.
+
+The client may be public (no `oauth-client-secret`); then the client ID goes
+in the form body rather than a Basic header. The token sent to Kafka is the
+**access token**. A refresh token is issued only if the IdP's policy allows
+it, which for many means asking for `offline_access` in `oauth-scopes`;
+without one, every expiry is a new login.
+
+**The handshake never prompts.** Logging in happens *before* connecting —
+`ConnectionFlags.BuildClient` and the TUI's startup call `ensureOAuthLogin`,
+which prints to stderr before the TUI takes the screen — because a device
+login outlasts any dial timeout and the TUI owns the terminal once it runs.
+On the handshake (and on KIP-368 re-authentication) the source uses the
+cached token, refreshes it when it is within oauth2's 10s margin of expiry,
+and otherwise fails with `ErrOAuthLoginRequired`, which names `k4a login`.
+That is what a context switch inside the TUI to a context with no cached
+login reports. A refresh the IdP refuses (expired, revoked, or rotated by
+another k4a process) deletes the cached entry, so the next run logs in
+rather than retrying a dead token. `k4a login` logs in ahead of time,
+`--force` logs in again (to switch accounts), and `--logout` forgets the
+cached token. `k4a-index` refuses an issuer outright: a daemon has nobody to
+log in and must not ride on a person's refresh token.
+
+**Token cache.** A login is cached as JSON (access token, expiry, refresh
+token), keyed by a hash of issuer, client ID and sorted scopes, so two
+contexts that share an IdP client share one login. `kafka.TokenStore` is
+injected through `OAuthConfig.Store`. The command layer (`withTokenStore`,
+from `fillSecrets` and `k4a login`) and a context switch in the TUI give it
+a `KeychainTokenStore` over the same `secrets.Store` as the context
+credentials: the entry is account `oauth/<hash>` under the service `k4a`.
+When the keychain refuses the write — no Secret Service on a headless Linux
+host, or a token past the macOS (~3 KB) or Windows (2.5 KB) entry limit,
+which large Entra ID tokens can reach — it falls back to `FileTokenStore`:
+one file per login in `os.UserConfigDir()/k4a/oauth/` (`~/Library/Application
+Support/k4a/oauth` on macOS, `$XDG_CONFIG_HOME/k4a/oauth` on Linux), `0600`
+in a `0700` directory, written atomically through a temp file and a rename.
+A keychain save deletes any file copy, a load reads the keychain and then
+the file, and `--logout` clears both. `FileTokenStore` alone is also what a
+nil `Store` means. Neither copy is under `~/.k4a`, which holds nothing
+secret and is what `k4a state export` archives. Whoever can read this
+user's keychain or files can use the tokens until they expire or are
+revoked, the same exposure as a cloud CLI's cache. Tests reach neither:
+`internal/command`'s `TestMain` keychain is `secrets.NewMemory()`, the
+kafka tests inject a memory store, and the file store is pointed at a temp
+dir through `HOME` / `XDG_CONFIG_HOME`.
+
+### SASL extensions and authorization ID
+
+Any OAUTHBEARER source can carry RFC 7628 SASL extensions
+(`--oauth-extensions` / `oauth-extensions`: `key=value,key=value`, as
+Confluent Cloud's `logicalCluster` and `identityPoolId` require) and an
+authorization ID (`--oauth-authzid` / `oauth-authzid`: act as that principal
+where the broker allows it). franz-go writes both into the initial response
+as given, so k4a validates them first: extension keys are letters only and
+never `auth` (the token's own key), values are printable ASCII, a key may
+not repeat, and the authzid is UTF-8 without control characters with `=`
+and `,` escaped as `=3D` and `=2C` (RFC 5801). A token containing `\x01`
+is refused at the handshake for the same reason. A value cannot contain a
+comma. Both are also `k4a-index` flags (`KAFKA_OAUTH_EXTENSIONS`,
+`KAFKA_OAUTH_AUTHZID`) and chart values (`kafka.oauth.extensions`,
+`kafka.oauth.authzid`).
 
 ## Keychain and typed passwords
 
@@ -270,11 +357,10 @@ password (see *Keychain and typed passwords*).
 - **No Kerberos / GSSAPI.** No demand. Adding it would be
   a GSSAPI `sasl.Mechanism` (franz-go ships none) plus another method;
   mostly mechanical, but not free in test surface.
-- **No OIDC device or browser flow for OAUTHBEARER.** Client credentials
-  and a token from env or file cover service accounts and anything an
-  external tool can mint; an interactive login belongs in that tool.
-- **No SASL extensions or authorization ID** on OAUTHBEARER yet. franz-go
-  supports both; add them as `oauth-*` fields when a broker needs one.
+- **No interactive OIDC without discovery.** The device and browser flows
+  need an issuer that serves `/.well-known/openid-configuration`; there is
+  no way to name the authorization or device endpoint by hand. The ID token
+  is never sent, only the access token.
 - **No credential reload during a session.** The client options are built
   once at startup. Picking up new IAM tokens works because the SDK
   inside the SASL mechanism refreshes; for SCRAM/mTLS, restarting k4a

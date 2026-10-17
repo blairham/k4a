@@ -564,6 +564,11 @@ func (a *App) doSwitchContextWith(name, typed string) tea.Cmd {
 		if err != nil {
 			return switchContextMsg{err: fmt.Errorf("context %q: %w", name, err)}
 		}
+		if authCfg.OAuth.Interactive() && store != nil {
+			// Read the OIDC login `k4a login` cached; a switch never prompts
+			// for one, since the handshake cannot.
+			authCfg.OAuth.Store = kafka.KeychainTokenStore{Keychain: store, Fallback: kafka.DefaultTokenStore()}
+		}
 		if authCfg.NeedsPassword() {
 			if typed == "" {
 				return switchContextMsg{name: name, needPassword: authCfg.Username}

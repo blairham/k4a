@@ -52,7 +52,10 @@ flat form reads better at the YAML level and keeps the Go struct
 trivially serializable. The OAUTHBEARER settings follow the same rule:
 they are a Go sub-struct (`config.OAuth`, inlined) but flat `oauth-token`,
 `oauth-token-file`, `oauth-token-url`, `oauth-client-id`,
-`oauth-client-secret` and `oauth-scopes` keys in YAML, and `no-tls: true`
+`oauth-client-secret`, `oauth-scopes`, `oauth-issuer`, `oauth-flow`,
+`oauth-redirect-port`, `oauth-extensions` and `oauth-authzid` keys in YAML
+(extensions as one `key=value,key=value` string, the same as the flag),
+and `no-tls: true`
 sits beside `insecure`. See `docs/design/auth.md`.
 
 The one nested block is `schema-registry:` (`url`, `username`, `password`,

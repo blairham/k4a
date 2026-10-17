@@ -31,6 +31,14 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   search every topic a glob selects. Coverage is reported per topic (source,
   capped, truncated, failed), and the answer is only complete if every topic
   is; `--format summary` emits one summary per topic (#114).
+- OAUTHBEARER: interactive OIDC login, by device code or in the browser
+  (authorization code with PKCE and a loopback redirect), from an issuer's
+  discovery document, with the token cached in the OS keychain (or, when it
+  cannot take it, an owner-only file under the user config directory) and
+  refreshed; `k4a login` (`--force`, `--logout`) logs in ahead
+  of time. SASL extensions (`--oauth-extensions`) and an authorization ID
+  (`--oauth-authzid`) for any token source, per context, in `k4a-index` and
+  its chart (#121).
 
 ### Fixed
 

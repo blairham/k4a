@@ -72,8 +72,8 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 
 ### Subcommands (`internal/app/app.go`)
 
-`ui` (default), `produce`, `consume`, `verify`, `create-topic`, `create-acl`,
-`delete-topic`, `describe-topic`, `topic-size`, `list-topics`,
+`ui` (default), `produce`, `consume`, `verify`, `login`, `create-topic`,
+`create-acl`, `delete-topic`, `describe-topic`, `topic-size`, `list-topics`,
 `add-partitions`, `purge-topic`, `list-acls`, `delete-acl`, `list-groups`,
 `describe-group`, `reset-offsets`, `delete-offsets`, `delete-group`,
 `describe-broker-config`, `alter-config`, `alter-replication`, `contexts`,
@@ -325,6 +325,11 @@ OAUTHBEARER (one source):
       --oauth-client-id ID       Client ID             (env: KAFKA_OAUTH_CLIENT_ID)
       --oauth-client-secret S    Client secret         (env: KAFKA_OAUTH_CLIENT_SECRET)
       --oauth-scopes A,B         Scopes                (env: KAFKA_OAUTH_SCOPES)
+      --oauth-issuer URL         OIDC issuer: log in interactively (env: KAFKA_OAUTH_ISSUER)
+      --oauth-flow FLOW          client-credentials, device (issuer default) or browser
+      --oauth-redirect-port N    Fixed loopback port for the browser flow
+      --oauth-extensions K=V,..  SASL extensions       (env: KAFKA_OAUTH_EXTENSIONS)
+      --oauth-authzid ID         Authorization ID      (env: KAFKA_OAUTH_AUTHZID)
 
 mTLS:
       --cert FILE         Client certificate   (env: KAFKA_TLS_CERT)
@@ -395,8 +400,10 @@ index:
 Full context field set (`internal/config.Context`): `brokers`, `ssm-brokers`,
 `auth`, `region`, `profile`, `username`, `password`, `cert`, `key`, `ca`,
 `insecure`, `no-tls`, `oauth-token`, `oauth-token-file`, `oauth-token-url`,
-`oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `index-endpoint`,
-`index-insecure`, `index-ca`, `index-cert`, `index-key`, `index-token`, the
+`oauth-client-id`, `oauth-client-secret`, `oauth-scopes`, `oauth-issuer`,
+`oauth-flow`, `oauth-redirect-port`, `oauth-extensions`, `oauth-authzid`,
+`index-endpoint`, `index-insecure`, `index-ca`, `index-cert`, `index-key`,
+`index-token`, the
 nested `keychain:` block (`password`, `oauth-token`, `oauth-client-secret`:
 OS keychain accounts under service `k4a`, written by `k4a set-credential
 CONTEXT [--field F]` and removed by `delete-credential`), and the
@@ -497,7 +504,7 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
 ## Key Dependencies
 
 - `twmb/franz-go` — Pure Go Kafka client (`kgo`/`kadm`/`kmsg`; no CGO), including its SASL (SCRAM, PLAIN, OAUTHBEARER) and MSK IAM mechanisms
-- `golang.org/x/oauth2` — the OAUTHBEARER client-credentials grant (`internal/kafka/oauth.go`)
+- `golang.org/x/oauth2` — the OAUTHBEARER client-credentials grant (`internal/kafka/oauth.go`) and the interactive OIDC device and browser (PKCE) logins with refresh (`internal/kafka/oidc.go`, `k4a login`)
 - `aws-sdk-go-v2` — AWS shared config and credentials for IAM auth, and SSM parameter resolution
 - `blevesearch/bleve/v2` — the local and shared index (scorch, pure Go)
 - `google.golang.org/grpc` + `protobuf` — the k4a-index wire contract (and its `grpc.health.v1` service)

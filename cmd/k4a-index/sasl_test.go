@@ -72,3 +72,37 @@ func TestResolveConnection_OAuthFlagsOverlayContext(t *testing.T) {
 		t.Fatalf("auth without flags = %+v", kept)
 	}
 }
+
+// The daemon passes SASL extensions and an authorization ID through, by flag
+// or env, but refuses a context that would need a person to log in.
+func TestResolveConnection_ExtensionsAndNoInteractiveLogin(t *testing.T) {
+	t.Setenv("KAFKA_OAUTH_EXTENSIONS", "logicalCluster=lkc-1")
+
+	var f flags
+	args := []string{
+		"--allow", "orders.*", "-b", "kafka:9092", "-a", "oauthbearer", "--oauth-token", "t",
+		"--oauth-authzid", "svc",
+	}
+	if _, err := goflags.NewParser(&f, goflags.None).ParseArgs(args); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	_, got, err := resolveConnection(&f)
+	if err != nil {
+		t.Fatalf("resolveConnection: %v", err)
+	}
+	if got.OAuth.Extensions != "logicalCluster=lkc-1" || got.OAuth.AuthzID != "svc" {
+		t.Fatalf("oauth = %+v", got.OAuth)
+	}
+
+	path := writeDaemonCfg(t, `current-context: sso
+contexts:
+  sso:
+    brokers: sso:9092
+    auth: oauthbearer
+    oauth-issuer: https://idp.example
+    oauth-client-id: k4a
+`)
+	if _, _, err := resolveConnection(&flags{ConfigFile: path}); err == nil {
+		t.Fatal("resolveConnection accepted an interactive OIDC context")
+	}
+}

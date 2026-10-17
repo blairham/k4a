@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -99,6 +100,8 @@ type oauthFlags struct {
 	ClientID     string `long:"oauth-client-id"     env:"KAFKA_OAUTH_CLIENT_ID"     description:"OAUTHBEARER client ID"`
 	ClientSecret string `long:"oauth-client-secret" env:"KAFKA_OAUTH_CLIENT_SECRET" description:"OAUTHBEARER client secret"`
 	Scopes       string `long:"oauth-scopes"        env:"KAFKA_OAUTH_SCOPES"        description:"OAUTHBEARER scopes (comma-separated)"`
+	AuthzID      string `long:"oauth-authzid"       env:"KAFKA_OAUTH_AUTHZID"       description:"OAUTHBEARER authorization ID: act as this principal"`
+	Extensions   string `long:"oauth-extensions"    env:"KAFKA_OAUTH_EXTENSIONS"    description:"OAUTHBEARER SASL extensions (key=value,key=value)"`
 }
 
 func (o oauthFlags) config() kafka.OAuthConfig {
@@ -109,6 +112,8 @@ func (o oauthFlags) config() kafka.OAuthConfig {
 		ClientID:     o.ClientID,
 		ClientSecret: o.ClientSecret,
 		Scopes:       o.Scopes,
+		AuthzID:      o.AuthzID,
+		Extensions:   o.Extensions,
 	}
 }
 
@@ -584,7 +589,15 @@ func resolveConnection(f *flags) (string, kafka.AuthConfig, error) {
 	if err != nil {
 		return "", kafka.AuthConfig{}, err
 	}
-	return brokers, overlayAuth(cctx.ToAuthConfig(), flagAuth), nil
+	auth := overlayAuth(cctx.ToAuthConfig(), flagAuth)
+	if auth.OAuth.Interactive() {
+		// Nobody is there to log in, and the daemon must not depend on a
+		// person's cached refresh token.
+		return "", kafka.AuthConfig{}, errors.New(
+			"k4a-index cannot use an interactive OIDC login (oauth-issuer); use client credentials or a token file",
+		)
+	}
+	return brokers, auth, nil
 }
 
 // overlayAuth applies every connection flag that was set over the context's
@@ -608,6 +621,8 @@ func overlayAuth(base, flags kafka.AuthConfig) kafka.AuthConfig {
 		{&base.OAuth.ClientID, &flags.OAuth.ClientID},
 		{&base.OAuth.ClientSecret, &flags.OAuth.ClientSecret},
 		{&base.OAuth.Scopes, &flags.OAuth.Scopes},
+		{&base.OAuth.AuthzID, &flags.OAuth.AuthzID},
+		{&base.OAuth.Extensions, &flags.OAuth.Extensions},
 	} {
 		if *f.src != "" {
 			*f.dst = *f.src

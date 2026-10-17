@@ -58,6 +58,9 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"verify": func() (cli.Command, error) {
 			return &command.VerifyCommand{}, nil
 		},
+		"login": func() (cli.Command, error) {
+			return &command.LoginCommand{}, nil
+		},
 		"create-topic": func() (cli.Command, error) {
 			return &command.CreateTopicCmd{}, nil
 		},
