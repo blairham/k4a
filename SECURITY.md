@@ -117,6 +117,17 @@ including deleting topics, consumer groups, ACLs and records.
   GitHub's rate limit it sends a token from `gh auth token`, `GH_TOKEN` or
   `GITHUB_TOKEN` when one is available, to the GitHub API only. It does not
   verify the cosign signature; do that by hand (below) when it matters.
+- **`k4a search --archive`** runs an Athena query over a topic's S3 archive
+  with the AWS credentials of the archive's `profile` (else the context's),
+  resolved by the SDK as for `--auth iam`. It never connects to Kafka and
+  writes nothing under `~/.k4a`, but Athena keeps the **query text** (which
+  contains a literal from your search pattern) in the workgroup's history and
+  the **matched records** under its result location, in your AWS account and
+  under its access controls. Searching for a customer's email leaves the
+  email there. Before it runs, a query is estimated and k4a asks above
+  `archive.confirm-bytes`, refuses above `archive.max-bytes`, and stops a
+  running query that scans past it; table and column names from the config
+  must be plain identifiers and are never spliced into SQL as expressions.
 - **`k4a mcp`** serves the `search` tool over stdio to the local process that
   started it, with the same credentials and the same reach as the CLI.
 

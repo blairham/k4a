@@ -2,8 +2,9 @@
 
 **Status:** shipped — `internal/index` exists and the index is opt-in via
 `index.enabled` in `~/.k4a/config.yaml`. The tier plan at the bottom is
-kept as the record of what shipped in which order; Tiers 5-6 remain
-unbuilt. The shared deployment of the same machinery is
+kept as the record of what shipped in which order; Tier 5 remains
+unbuilt, and Tier 6 shipped as archive search
+([`archive-search.md`](archive-search.md)). The shared deployment of the same machinery is
 [`shared-index-service.md`](shared-index-service.md).
 **Depends on:** [`state-management.md`](state-management.md) — this design
 adds Tier 3 state per that doc's tiering model.

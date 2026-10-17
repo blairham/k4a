@@ -1,13 +1,16 @@
 # Design: Archive search (S3 sink + Athena)
 
-**Status:** proposed — this is the design pass #117 asked for before code.
+**Status:** shipped (v1, CLI only) — designed in #131, built for #117.
 It is the expanded form of Tier 6 in [`local-index.md`](local-index.md).
 **Depends on:** [`auth.md`](auth.md) (AWS profile handling),
 [`deep-search.md`](deep-search.md) (the search semantics this must not fork),
 [`local-index.md`](local-index.md) (the candidate-filter rule for recall).
-**Code (planned):** `internal/archive/` (planning, SQL, estimate, execution
-behind interfaces), `internal/command/search_archive.go` (the `--archive`
-path of `k4a search`), `internal/config` (the per-context `archive:` block).
+**Code:** `internal/archive/` (`config.go` settings and validation,
+`partition.go` pruning, `literal.go` candidate literal, `query.go` SQL,
+`estimate.go` S3 estimate and client construction, `run.go` execution and
+watchdog, `coverage.go`), `internal/command/search_archive.go` (the
+`--archive` path of `k4a search` and the confirm gate), `internal/config`
+(`Context.Archive`), `internal/searchcli` (`Summary.Archive`).
 
 ## Purpose
 
@@ -226,7 +229,8 @@ Three layers, cheapest first:
    (JSON, Avro) and an overestimate for columnar ones (Parquet, ORC), which
    is the safe direction. Then:
    - estimate > `max-bytes`: refuse before running, naming both numbers
-     (`--max-bytes` raises the cap for one run);
+     (`--max-bytes` raises the cap for one run; `0` disables the cap and
+     the watchdog, leaving only the workgroup's cutoff);
    - estimate > `confirm-bytes`, or no estimate (no `location`): ask on a
      terminal, showing the estimate and its list-price cost; refuse a
      non-terminal stdin without `--yes` — the same contract as the
@@ -268,11 +272,16 @@ time-partitions:
 ```
 
 The values to select are found by sampling: the instant `since`, every
-whole UTC hour inside the range, and `until`, each formatted in
-`time-zone`. Any one-hour local partition that intersects the range
-contains one of those samples, so this is recall-complete for every zone,
-including half-hour offsets and DST transitions, without calendar logic.
-Duplicate tuples collapse.
+UTC quarter hour inside the range, and `until`, each formatted in
+`time-zone`. Every zone in use offsets UTC by a multiple of 15 minutes, so
+every local partition starts on a UTC quarter hour: a partition that
+intersects the range either starts inside it (and that start is sampled)
+or started before `since` (and contains it). That is recall-complete for
+every zone, including half- and quarter-hour offsets and DST changes that
+shorten a local hour (Lord Howe's 30-minute shift), without calendar logic.
+Whole-hour sampling, the first sketch, missed exactly that Lord Howe hour;
+`TestPartitionTuplesCoverEveryLocalHour` checks against a minute-by-minute
+walk. Duplicate tuples collapse.
 
 A single column becomes `"dt" IN (...)`. Several columns become a nested
 OR of ANDs grouped by the leading columns (`year = '2026' AND month = '10'
