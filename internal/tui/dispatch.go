@@ -99,6 +99,7 @@ func (a *App) stopStoppableViews() {
 // indexer so writer locks are released and pending records flush
 // before tea.Quit returns control to main.
 func (a *App) shutdown() {
+	a.stopSearch()
 	a.stopStoppableViews()
 	a.stopAllIndexers()
 }
@@ -114,7 +115,7 @@ func (a *App) tableHeight() int {
 		(a.commandBar != nil && a.commandBar.Active()) ||
 			(a.prompt != nil && a.prompt.Active()),
 		a.confirm != nil && a.confirm.Active(),
-		a.errFlash != "" || a.flash != "",
+		a.hasStatusBar(),
 	)
 	return h
 }
@@ -129,7 +130,7 @@ func (a *App) innerWidth() int {
 		(a.commandBar != nil && a.commandBar.Active()) ||
 			(a.prompt != nil && a.prompt.Active()),
 		a.confirm != nil && a.confirm.Active(),
-		a.errFlash != "" || a.flash != "",
+		a.hasStatusBar(),
 	)
 	return w
 }

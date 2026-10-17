@@ -43,14 +43,7 @@ func (a *App) View() tea.View {
 		HelpVisible: a.showHelp,
 		Help:        a.withDecodeHelp(helpPanel(a.view)),
 	}
-	switch {
-	case a.errFlash != "":
-		frame.StatusBar = a.errFlash
-		frame.StatusBarLevel = chrome.LevelError
-	case a.flash != "":
-		frame.StatusBar = a.flash
-		frame.StatusBarLevel = chrome.LevelInfo
-	}
+	frame.StatusBar, frame.StatusBarLevel = a.statusBar()
 	switch {
 	case a.confirm.Active():
 		frame.Confirm = a.confirm.Prompt()
@@ -65,6 +58,25 @@ func (a *App) View() tea.View {
 	v := tea.NewView(a.chrome.Render(frame))
 	v.AltScreen = true
 	return v
+}
+
+// statusBar is the status row: an error or a flash when there is one, else
+// the progress of a search running behind the current view.
+func (a *App) statusBar() (string, chrome.StatusBarLevel) {
+	switch {
+	case a.errFlash != "":
+		return a.errFlash, chrome.LevelError
+	case a.flash != "":
+		return a.flash, chrome.LevelInfo
+	}
+	return a.backgroundSearchStatus(), chrome.LevelInfo
+}
+
+// hasStatusBar reports whether the status row is shown, which the content
+// height has to leave room for.
+func (a *App) hasStatusBar() bool {
+	s, _ := a.statusBar()
+	return s != ""
 }
 
 func (a *App) renderSplash() string {
@@ -154,7 +166,7 @@ func (a *App) renderContent() string {
 		a.filterBar.Active(),
 		a.commandBar.Active() || a.prompt.Active(),
 		a.confirm.Active(),
-		a.errFlash != "" || a.flash != "",
+		a.hasStatusBar(),
 	)
 	box := a.chrome.BorderedContent(a.renderActiveView(), a.width, innerH)
 	return chrome.InjectBorderTitle(box, a.renderResourceTitle(), a.chrome.Theme)

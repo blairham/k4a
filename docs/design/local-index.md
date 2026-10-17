@@ -317,8 +317,10 @@ dispatcher knows the new floor.
   rather than a substring is a v2 feature. v1 indexes raw bytes only;
   Bleve full-text catches "1234567" as a token within JSON values so the
   common case still works.
-- **Cross-topic search.** Indexes are per-topic; cross-topic search would
-  need a meta-index. Defer.
+- **A cross-topic index.** Indexes are per-topic. A cross-topic search
+  (`-t 'orders.*'`, `:search orders.*`) asks each topic's index or scan in
+  turn and reports coverage per topic (see deep-search.md); one query over a
+  meta-index would need a meta-index. Defer.
 - **Shared/networked indexes.** Local only. The whole point is to keep
   k4a a single binary.
 - **Compressed index export/import.** Useful for "send me your index of

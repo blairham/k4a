@@ -348,7 +348,17 @@ k4a search "4100000017" -t example.ingest.prices.v1 --since 24h
 k4a search "order-\d{8}" -t orders --partitions 0,1,2 --format json | jq .
 k4a search "X-Trace-Id" -t requests --scope key+value+headers --case-sensitive
 k4a search --path '.order.status == "failed"' -t orders --since 1h
+k4a search "4100000017" -t 'orders.*' --since 24h   # every topic the glob selects
 ```
+
+`-t` may be a glob (`*`, `?`, `[...]`), which searches every topic it selects,
+four at a time. Internal topics are left out unless the glob starts with `_`.
+Each topic is its own search with its own source and `--cap`, and its
+coverage is reported on its own: text output names the topic on each match,
+stderr gets one line per topic plus a total that counts the topics not fully
+searched, and `--format summary` emits `{"topic_glob", "topics": [...],
+"incomplete"}` with one full summary per topic. A glob that selects nothing,
+or any topic that fails, exits 1.
 
 `--path` matches a JSON-path predicate on the raw key/value instead of (or,
 with a pattern, as well as) the regex — a jq-style path, then `exists` (the
@@ -357,7 +367,7 @@ scans the broker. In the TUI, type `path:` before the path in the search bar.
 
 | Flag | Description |
 |------|-------------|
-| `-t`, `--topic` | Topic to search (**required**; env `KAFKA_TOPIC`) |
+| `-t`, `--topic` | Topic to search, or a glob of topics (**required**; env `KAFKA_TOPIC`) |
 | `--scope` | Where to match: `key`, `value`, `key+value` (default), `key+value+headers` |
 | `--since` / `--until` | Time bounds — a duration (`1h`, `24h`, `7d`, `2w`) or an RFC3339 timestamp |
 | `-P`, `--partitions` | Comma-separated partition IDs (default: all) |
@@ -563,12 +573,20 @@ Full message content with metadata cards, headers, and scrollable pretty-printed
 ### Search Results
 
 Matches from a whole-topic search (`s` in Messages, or `:search`), streamed as the scan runs.
+`:search orders.*` searches every topic the glob selects, with a TOPIC column
+and a coverage line naming each topic's source and whether it is complete.
+
+The scan keeps running when you leave the results: the status bar shows its
+progress, a flash says when it ends, `:results` brings it back and
+`:search-stop` stops it. One search runs at a time; starting another stops
+the last.
 
 | Key | Action |
 |-----|--------|
 | `enter` | View the matched message |
 | `s` | Edit the query and search again, in place |
 | `R` | Run the same search again (picks up records that arrived since) |
+| `x` | Stop the running scan, keeping what it found (marked partial) |
 | `/` | Filter the matches shown, by key or value; the scan is unchanged |
 | `c` / `K` / `C` | Copy the selected match's value / key / whole record as JSON to the clipboard |
 | `e` | Export the matches so far (as filtered) to a JSONL file |
@@ -622,7 +640,9 @@ Enter command mode with `:`. Supports tab autocomplete.
 | `:create-acl` `:acl` | Create ACL binding |
 | `:reset` | Delete selected offset (Group Detail only) |
 | `:reconnect` | Reload credentials / re-auth |
-| `:search` `:s` | Open search for the current topic |
+| `:search` `:s` `[TOPIC\|GLOB]` | Open search for the current topic, a named one, or every topic a glob selects |
+| `:results` | Show the last search's results, running or finished |
+| `:search-stop` | Stop the search running in the background |
 | `:upgrade` | Upgrade k4a and restart |
 | `:logo` `:logoless` | Toggle the ASCII logo (in-memory; not persisted) |
 

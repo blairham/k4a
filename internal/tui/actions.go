@@ -229,6 +229,9 @@ func (a *App) handleAction(action, param string) (tea.Model, tea.Cmd) { //nolint
 	case views.ActionRerunSearch:
 		cmd := a.rerunSearch()
 		return a, cmd
+	case views.ActionStopSearch:
+		a.stopSearch()
+		return a, nil
 	case views.ActionEditSearch:
 		cmd := a.editSearch()
 		return a, cmd
@@ -263,7 +266,10 @@ func (a *App) openSearch(param string) (tea.Model, tea.Cmd) {
 		return a.openSearchBar(topic)
 	}
 	runFn := a.searchRunner()
-	a.setView(style.ViewSearch, views.NewSearchView(runFn, topic, query))
+	// One search at a time: a new one replaces the last, which would
+	// otherwise scan on unseen, with nothing left to stop it.
+	a.stopSearch()
+	a.setView(style.ViewSearch, views.NewSearchView(runFn, topic, query).WithTopicResolver(a.resolveTopics))
 	return a.openView(style.ViewSearch, a.viewMap[style.ViewSearch].Init())
 }
 
@@ -705,7 +711,9 @@ func (a *App) applySwitchContext(msg switchContextMsg) (tea.Model, tea.Cmd) {
 		_ = a.session.SetLastContext(msg.name) //nolint:errcheck // best-effort session persistence
 	}
 
-	// Rebuild all views with new client.
+	// Rebuild all views with new client. A search of the old cluster is
+	// stopped first: its view is dropped, and nothing would cancel it.
+	a.stopSearch()
 	a.viewMap = map[style.ViewType]views.View{
 		style.ViewTopics:  views.NewTopicsView(a.client),
 		style.ViewGroups:  views.NewGroupsView(a.client),

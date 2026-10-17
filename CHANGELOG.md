@@ -23,6 +23,19 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   default: it needs read and write on that topic (and create, unless you
   create it compacted); without it the follow-set stays in the local file
   (#123).
+- Background search in the TUI: a scan keeps running when you leave the
+  results, with its progress in the status bar and a flash when it ends;
+  `:results` brings it back, and `x` or `:search-stop` stops it, keeping what
+  it found marked partial (#114).
+- Cross-topic search: `k4a search -t 'orders.*'` and `:search orders.*`
+  search every topic a glob selects. Coverage is reported per topic (source,
+  capped, truncated, failed), and the answer is only complete if every topic
+  is; `--format summary` emits one summary per topic (#114).
+
+### Fixed
+
+- Starting a second TUI search no longer leaves the first scanning unseen,
+  and its late matches no longer leak into the new results (#114).
 
 ## [0.0.3] - 2026-10-15
 

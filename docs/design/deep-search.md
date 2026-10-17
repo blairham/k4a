@@ -1,7 +1,7 @@
 # Design: Filter and search across a topic
 
 **Status:** shipped
-**Code:** `internal/tui/views/messages.go`, `internal/tui/views/search.go`, `internal/kafka/deep_search.go`, `internal/command/search.go`, `internal/jsonpath/`
+**Code:** `internal/tui/views/messages.go`, `internal/tui/views/search.go`, `internal/tui/views/search_topics.go`, `internal/tui/search_view.go`, `internal/kafka/deep_search.go`, `internal/kafka/multi_search.go`, `internal/command/search.go`, `internal/command/search_topics.go`, `internal/searchcli/`, `internal/jsonpath/`
 
 ## Purpose
 
@@ -230,16 +230,103 @@ each partition (because of reverse-chunked scan). We do not buffer-and-sort.
 | One partition unreachable | that partition's worker exits; others continue. Header: `scanned 11/12 partitions` |
 | Invalid regex | caught at form submit; the form rejects with inline error |
 | Topic deleted mid-search | `ListOffsets` or read returns error → partition treated as unreachable |
-| User presses `esc` | scan canceled; SearchView pops, returns to Messages |
+| User presses `esc` | SearchView pops; the scan keeps running in the background (see below) |
+| User presses `x` / `:search-stop` | scan canceled; the matches so far stay, header says `stopped · … · results are partial` |
+| A new search starts, the context switches, or k4a quits | the old scan is canceled — never left running with nothing reading it |
+| Topic glob selects nothing | error, never a clean empty result (`kafka.ErrNoTopicMatch`) |
+| One topic of a glob fails | that topic's coverage shows the error; the others continue; the whole answer is INCOMPLETE |
 
 ## What's intentionally NOT here
 
 - **Server-side filter.** Kafka has none.
-- **Background scans after view exit.** When the user leaves SearchView,
-  the scan cancels. Background scans add state and surface area we don't
-  want until the foreground shape is proven.
-- **Cross-topic search.** Switch topic, re-run.
+- **More than one search at a time.** One background search; starting
+  another cancels it. A queue of scans would multiply broker load behind the
+  user's back and needs a list view to manage; nothing has asked for it.
+- **Background scans that outlive k4a.** Quitting cancels the scan. A result
+  worth keeping is in the query cache already (when it completed) or can be
+  exported with `e`.
+- **One merged answer across topics.** A cross-topic search is N searches
+  side by side; there is no cross-topic index, no global cap and no merged
+  ordering (see below).
+- **Cross-topic search in MCP.** `k4a mcp` and `k4a-mcp` still take one
+  topic. The per-topic summary (`searchcli.TopicsSummary`) is shaped so the
+  tools can grow a glob without a new wire format.
 - **Match count only mode.** Counting requires the same read.
+
+## Background scans
+
+A scan does not belong to the Search view's lifetime. Every scan message is
+routed to the Search view wherever the user is (`App.updateSearch`), so `esc`
+back to Messages, a tab switch or a trip into Message Detail leaves it
+streaming. While it runs behind another view the status bar shows the same
+progress line as the header (`backgroundSearchStatus`), and when it ends a
+flash says how it ended (`complete`, `INCOMPLETE`, capped, error) and points
+at `:results`, which pushes the Search view back on top so `esc` returns to
+where the user was.
+
+Stopping is explicit: `x` in the results or `:search-stop` anywhere calls
+`SearchView.Cancel`, which cancels the scan's context and moves the view to
+`searchStateCanceled` — the matches so far stay, and the header says they are
+partial. The context error the cancellation produces is not shown as a
+failure. A canceled scan is never cached (`searchcache` skips a canceled
+relay), so the partial set cannot come back later as a complete answer.
+
+**One search at a time.** A new search, a context switch (its client is
+gone) and quitting all call `App.stopSearch` first. Before this, `esc` left
+the scan running invisibly and a second search replaced the view without
+canceling the first, which kept scanning with nothing reading it; its
+`searchcache` relay then blocked forever on its match send. Two fixes make
+abandoning a scan safe: the relay's send watches the context, and scan IDs
+come from one process-wide counter (`nextScanID`), because per-view IDs
+restarted at 1 and let a replaced view's late messages pass as the new
+view's. A stale message is now dropped without starting another reader.
+
+## Cross-topic search
+
+`k4a search -t 'orders.*'`, and `:search orders.*` in the TUI, search every
+topic a glob selects. A topic argument is a glob when it contains `*`, `?` or
+`[` (`kafka.IsTopicGlob`): Kafka topic names are limited to `[a-zA-Z0-9._-]`,
+so the two readings cannot collide. `path.Match` semantics; the match runs
+against `FetchTopics`, and internal topics (`__consumer_offsets`,
+`_schemas`) are only selected by a glob that itself starts with `_` — `*`
+means the user's topics. A glob that selects nothing is an error, never an
+empty, clean-looking result.
+
+**Each topic is its own search.** `kafka.SearchTopics` runs the same
+`SearchFunc` once per topic — cache, local index, shared index or scan,
+decided per topic against that topic's coverage — and merges the three
+channels. Every progress frame is tagged with its topic
+(`DeepSearchProgress.Topic`) and every error is a `*kafka.TopicError`, so one
+topic failing does not stop the others. At most `MaxParallelTopics` (4)
+topics run at once: each scan already fans out to a worker per partition and
+up to eight fetchers each, and a wide glob times that would swamp the
+brokers and the client. The match cap applies per topic, so a busy topic
+cannot starve a quiet one of its matches.
+
+**Coverage stays per topic.** A merged total would read as one clean answer
+while hiding the topic that was truncated, capped or failed, so no surface
+reports only a total:
+
+- **TUI:** a TOPIC column, and a third header line that stays visible after
+  the scan — `orders.a: scanned 2 · orders.b: INCOMPLETE 1 · orders.c: error:
+  … · orders.d: indexed (shared) 0`, or `queued` / a percentage while
+  running. The whole search is `complete` only when every topic reported
+  `Done` and was neither truncated nor capped; a topic that failed, was
+  truncated or ended without a final frame makes it `INCOMPLETE · k of N
+  topics not fully searched`; all topics failing is an error.
+- **CLI streaming:** text output names the topic on each match; stderr gets
+  one line per topic (the single-topic summary line, or `error:` / `not
+  finished`) and a total with `(INCOMPLETE — k of N topics not fully
+  searched)`. Exit status is 1 if any topic failed.
+- **CLI `--format summary`:** a `searchcli.TopicsSummary` — `topic_glob`,
+  `topics` (one complete `Summary` per topic, with its own `stats.source`,
+  `capped` and `truncated`), a `matches` total and `incomplete`. The
+  single-topic document is unchanged.
+
+Progress frames in the merged stream are sent blocking (with the context),
+never offered and dropped as a single scan's are: a topic's last frame is the
+only place it says it was truncated, and dropping it would make an incomplete
+topic look complete.
 
 ## JSON path search
 

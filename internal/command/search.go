@@ -29,7 +29,7 @@ import (
 // SearchFlags defines flags for the search command. The positional argument
 // is the search pattern; everything else tunes the search.
 type SearchFlags struct {
-	Topic      string `short:"t" long:"topic"          env:"KAFKA_TOPIC" required:"true" description:"Topic to search (required)"`
+	Topic      string `short:"t" long:"topic"          env:"KAFKA_TOPIC" required:"true" description:"Topic to search, or a glob (orders.*) to search every topic it selects (required)"`
 	Scope      string `          long:"scope"                                            description:"Match in: key, value, key+value, key+value+headers"                                       default:"key+value"`
 	Since      string `          long:"since"                                            description:"Lower time bound (e.g., 1h, 24h, 7d) or RFC3339 timestamp"`
 	Until      string `          long:"until"                                            description:"Upper time bound (same format as --since)"`
@@ -65,6 +65,13 @@ func (c *SearchCommand) Help() string {
   record whose path is missing never matches, not even with !=. The index
   cannot answer it, so it always scans the broker.
 
+  --topic may be a glob (*, ? and [...]; Kafka topic names cannot contain
+  them): every topic it selects is searched, at most four at a time, each
+  with its own source (cache, index or scan) and its own --cap. Internal
+  topics are only selected by a glob that starts with "_". Text output then
+  names the topic on each match, stderr reports each topic's coverage, and
+  --format summary emits one summary per topic under "topics".
+
   Identical to the TUI search (s in Messages, or :search), just non-interactive — useful
   for scripts, CI, "did this message ever happen" one-liners.
 
@@ -96,7 +103,7 @@ Shared index (optional):
       --index-token-file=FILE     Bearer token file (or K4A_INDEX_TOKEN for a context's daemon)
 
 Search:
-  -t, --topic=TOPIC               Topic to search (required)
+  -t, --topic=TOPIC|GLOB          Topic to search, or a glob of topics (required)
       --scope=SCOPE               Match in: key, value, key+value, key+value+headers
       --since=DURATION|TIMESTAMP  Lower time bound (e.g., 1h, 24h, 7d, 2026-05-14T00:00:00Z)
       --until=DURATION|TIMESTAMP  Upper time bound
@@ -118,6 +125,9 @@ Examples:
 
   # Regex against specific partitions, JSON output for piping into jq
   k4a search "order-\\d{8}" -t orders --partitions 0,1,2 --format json | jq .
+
+  # Every orders topic at once; each topic reports its own coverage
+  k4a search "4100000017" -t 'orders.*' --since 24h
 
   # Failed orders in the last hour, by field rather than by substring
   k4a search --path '.order.status == "failed"' -t orders --since 1h
@@ -323,6 +333,13 @@ func runSearch(
 		format = "text"
 	}
 
+	if kafka.IsTopicGlob(flags.Topic) {
+		return runTopicsSearch(ctx, topicsSearch{
+			client: client, cache: cache, remote: remote, flags: flags,
+			params: params, pattern: pattern, format: format,
+		})
+	}
+
 	if format == "summary" {
 		// Buffer-and-emit-once path. Reuses the shared searchcli.Run
 		// helper so the wire format is identical to the MCP tool.
@@ -459,6 +476,8 @@ func searchSummaryLine(lastProg kafka.DeepSearchProgress, matches int) string {
 type searchOutput struct {
 	jsonEnc *json.Encoder
 	textFmt bool
+	// withTopic names the topic on each text line, for a cross-topic search.
+	withTopic bool
 }
 
 func newSearchOutput(format string) *searchOutput {
@@ -470,8 +489,12 @@ func newSearchOutput(format string) *searchOutput {
 
 func (o *searchOutput) emit(m kafka.ConsumedMessage) error {
 	if o.textFmt {
-		_, err := fmt.Printf("[p%d o%d %s] %s\t%s\n",
-			m.Partition, m.Offset,
+		topic := ""
+		if o.withTopic {
+			topic = m.Topic + " "
+		}
+		_, err := fmt.Printf("[%sp%d o%d %s] %s\t%s\n",
+			topic, m.Partition, m.Offset,
 			m.Time.Format("2006-01-02T15:04:05.000Z07:00"),
 			m.Key, sanitize(m.Value))
 		return err

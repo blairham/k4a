@@ -104,7 +104,9 @@ staging` still opens the TUI.
 - **Message Detail** — sticky metadata/header cards + scrollable pretty-printed JSON
 - **ACLs** — access control list bindings with create/edit/delete
 - **Client Quotas** — `:quotas`; client quotas per entity with add/edit/remove
-- **Search** — streamed matches from a whole-topic search (`s` in Messages, `:search`)
+- **Search** — streamed matches from a whole-topic search (`s` in Messages, `:search`),
+  or from every topic a glob selects (`:search orders.*`); keeps running in
+  the background when you leave it
 - **Context** — context selector for switching clusters
 - **Produce** — generated or custom (value, key, headers) messages with progress tracking
 - **Create Topic** — topic creation form (name, partitions, replication)
@@ -217,6 +219,18 @@ before overwriting.
 - `e` — export the matches so far (as filtered) to JSONL
 - `c` / `K` / `C` — copy the selected match's value / key / whole record as
   JSON (the same copy action as Messages)
+- `x` — stop the running scan (`SearchView.Cancel`); the matches stay,
+  marked partial
+- Leaving the view does not stop the scan: messages are routed to the
+  Search view wherever the user is (`App.updateSearch`), the status bar shows
+  its progress (`backgroundSearchStatus`), and it flashes when it ends.
+  `:results` reopens it, `:search-stop` stops it. One search at a time: a new
+  one, a context switch or quitting cancels the old (`App.stopSearch`). Scan
+  IDs are unique across views (`nextScanID`)
+- A glob topic (`kafka.IsTopicGlob`) is resolved by `kafka.Client.ResolveTopics`
+  and searched by `kafka.SearchTopics` (`views/search_topics.go`): a TOPIC
+  column, and a per-topic coverage line. The whole answer is complete only if
+  every topic is
 
 ### ACLs View
 
@@ -274,7 +288,9 @@ Enter with `:`, supports autocomplete:
 :create-acl, :acl              Create ACL
 :reset                         Delete selected offset (Group Detail)
 :reconnect                     Reload credentials / re-auth
-:search, :s                    Open search for the current topic
+:search, :s [TOPIC|GLOB]       Open search for the current topic, or a named one / a glob
+:results                       Show the last search's results (running or finished)
+:search-stop                   Stop the background search
 :upgrade                       Upgrade k4a and restart
 :logo, :logoless               Toggle ASCII logo (in-memory; not persisted)
 ```

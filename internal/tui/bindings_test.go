@@ -338,6 +338,8 @@ func TestKnownCommandsDispatch(t *testing.T) {
 		"reconnect",
 		"search",
 		"s",
+		"results",
+		"search-stop",
 		"upgrade",
 		"logo",
 		"logoless",
