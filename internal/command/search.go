@@ -44,7 +44,7 @@ type SearchFlags struct {
 	Quiet          bool `short:"q" long:"quiet"                                            description:"Suppress progress messages on stderr"`
 	SchemaRegistry SchemaRegistryFlags
 	MaxBytes      string `          long:"max-bytes"                                        description:"With --archive: refuse or stop a query over this many bytes (overrides archive.max-bytes)"`
-	Archive       bool   `          long:"archive"                                          description:"Search the topic's S3 archive with Athena instead of Kafka (needs --since)"`
+	Archive       bool   `          long:"archive"                                          description:"Search the topic's S3 archive with Athena instead of Kafka (needs --since and one exact topic, not a glob)"`
 	Explain       bool   `          long:"explain"                                          description:"With --archive: print the SQL and estimate prefixes, run nothing"`
 	Yes           bool   `short:"y" long:"yes"                                              description:"With --archive: run without asking, still refusing over max-bytes"`
 }

@@ -328,6 +328,7 @@ func TestArchiveSearchRefusals(t *testing.T) {
 		"brokers":       {"brokers", "localhost:9092"},
 		"path":          {"path", ".id == 1"},
 		"unknown topic": {"topic", "payments"},
+		"glob topic":    {"topic", "orders.*"},
 	} {
 		h := &archiveHarness{}
 		if code := runArchiveCLI(t, h, cfg, extra...); code != 1 || h.clientsBuilt {

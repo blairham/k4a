@@ -74,6 +74,9 @@ func resolveArchive(flags *SearchFlags) (archiveTarget, error) {
 	a.Workgroup = config.ExpandRef(a.Workgroup)
 	a.OutputLocation = config.ExpandRef(a.OutputLocation)
 
+	if strings.ContainsAny(flags.Topic, "*?[") {
+		return archiveTarget{}, fmt.Errorf("--archive searches one topic's table; %q is a glob", flags.Topic)
+	}
 	t := archiveTarget{cfg: a}
 	if t.topic, err = a.Topic(flags.Topic); err != nil {
 		return archiveTarget{}, err
