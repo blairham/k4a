@@ -51,8 +51,9 @@ func newMCPServer(client indexv1.IndexClient, version string) *mcp.Server {
 			"matches (newest-first) plus an explicit COVERAGE frame describing what the " +
 			"index authoritatively holds. Use for 'did this message ever happen', 'find " +
 			"records mentioning X', or 'recent events for entity Y'. Matching is " +
-			"grep-style: the pattern can hit anywhere inside the raw key/value/headers, " +
-			"same as a broker scan. If served_from_index is false the topic is not " +
+			"grep-style: the pattern can hit anywhere inside the key/value/headers, " +
+			"same as a broker scan; when coverage names a decoder, schema-registry framed " +
+			"keys and values are matched and returned as their decoded JSON. If served_from_index is false the topic is not " +
 			"followed — fall back to a direct scan (k4a search). If coverage does not " +
 			"span your time window, the index is only authoritative for the covered " +
 			"slice; scan the remainder. If pattern_recall is 'best_effort' the index " +
@@ -80,7 +81,7 @@ func newMCPServer(client indexv1.IndexClient, version string) *mcp.Server {
 type mcpSearchInput struct {
 	Topic         string  `json:"topic"                    jsonschema:"name of the Kafka topic to search (required)"`
 	Query         string  `json:"query,omitempty"          jsonschema:"regex pattern OR literal substring (falls back to literal on parse failure); empty matches all records in the time/partition window"`
-	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the raw key/value, jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. ANDed with query"`
+	Path          string  `json:"path,omitempty"           jsonschema:"JSON-path predicate on the key/value (decoded JSON when coverage names a decoder), jq-style: .a.b[0] or .[\"odd name\"] then exists (default), ==, !=, <, <=, >, >= against a JSON scalar, e.g. .order.status == \"failed\". Numbers compare numerically, strings exactly; a missing path never matches. ANDed with query"`
 	Since         string  `json:"since,omitempty"          jsonschema:"lower time bound; relative duration like 24h/7d or an RFC3339 timestamp"`
 	Until         string  `json:"until,omitempty"          jsonschema:"upper time bound; same format as since"`
 	Scope         string  `json:"scope,omitempty"          jsonschema:"match scope: key, value, key+value (default), or key+value+headers"`
@@ -123,6 +124,10 @@ type mcpGap struct {
 }
 
 type mcpCoverage struct {
+	// Decoder is set when the daemon indexed schema-registry framed keys and
+	// values as their decoded JSON: matches, and the text patterns hit, are
+	// that JSON rather than the bytes. It names the registry by hash only.
+	Decoder     string                 `json:"decoder,omitempty"`
 	Partitions  []mcpPartitionCoverage `json:"partitions"`
 	Gaps        []mcpGap               `json:"gaps,omitempty"`
 	Following   bool                   `json:"following"`
@@ -431,6 +436,7 @@ func coverageToMCP(c *indexv1.Coverage) *mcpCoverage {
 		return nil
 	}
 	out := &mcpCoverage{
+		Decoder:     c.GetDecoder(),
 		Following:   c.GetFollowing(),
 		Backfilling: c.GetBackfilling(),
 		Partitions:  make([]mcpPartitionCoverage, 0, len(c.GetPartitions())),

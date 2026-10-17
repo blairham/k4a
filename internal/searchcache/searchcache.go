@@ -62,7 +62,11 @@ type Key struct {
 	Pattern string
 	// Path is omitted when empty so keys of plain regex searches hash exactly
 	// as they did before JSON-path search existed.
-	Path          string `json:",omitempty"`
+	Path string `json:",omitempty"`
+	// Decoder is the search's decoder identity: a decoded search matches
+	// other text than a raw one, so the two never share an entry. Omitted
+	// when empty, so raw keys hash as they did before decoding existed.
+	Decoder       string `json:",omitempty"`
 	PartitionsCSV string // sorted, comma-separated; "" means all partitions
 	SinceMS       int64  // Unix milliseconds; 0 means "no lower bound"
 	UntilMS       int64  // Unix milliseconds; 0 means "no upper bound"
@@ -95,6 +99,7 @@ func BuildKey(cluster, topic string, params kafka.SearchParams) Key {
 		Topic:         topic,
 		Pattern:       "",
 		Path:          params.PathString(),
+		Decoder:       params.DecoderIdentity(),
 		Scope:         uint8(params.Scope),
 		PartitionsCSV: strings.Join(csv, ","),
 	}

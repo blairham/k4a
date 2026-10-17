@@ -47,7 +47,10 @@ const (
 	// SchemaVersion is the on-disk schema version. Bumping it causes
 	// existing indexes to be renamed aside and rebuilt from scratch.
 	// 2: text fields use textAnalyzer; version 1 terms could be corrupted.
-	SchemaVersion = 2
+	// 3: a schema-registry framed key or value may be stored decoded, and
+	// the bookkeeper's decoder field says which decoding produced the text.
+	// A version 2 index never recorded one, so it cannot vouch for it.
+	SchemaVersion = 3
 
 	// bookkeeperFile is the per-topic state file inside the index dir.
 	bookkeeperFile = "state.json"
@@ -104,8 +107,13 @@ type Bookkeeper struct {
 	NewestTimePerPartition   map[int32]int64 `json:"newest_time_per_partition"`
 	OldestTimePerPartition   map[int32]int64 `json:"oldest_time_per_partition"`
 	Gaps                     []Gap           `json:"gaps,omitempty"`
-	ByteSize                 int64           `json:"byte_size"`
-	SchemaVersion            int             `json:"schema_version"`
+	// Decoder is the identity of the kafka.RecordDecoder the stored text was
+	// decoded with, or "" for text stored as consumed. CanServe serves only a
+	// search that decodes the same way, so the index answers what that
+	// search's scan would.
+	Decoder       string `json:"decoder,omitempty"`
+	ByteSize      int64  `json:"byte_size"`
+	SchemaVersion int    `json:"schema_version"`
 }
 
 // Gap describes a contiguous range of offsets within a partition that
@@ -123,6 +131,10 @@ type Gap struct {
 type Indexer struct {
 	idx  bleve.Index
 	lock *state.Lock
+	// decoder renders framed records before they are stored; nil stores
+	// them as consumed. Fixed for the indexer's life: the bookkeeper's
+	// Decoder vouches for every document in the index.
+	decoder kafka.RecordDecoder
 	// snap is the last COMMITTED bookkeeper, published under mu and read
 	// without it. It is what makes coverage answerable while the drain holds
 	// mu for a whole IndexBatch — see BookkeeperSnapshot.
@@ -145,6 +157,14 @@ type Indexer struct {
 // On a schema-version mismatch the directory is renamed aside and
 // rebuilt from scratch.
 func Open(root *state.Root, cluster, topic string) (*Indexer, error) {
+	return OpenDecoding(root, cluster, topic, nil)
+}
+
+// OpenDecoding is Open for an index whose framed keys and values are stored
+// as dec decodes them (nil: as consumed). An index on disk built with another
+// decoder is renamed aside and rebuilt, as on a schema bump: its text is not
+// what this one would store, and one index cannot vouch for two decodings.
+func OpenDecoding(root *state.Root, cluster, topic string, dec kafka.RecordDecoder) (*Indexer, error) {
 	if cluster == "" {
 		return nil, fmt.Errorf("cluster ID is required for index isolation")
 	}
@@ -166,6 +186,7 @@ func Open(root *state.Root, cluster, topic string) (*Indexer, error) {
 		cluster: cluster,
 		topic:   topic,
 		lock:    lock,
+		decoder: dec,
 	}
 	if err := ix.loadOrInit(); err != nil {
 		_ = lock.Release() //nolint:errcheck // best-effort on failure path
@@ -199,6 +220,7 @@ func (ix *Indexer) loadOrInit() error {
 		// Fresh install — no state.json yet. Defer until first commit.
 		ix.book = Bookkeeper{
 			SchemaVersion:            SchemaVersion,
+			Decoder:                  ix.decoderIdentity(),
 			NewestOffsetPerPartition: make(map[int32]int64),
 			OldestOffsetPerPartition: make(map[int32]int64),
 			NewestTimePerPartition:   make(map[int32]int64),
@@ -212,6 +234,10 @@ func (ix *Indexer) loadOrInit() error {
 	case book.SchemaVersion != SchemaVersion:
 		// Schema bump → wipe and start over.
 		backupTopicDir(ix.dir, "schema")
+		return ix.loadOrInit()
+	case book.Decoder != ix.decoderIdentity():
+		// Decoded by another registry, or not at all → wipe and start over.
+		backupTopicDir(ix.dir, "decoder")
 		return ix.loadOrInit()
 	default:
 		ix.book = book
@@ -228,6 +254,14 @@ func (ix *Indexer) loadOrInit() error {
 	ix.idx = idx
 	ix.publishLocked()
 	return nil
+}
+
+// decoderIdentity is the identity this indexer stores text under.
+func (ix *Indexer) decoderIdentity() string {
+	if ix.decoder == nil {
+		return ""
+	}
+	return ix.decoder.Identity()
 }
 
 func ensureMaps(b *Bookkeeper) {
@@ -419,10 +453,12 @@ func (ix *Indexer) Index(ctx context.Context, msg kafka.ConsumedMessage) error {
 
 // IndexBatch writes a batch atomically. Bookkeeper updates happen in
 // memory; persistence to state.json is deferred to FlushBookkeeper().
+// With a decoder, framed records are decoded in msgs first (decodeBatch).
 func (ix *Indexer) IndexBatch(ctx context.Context, msgs []kafka.ConsumedMessage) error {
 	if len(msgs) == 0 {
 		return nil
 	}
+	ix.decodeBatch(ctx, msgs)
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
 	if ix.closed {

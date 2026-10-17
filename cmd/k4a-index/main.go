@@ -44,6 +44,7 @@ import (
 	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
 	"github.com/blairham/k4a/internal/kafka"
+	"github.com/blairham/k4a/internal/schemareg"
 	"github.com/blairham/k4a/internal/state"
 	"github.com/blairham/k4a/internal/version"
 )
@@ -88,7 +89,8 @@ type flags struct {
 	Insecure      bool          `long:"insecure"                                                        description:"Skip TLS certificate verification"                                                                                                                                                                                                                                                                                            short:"k"`
 	NoTLS         bool          `long:"no-tls"                                                          description:"Run a SASL method without TLS (SASL_PLAINTEXT); credentials cross the network in cleartext"`
 
-	OAuth oauthFlags
+	OAuth    oauthFlags
+	Registry registryFlags
 }
 
 // oauthFlags configures OAUTHBEARER, mirroring the CLI's flags of the same
@@ -160,6 +162,16 @@ func run(args []string) int {
 		log.Warn(w)
 	}
 
+	dec, err := buildDecoder(&f)
+	if err != nil {
+		log.Error("schema registry", "err", err)
+		return 1
+	}
+	if dec != nil {
+		log.Info("decoding framed records before indexing",
+			"schema_registry", schemareg.RedactURL(registryConfig(&f).URL), "decoder", dec.Identity())
+	}
+
 	client, err := kafka.NewClient(authCfg, brokers)
 	if err != nil {
 		log.Error("kafka client", "err", err)
@@ -170,7 +182,7 @@ func run(args []string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	return serve(ctx, &f, lim, client)
+	return serve(ctx, &f, lim, client, dec)
 }
 
 // startupLimits is what validateFlags derives from the flags before anything
@@ -318,7 +330,7 @@ func logStartup(f *flags, lim startupLimits) {
 
 // serve builds the follow-set and runs the gRPC server until ctx is signaled,
 // returning the process exit code.
-func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Client) int {
+func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Client, dec kafka.RecordDecoder) int {
 	// The cluster ID keys the index directory so two clusters' identically
 	// named topics never collide — the same isolation the local index uses.
 	cluster, err := client.ClusterID(ctx)
@@ -342,6 +354,7 @@ func serve(ctx context.Context, f *flags, lim startupLimits, client *kafka.Clien
 			MergeGrace:  f.MergeGrace,
 			WipeStrikes: f.WipeStrikes,
 			Backfill:    backfillOptions{Window: f.BackfillWin, MaxRecords: f.BackfillMax},
+			Decoder:     dec,
 		},
 	})
 	defer mgr.stopAll()

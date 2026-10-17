@@ -219,3 +219,46 @@ func (a *AsyncIndexer) reportFlushError(stage string, records int, err error) {
 		a.onFlushError(stage, records, err)
 	}
 }
+
+// GapDecodeUnavailable is the reason on a gap left by records the decoder
+// could not settle (the registry did not answer). Their text was stored as
+// consumed, which is not what a decoding scan matches, so the index must not
+// claim them.
+const GapDecodeUnavailable = "decode_unavailable"
+
+// decodeBatch renders each record's framed key and value with the indexer's
+// decoder, in place and outside ix.mu: a schema lookup is a
+// network call, and coverage reads must not wait on it. A record that could
+// not settle is recorded as a gap BEFORE the batch commits, so no published
+// coverage ever spans it without the gap beside it.
+func (ix *Indexer) decodeBatch(ctx context.Context, batch []kafka.ConsumedMessage) {
+	if ix.decoder == nil {
+		return
+	}
+	var gaps []Gap
+	for i := range batch {
+		m := &batch[i]
+		if m.RawKey == nil && m.RawValue == nil {
+			continue // not framed; nothing for a decoder to change
+		}
+		if !ix.decoder.DecodeRecord(ctx, m) {
+			gaps = addOffsetGap(gaps, int32(m.Partition), m.Offset) //nolint:gosec // partition IDs fit in int32
+		}
+	}
+	if len(gaps) > 0 {
+		recordGaps(ix, gaps)
+	}
+}
+
+// addOffsetGap widens the partition's decode gap to cover offset, keeping one
+// gap per partition per batch rather than one per record.
+func addOffsetGap(gaps []Gap, partition int32, offset int64) []Gap {
+	for i := range gaps {
+		if gaps[i].Partition == partition {
+			gaps[i].Start = min(gaps[i].Start, offset)
+			gaps[i].End = max(gaps[i].End, offset+1)
+			return gaps
+		}
+	}
+	return append(gaps, Gap{Partition: partition, Start: offset, End: offset + 1, Reason: GapDecodeUnavailable})
+}

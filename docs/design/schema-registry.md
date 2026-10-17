@@ -1,10 +1,13 @@
 # Design: Schema Registry decoding
 
-**Status:** living document. Decoding is wired into Messages, Message Detail
-and `k4a consume`; search and the indexes still see the bytes as consumed (#48).
+**Status:** living document. Decoding is wired into Messages, Message Detail,
+`k4a consume`, and search: the deep-search scan, the local index and
+`k4a-index` all match decoded text, gated on the registry's identity (#115).
 **Code:** `internal/schemareg/`, `internal/command/schemareg.go`,
 `internal/tui/schemareg.go`, `internal/tui/views/messages.go`,
-`internal/tui/views/message_detail.go`
+`internal/tui/views/message_detail.go`; for search, `internal/kafka/decoder.go`,
+`internal/kafka/deep_search.go`, `internal/index/` (`index.go`, `async.go`,
+`query.go`), `internal/indexwire/`, `cmd/k4a-index/registry.go`
 
 ## Purpose
 
@@ -15,9 +18,10 @@ them back into JSON using the schemas a Confluent-compatible Schema Registry
 holds, so Messages, Message Detail and `k4a consume` show what the producer
 meant.
 
-It is a display layer. Decoding never changes what k4a reads from Kafka,
-never writes anything, and a payload it cannot decode is shown exactly as it
-was before, with a short reason beside it.
+It started as a display layer and is now also what search matches. Decoding
+never changes what k4a reads from Kafka, never writes to the registry, and a
+payload it cannot decode is shown, and searched, exactly as it was before,
+with a short reason beside it.
 
 ## Wire format
 
@@ -112,15 +116,19 @@ registry rather than the schema's own imports.
 
 A context's nested `schema-registry:` block (`url`, `username`, `password`,
 `token`, `ca`; secrets in the whole-value `$VAR` form) names the registry.
-`--schema-registry-url`, `-username`, `-password`, `-token` and `-ca` on `k4a`
-and `k4a consume`, each with a `K4A_SCHEMA_REGISTRY_*` environment variable,
+`--schema-registry-url`, `-username`, `-password`, `-token` and `-ca` on `k4a`,
+`k4a consume`, `k4a search`, `k4a mcp` and `k4a-index`, each with a
+`K4A_SCHEMA_REGISTRY_*` environment variable,
 override it field by field: flag, then environment, then config, the order
 every other connection setting follows. Setting a token drops the context's
 username and password and vice versa, so an override never leaves both for
 the client to refuse. A `--brokers` connection has no context and takes the
 flags alone. In the TUI, a context switch builds the next context's registry
 with the same flags over it; a registry that cannot be built (a bad URL, an
-unreadable CA) flashes an error and costs decoding, not the switch.
+unreadable CA) flashes an error and costs decoding, not the switch. The
+headless commands and `k4a-index` refuse to start with one instead. The
+`k4a-index` chart renders `schemaRegistry.url` and credentials from an
+existing Secret as those variables.
 
 ## Display
 
@@ -153,15 +161,76 @@ off, so no caller checks.
   `value-schema="..."`. Each distinct failure is reported once on stderr (at
   most 20), so stdout stays the messages.
 
-### Not wired: search and the indexes
+## Search and the indexes
 
-Deep search, the local index and `k4a-index` still match and store the
-bytes as consumed. Decoding them is not a display change: the index is an
-accelerator whose answers must equal a scan's (`AGENTS.md`, *coverage
-parity*), so a client that decodes and a shared daemon that does not (or
-uses another registry) would disagree about the same query. Decoded search
-needs the decoder on both sides of that contract and a `SchemaVersion` bump
-for the indexes; it is tracked on #48 / #59.
+A search with a registry configured matches a framed key or value as its
+decoded JSON, the text Messages shows, on every path that can answer it: the
+deep-search scan, the search cache, the local index and `k4a-index`. The
+index is an accelerator whose answers must equal a scan's (`AGENTS.md`,
+*coverage parity*), so decoding is not added to one side alone: the scan and
+the indexer take the same decoder, and the coverage contract carries which
+decoder built an index, so a client never trusts one that decoded
+differently.
+
+**The decoder.** `kafka.RecordDecoder` (`internal/kafka/decoder.go`) is the
+seam; `*schemareg.Registry` implements it (`DecodeRecord`, `Identity`), and
+the interface lives in `kafka` because `schemareg` imports it.
+`kafka.SearchParams.Decoder` carries it. The TUI sets it once, outermost
+(`withDecoder` in `internal/tui/actions.go`), from the connection's registry,
+so the cache key, both coverage checks and the scan read the same one;
+`k4a search` and `k4a mcp` build it from the context's block and
+`--schema-registry-*`, with `--decode raw` to match bytes instead, and
+`k4a-index` from the same flags and `K4A_SCHEMA_REGISTRY_*`.
+
+**Identity.** `Registry.Identity` is `schemareg/<v>:` and the first 8 bytes
+of a SHA-256 over the rendering version and the registry URL, lowercased,
+without credentials, query, fragment or a trailing slash. A client and a
+daemon pointed at the same registry agree; neither learns the other's URL
+from coverage, and nothing secret reaches state on disk. Two URLs for one
+registry (an internal and an external hostname) read as different
+decoders, which costs a scan, never a wrong answer. `decodingVersion`
+names the rendering: a change that makes a payload decode to different text
+bumps it, and every index built with the old rendering stops matching.
+
+**Scan.** A record that could be framed is decoded with the scan's context
+(no 3 s display deadline: a search waits for the registry) and the decoded
+key or value is matched; everything else is matched on its bytes, as before.
+A field the registry could not answer for (unreachable, an error status, the
+caller's deadline) is matched on its bytes and marks the result `Truncated`,
+so it is neither cached nor shown as complete. A schema the registry says
+does not exist, or a payload its schema cannot decode, fails the same way
+every time and is not a truncation. Matches are emitted decoded, with
+`KeyDecoding` / `ValueDecoding`, so the Search view and Message Detail show
+them as Messages does.
+
+**Index.** `index.OpenDecoding` fixes an indexer's decoder for its life, and
+`IndexBatch` decodes framed records before storing them, outside the
+indexer's mutex since a schema lookup is a network call. The bookkeeper's
+`decoder` field records the identity; an index on disk built with another
+decoder (or none) is renamed aside and rebuilt, as on a schema bump. A record
+the decoder could not settle is stored as consumed and recorded as a gap
+(`decode_unavailable`) before its batch commits, so no published coverage
+spans it without the gap beside it. Gaps carry no time and are never
+cleared, so a registry outage during indexing leaves that topic scanning
+until its index is cleared or rebuilt; that is the safe direction.
+`SchemaVersion` 3 retires every index built before the field existed.
+
+**Coverage.** `Bookkeeper.CanServe` declines when `QueryParams.Decoder`
+differs from the bookkeeper's, with the reason ("index decoded with schema
+registry ..., search with no schema registry"). `indexwire` round-trips the
+field as `Coverage.decoder` (and the client's as `SearchRequest.decoder`),
+so the shared and local decisions stay identical. A daemon predating the
+field reports none, which a decoding client declines. The reverse is the one
+gap: a client predating the field ignores it, so an old raw client would
+trust a decoding daemon. Upgrade clients before giving a daemon a registry.
+
+**Cache.** `searchcache.Key` includes the identity (omitted when empty, so a
+raw search's key hashes as it did). Decoding metadata is `json:"-"`, so a
+replayed or index-served match carries the decoded text but not the raw
+rendering or the schema label: `x` has nothing to toggle to there.
+
+**Still out of scope.** Headers are never decoded. A field-aware query
+(`field:value`, Tier 5 in [`local-index.md`](local-index.md)) is #116.
 
 ## Credentials and transport
 

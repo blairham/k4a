@@ -5,6 +5,7 @@ package schemareg
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -76,7 +77,11 @@ func (r *Registry) DecodeWithHeader(
 	}
 	sch, err := r.lookup(ctx, ref)
 	if err != nil {
-		return Decoded{}, err
+		if errors.Is(err, errSchemaNotFound) {
+			return Decoded{}, err
+		}
+		// Anything else the registry might answer differently next time.
+		return Decoded{}, unavailableError{err}
 	}
 	var out string
 	switch sch.typ {
@@ -211,4 +216,22 @@ func walkReferences(
 // one per line) so it fits a status line.
 func oneLine(err error) error {
 	return fmt.Errorf("%s", strings.Join(strings.Fields(err.Error()), " "))
+}
+
+// unavailableError marks a decode that failed because the registry could not
+// produce the schema (unreachable, an error status, a reference it would not
+// serve) rather than because of the payload. The message is the cause's, so
+// what a user sees does not change.
+type unavailableError struct{ err error }
+
+func (e unavailableError) Error() string { return e.err.Error() }
+func (e unavailableError) Unwrap() error { return e.err }
+
+// isUnavailable reports whether a decode failed for a reason that may pass:
+// the registry was unavailable, or the caller stopped waiting for it. A schema
+// the registry says does not exist, or a payload its schema cannot decode,
+// fails the same way every time.
+func isUnavailable(err error) bool {
+	var u unavailableError
+	return errors.As(err, &u) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }

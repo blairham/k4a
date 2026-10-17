@@ -300,7 +300,7 @@ func TestFailedPlanDropsAHeldIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan, ix, err := planTail(context.Background(), root, "c", testTopic, failingPlanSource{},
-		backfillOptions{Window: time.Hour}, ix)
+		workerOptions{Backfill: backfillOptions{Window: time.Hour}}, ix)
 	if err != nil {
 		t.Fatal(err)
 	}

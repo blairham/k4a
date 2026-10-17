@@ -127,6 +127,13 @@ are stored for retrieval and use as filters (time range, partition
 selection). Regex support is NOT "out of the box" — see "Regex semantics"
 below for why the user's pattern is never run against the index verbatim.
 
+With a schema registry, `Key` and `Value` of a registry-framed record are
+its decoded JSON: `OpenDecoding` fixes the indexer's `kafka.RecordDecoder`,
+and `IndexBatch` decodes before storing, so the index holds the text a
+decoding scan matches. A record the registry could not answer for is stored
+as consumed and recorded as a `decode_unavailable` gap. See
+[`schema-registry.md`](schema-registry.md) § *Search and the indexes*.
+
 **Backpressure.** The `AsyncIndexer`'s input channel is bounded
 (`asyncBufferSize`, 4096). If the indexer falls behind, `Submit` drops
 rather than blocking — the caller is the live-tail consume loop, which must
@@ -180,7 +187,8 @@ Tracks:
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
+  "decoder": "schemareg/1:5f0c2a9e41d7b3c8",
   "newest_offset_per_partition": {"0": 12345678, "1": 12345012},
   "oldest_offset_per_partition": {"0": 12000000},
   "newest_time_per_partition": {"0": 1746093000000},
@@ -195,7 +203,11 @@ Tracks:
 ```
 
 The dispatcher reads this on every search to decide coverage. The indexer
-writes it on every flush. Recovery: if state.json is corrupt, the indexer
+writes it on every flush. `decoder` is the identity of the decoder the
+stored text came from, absent for none; `CanServe` serves only a search whose
+own decoder matches it, and opening an index with a different decoder
+rebuilds it (version 3 introduced the field, so every older index rebuilds
+once). Recovery: if state.json is corrupt, the indexer
 rebuilds from the Bleve index directly (it has the data; the bookkeeper
 is just a cache).
 
@@ -314,8 +326,9 @@ dispatcher knows the new floor.
 ## What's intentionally NOT here (v1)
 
 - **Schema-aware field extraction.** `key:1234567` as a structured query
-  rather than a substring is a v2 feature. v1 indexes raw bytes only;
-  Bleve full-text catches "1234567" as a token within JSON values so the
+  rather than a substring is Tier 5 (#116). The index stores raw bytes, or
+  with a registry the decoded JSON (#115), as one text field per key and
+  value; Bleve full-text catches "1234567" as a token within it, so the
   common case still works.
 - **A cross-topic index.** Indexes are per-topic. A cross-topic search
   (`-t 'orders.*'`, `:search orders.*`) asks each topic's index or scan in

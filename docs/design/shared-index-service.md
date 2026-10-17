@@ -323,6 +323,19 @@ the daemon's matches by it with the scan's own rule (`kafka.PathMatches`) and
 reports `path_recall: full` only when the daemon's answer was uncapped and the
 topic followed, `best_effort` otherwise.
 
+**Decoding is part of the contract.** Started with `--schema-registry-url`
+(or `K4A_SCHEMA_REGISTRY_URL`, the chart's `schemaRegistry` values, or its
+context's `schema-registry:` block), the daemon indexes registry-framed keys
+and values as their decoded JSON, and `Coverage.decoder` carries the
+registry's identity, a hash, never the URL. The client declines coverage
+whose decoder differs from the one its own scan would use
+(`Bookkeeper.CanServe`), so a daemon with no registry never serves a decoding
+client and a decoding daemon never serves a raw one or one on another
+registry; each scans. A daemon predating the field reports none. A client
+predating it ignores it, so upgrade clients before giving the daemon a
+registry. `k4a-mcp` shows the identity as `coverage.decoder`. See
+[`schema-registry.md`](schema-registry.md) § *Search and the indexes*.
+
 ## MCP frontend (`k4a-mcp`)
 
 The same warm index is also reachable by LLM agents (Claude Code, Cursor)

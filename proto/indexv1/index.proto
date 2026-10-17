@@ -46,6 +46,9 @@ message SearchRequest {
   int64 until_ms = 5;            // Unix millis; 0 = no upper bound
   repeated int32 partitions = 6; // empty = all partitions
   int32 limit = 7;              // 0 = server default cap
+  // decoder is the identity of the schema-registry decoding the client's own
+  // scan would match with, "" for none (see Coverage.decoder).
+  string decoder = 8;
 }
 
 // PartitionCoverage is the indexed offset+time window for one partition —
@@ -75,6 +78,11 @@ message Coverage {
   repeated Gap gaps = 2;
   bool following = 3;   // topic is in the follow-set
   bool backfilling = 4; // catch-up scan still in progress (window has a moving floor)
+  // decoder is the identity of the schema-registry decoding the index stored
+  // framed keys and values with, "" when it stored them as consumed. A client
+  // serves a search from this index only when its own scan would decode the
+  // same way; anything else, an older daemon's "" included, is a scan.
+  string decoder = 5;
 }
 
 message Header {

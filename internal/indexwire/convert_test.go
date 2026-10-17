@@ -69,6 +69,10 @@ func TestCoverageDecisionParity(t *testing.T) {
 			book:   indexedBook(),
 			params: index.QueryParams{Since: inWindow.Since, Until: inWindow.Until, Partitions: []int32{1}},
 		},
+		{name: "same decoder", book: withDecoder(indexedBook(), "sr:a"), params: decoding(inWindow, "sr:a")},
+		{name: "other decoder", book: withDecoder(indexedBook(), "sr:b"), params: decoding(inWindow, "sr:a")},
+		{name: "decoded index, raw search", book: withDecoder(indexedBook(), "sr:a"), params: inWindow},
+		{name: "raw index, decoding search", book: indexedBook(), params: decoding(inWindow, "sr:a")},
 	}
 
 	for _, tc := range cases {
@@ -103,6 +107,7 @@ func TestQueryParamsRoundTrip(t *testing.T) {
 		Scopes:     []string{"key", "value"},
 		Partitions: []int32{0, 2},
 		Limit:      500,
+		Decoder:    "sr:a",
 	}
 
 	got, err := indexwire.RequestToQueryParams(indexwire.QueryParamsToRequest("t", want))
@@ -117,6 +122,9 @@ func TestQueryParamsRoundTrip(t *testing.T) {
 	}
 	if got.Limit != want.Limit {
 		t.Errorf("limit: got %d want %d", got.Limit, want.Limit)
+	}
+	if got.Decoder != want.Decoder {
+		t.Errorf("decoder: got %q want %q", got.Decoder, want.Decoder)
 	}
 	if !equalInt32(got.Partitions, want.Partitions) {
 		t.Errorf("partitions: got %v want %v", got.Partitions, want.Partitions)
@@ -174,6 +182,45 @@ func TestMatchRoundTrip(t *testing.T) {
 			t.Errorf("header %d: got %+v want %+v", i, got.Headers[i], want.Headers[i])
 		}
 	}
+}
+
+// TestCoverageCarriesDecoder: the decoder is part of the coverage contract,
+// so a client must learn it from the wire, and a daemon that decoded with
+// another registry (or none) must never serve a search that decodes.
+func TestCoverageCarriesDecoder(t *testing.T) {
+	t.Parallel()
+	inWindow := index.QueryParams{
+		Since: time.UnixMilli(t0ms + 100).UTC(),
+		Until: time.UnixMilli(t1ms - 100).UTC(),
+	}
+	book := indexwire.BookkeeperFromCoverage(indexwire.CoverageFromBookkeeper(withDecoder(indexedBook(), "sr:a")))
+	if book.Decoder != "sr:a" {
+		t.Fatalf("decoder after round-trip = %q, want sr:a", book.Decoder)
+	}
+	if ok, reason := book.CanServe(decoding(inWindow, "sr:a")); !ok {
+		t.Errorf("same decoder declined: %s", reason)
+	}
+	for _, search := range []string{"", "sr:b"} {
+		if ok, _ := book.CanServe(decoding(inWindow, search)); ok {
+			t.Errorf("an index decoded with sr:a served a search decoding with %q", search)
+		}
+	}
+	// An older daemon has no decoder field: it served raw text, so a decoding
+	// client must scan.
+	if ok, _ := indexwire.BookkeeperFromCoverage(indexwire.CoverageFromBookkeeper(indexedBook())).
+		CanServe(decoding(inWindow, "sr:a")); ok {
+		t.Error("a raw index served a decoding search")
+	}
+}
+
+func withDecoder(b index.Bookkeeper, id string) index.Bookkeeper {
+	b.Decoder = id
+	return b
+}
+
+func decoding(p index.QueryParams, id string) index.QueryParams {
+	p.Decoder = id
+	return p
 }
 
 func withGap(b index.Bookkeeper, g index.Gap) index.Bookkeeper {

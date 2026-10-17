@@ -29,6 +29,7 @@ var (
 // be asserted.
 type fakeIndex struct {
 	indexv1.UnimplementedIndexServer
+	decoder   string
 	followed  atomic.Int32
 	following bool
 	matches   int
@@ -36,6 +37,7 @@ type fakeIndex struct {
 
 func (f *fakeIndex) cov() *indexv1.Coverage {
 	return &indexv1.Coverage{
+		Decoder:   f.decoder,
 		Following: f.following,
 		Partitions: []*indexv1.PartitionCoverage{
 			{Partition: 0, OffsetLo: 100, OffsetHi: 500, TimestampLoMs: t0.UnixMilli(), TimestampHiMs: t1.UnixMilli()},
@@ -228,5 +230,44 @@ func TestWrapJSONPathAlwaysScans(t *testing.T) {
 
 	if !nextCalled.Load() {
 		t.Error("a JSON-path query was served from the shared index; it must scan")
+	}
+}
+
+type namedDecoder string
+
+func (d namedDecoder) Identity() string { return string(d) }
+
+func (namedDecoder) DecodeRecord(context.Context, *kafka.ConsumedMessage) bool { return true }
+
+// TestWrapServesOnlyTheSameDecoding: a daemon serves a search only when it
+// decoded with the registry the search would scan with. Every other pairing,
+// a raw daemon (or one predating the decoder field) included, scans.
+func TestWrapServesOnlyTheSameDecoding(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		search  kafka.RecordDecoder
+		name    string
+		daemon  string
+		indexed bool
+	}{
+		{name: "same registry", daemon: "sr:a", search: namedDecoder("sr:a"), indexed: true},
+		{name: "other registry", daemon: "sr:a", search: namedDecoder("sr:b")},
+		{name: "decoding daemon, raw search", daemon: "sr:a"},
+		{name: "raw daemon, decoding search", search: namedDecoder("sr:a")},
+		{name: "both raw", indexed: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client := dialFake(t, &fakeIndex{following: true, matches: 1, decoder: tc.daemon})
+			var nextCalled atomic.Bool
+			params := coveringParams()
+			params.Decoder = tc.search
+			m, p, e := client.Wrap(recordingNext(&nextCalled))(context.Background(), "demo", params)
+			drain(t, m, p, e)
+			if served := !nextCalled.Load(); served != tc.indexed {
+				t.Errorf("served from the shared index = %v, want %v", served, tc.indexed)
+			}
+		})
 	}
 }

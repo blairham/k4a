@@ -83,10 +83,14 @@ const (
 // on its key or value (if set). Neither set matches every record.
 type SearchParams struct {
 	Pattern *regexp.Regexp
-	// Path is a JSON-path predicate evaluated on the raw key and/or value
-	// bytes in scope (never headers). The index cannot answer it exactly, so
+	// Path is a JSON-path predicate evaluated on the key and/or value in
+	// scope, as decoded text when Decoder decodes them (never headers). The index cannot answer it exactly, so
 	// every index backend declines it and it is always scanned.
-	Path       *jsonpath.Expr
+	Path *jsonpath.Expr
+	// Decoder, when set, matches a schema-registry framed key or value on
+	// its decoded text instead of its bytes. Every index backend serves only
+	// a search whose decoder identity equals the one it indexed with.
+	Decoder    RecordDecoder
 	Since      time.Time
 	Until      time.Time
 	Partitions []int32
@@ -176,8 +180,10 @@ type DeepSearchProgress struct {
 	Capped         bool
 	// Truncated reports that at least one chunk ended before covering its
 	// offset range, so the result is missing records the search window
-	// asked for. A scan that cannot reach the end of its range must never
-	// look like a clean completion.
+	// asked for, or that the decoder could not settle a framed record
+	// (SearchParams.Decoder), which may match once the registry answers.
+	// A scan that cannot reach the end of its range must never look like a
+	// clean completion.
 	Truncated bool
 	Done      bool
 }
@@ -242,6 +248,7 @@ func (c *Client) runDeepSearch(
 		topic:      topic,
 		re:         params.Pattern,
 		path:       params.Path,
+		decoder:    params.Decoder,
 		prefilter:  extractPrefilter(params.Pattern),
 		scope:      params.effectiveScope(),
 		until:      params.Until,
@@ -288,6 +295,7 @@ type deepScan struct {
 	until      time.Time
 	re         *regexp.Regexp
 	path       *jsonpath.Expr
+	decoder    RecordDecoder
 	matchCh    chan<- ConsumedMessage
 	cancelAll  context.CancelFunc
 	topic      string
@@ -713,7 +721,8 @@ func (ds *deepScan) scanRecord(ctx context.Context, r *kgo.Record, start, end in
 		return scanContinue
 	}
 
-	if !ds.selects(r) {
+	m, ok := ds.match(ctx, r)
+	if !ok {
 		return scanContinue
 	}
 
@@ -725,19 +734,49 @@ func (ds *deepScan) scanRecord(ctx context.Context, r *kgo.Record, start, end in
 	}
 
 	select {
-	case ds.matchCh <- recordToConsumed(r):
+	case ds.matchCh <- m:
 		return scanContinue
 	case <-ctx.Done():
 		return scanAbort
 	}
 }
 
+// match applies the criteria to r and returns the record to emit. With a
+// decoder, a record that could be framed is decoded first and its decoded
+// key or value matched as text, the text the indexes store; every other
+// field is matched on its bytes, as without one. A decode that could not
+// settle marks the scan truncated: a later run may decode the record and
+// match it, so this result must not be cached or read as complete.
+func (ds *deepScan) match(ctx context.Context, r *kgo.Record) (ConsumedMessage, bool) {
+	if ds.decoder == nil || !couldBeFramed(r) {
+		if !ds.selects(r.Key, r.Value, r.Headers) {
+			return ConsumedMessage{}, false
+		}
+		return recordToConsumed(r), true
+	}
+	m := recordToConsumed(r)
+	if !ds.decoder.DecodeRecord(ctx, &m) {
+		ds.truncated.Store(true)
+	}
+	key, value := r.Key, r.Value
+	if m.KeyDecoding.Decoded() {
+		key = []byte(m.Key)
+	}
+	if m.ValueDecoding.Decoded() {
+		value = []byte(m.Value)
+	}
+	if !ds.selects(key, value, r.Headers) {
+		return ConsumedMessage{}, false
+	}
+	return m, true
+}
+
 // selects applies the regex and the JSON-path predicate, each only when set.
-func (ds *deepScan) selects(r *kgo.Record) bool {
-	if ds.re != nil && !recordMatches(r, ds.re, ds.prefilter, ds.scope) {
+func (ds *deepScan) selects(key, value []byte, headers []kgo.RecordHeader) bool {
+	if ds.re != nil && !fieldsMatch(key, value, headers, ds.re, ds.prefilter, ds.scope) {
 		return false
 	}
-	return ds.path == nil || PathMatches(ds.path, r.Key, r.Value, ds.scope)
+	return ds.path == nil || PathMatches(ds.path, key, value, ds.scope)
 }
 
 // PathMatches reports whether the predicate holds on the key or the value,
@@ -751,20 +790,24 @@ func PathMatches(e *jsonpath.Expr, key, value []byte, scope SearchScope) bool {
 	return (scope&ScopeKey != 0 && e.Match(key)) || (scope&ScopeValue != 0 && e.Match(value))
 }
 
-// recordMatches reports whether r matches re in the configured scope.
-// The literal-prefix prefilter is applied first as a cheap negative gate.
-func recordMatches(r *kgo.Record, re *regexp.Regexp, prefilter []byte, scope SearchScope) bool {
-	if prefilter != nil && !recordContains(r, prefilter, scope) {
+// fieldsMatch reports whether re matches the key, value or headers in the
+// configured scope. The literal-prefix prefilter is applied first as a cheap
+// negative gate; it holds for decoded text as for bytes, since a match of re
+// contains its literal prefix whatever it is matched against.
+func fieldsMatch(
+	key, value []byte, headers []kgo.RecordHeader, re *regexp.Regexp, prefilter []byte, scope SearchScope,
+) bool {
+	if prefilter != nil && !fieldsContain(key, value, headers, prefilter, scope) {
 		return false
 	}
-	if scope&ScopeKey != 0 && re.Match(r.Key) {
+	if scope&ScopeKey != 0 && re.Match(key) {
 		return true
 	}
-	if scope&ScopeValue != 0 && re.Match(r.Value) {
+	if scope&ScopeValue != 0 && re.Match(value) {
 		return true
 	}
 	if scope&ScopeHeaders != 0 {
-		for _, h := range r.Headers {
+		for _, h := range headers {
 			if re.MatchString(h.Key + "=" + string(h.Value)) {
 				return true
 			}
@@ -773,15 +816,15 @@ func recordMatches(r *kgo.Record, re *regexp.Regexp, prefilter []byte, scope Sea
 	return false
 }
 
-func recordContains(r *kgo.Record, needle []byte, scope SearchScope) bool {
-	if scope&ScopeKey != 0 && bytes.Contains(r.Key, needle) {
+func fieldsContain(key, value []byte, headers []kgo.RecordHeader, needle []byte, scope SearchScope) bool {
+	if scope&ScopeKey != 0 && bytes.Contains(key, needle) {
 		return true
 	}
-	if scope&ScopeValue != 0 && bytes.Contains(r.Value, needle) {
+	if scope&ScopeValue != 0 && bytes.Contains(value, needle) {
 		return true
 	}
 	if scope&ScopeHeaders != 0 {
-		for _, h := range r.Headers {
+		for _, h := range headers {
 			if bytes.Contains([]byte(h.Key), needle) || bytes.Contains(h.Value, needle) {
 				return true
 			}
