@@ -13,7 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.3
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.79.0
 	github.com/aws/smithy-go v1.28.5
-	github.com/blairham/sh v0.0.36-0.20261017020050-8d734ec8d767
+	github.com/blairham/sh v0.0.36
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/bufbuild/protocompile v0.14.1
 	github.com/charmbracelet/glamour v1.0.0
