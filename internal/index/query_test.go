@@ -230,15 +230,16 @@ func TestCanServe_RejectsUnservablePatterns(t *testing.T) {
 	}
 }
 
-// TestCanServe_DeclinesJSONPath: a fully covered window with a servable (or
-// no) pattern must still go to the scan once a JSON-path predicate is set —
-// the index holds analyzed terms, not document structure.
-func TestCanServe_DeclinesJSONPath(t *testing.T) {
+// TestCanServe_JSONPath: a covered window serves an equality JSON path
+// (with or without a pattern) from the field terms, declines every other
+// predicate, and declines any path against an index without field terms.
+func TestCanServe_JSONPath(t *testing.T) {
 	t.Parallel()
 
 	since := queryBase
 	until := queryBase.Add(time.Minute)
 	book := Bookkeeper{
+		SchemaVersion:            SchemaVersion,
 		NewestOffsetPerPartition: map[int32]int64{0: 100},
 		OldestOffsetPerPartition: map[int32]int64{0: 0},
 		NewestTimePerPartition:   map[int32]int64{0: until.UnixMilli()},
@@ -250,9 +251,20 @@ func TestCanServe_DeclinesJSONPath(t *testing.T) {
 			t.Fatalf("premise: covered window with pattern %v not servable: %s", pat, reason)
 		}
 		params.JSONPath = `.order.status == "failed"`
-		if ok, reason := book.CanServe(params); ok || reason != ReasonJSONPathScanOnly {
-			t.Errorf("CanServe with a JSON path (pattern %v) = %v, %q; want false, %q",
-				pat, ok, reason, ReasonJSONPathScanOnly)
+		if ok, reason := book.CanServe(params); !ok {
+			t.Errorf("an equality path (pattern %v) was declined: %s", pat, reason)
+		}
+		for _, p := range []string{`.order.total > 10`, `.order.status != "ok"`, `.order.id exists`, `not a path`} {
+			params.JSONPath = p
+			if ok, reason := book.CanServe(params); ok || reason != ReasonJSONPathScanOnly {
+				t.Errorf("CanServe(%s) = %v, %q; want false, %q", p, ok, reason, ReasonJSONPathScanOnly)
+			}
+		}
+		old := book
+		old.SchemaVersion = FieldsSchemaVersion - 1
+		params.JSONPath = `.order.status == "failed"`
+		if ok, reason := old.CanServe(params); ok || reason != ReasonNoFieldTerms {
+			t.Errorf("an index without field terms: CanServe = %v, %q; want false, %q", ok, reason, ReasonNoFieldTerms)
 		}
 	}
 }

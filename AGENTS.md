@@ -43,7 +43,7 @@ internal/
   command/           # CLI commands (see the subcommand list below)
   config/            # Config file loading (~/.k4a/config.yaml, kubeconfig-style)
   kafka/             # Kafka client: auth/TLS, metadata, offsets, consumer, admin, deep search
-  jsonpath/          # JSON-path predicates for deep search (jq subset; scan-only)
+  jsonpath/          # JSON-path predicates for deep search (jq subset) + index field terms
   index/             # Local Bleve index: indexer, analyzer, query/coverage, pattern rewrite,
                      # async intake, catch-up backfill, inventory
   endpointauth/      # TLS/mTLS + bearer-token auth for the k4a-index and k4a-mcp
@@ -548,7 +548,10 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   schema-ID header of any record bytes, checked against franz-go's own
   decoder), and `FuzzParsePath`
   (`internal/jsonpath`; a JSON-path predicate's canonical form, which the
-  search cache keys on, must re-parse to itself and match the same records).
+  search cache keys on, must re-parse to itself and match the same records),
+  and `FuzzTerms` (`internal/jsonpath`; a document an equality predicate
+  matches must carry that predicate's field term, or the index would miss
+  it; it found that rendering a number in decimal hangs on a huge exponent).
   Before the first release they found a recall gap for Katakana, Thai, İ and
   fold-equivalent letters, Bleve corrupting terms that contain İ, K, Å or Ω,
   overflowing and negative lookbacks, and a schema with an empty sample that

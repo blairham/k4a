@@ -48,7 +48,12 @@ type SearchRequest struct {
 	Limit      int32                  `protobuf:"varint,7,opt,name=limit,proto3" json:"limit,omitempty"`                    // 0 = server default cap
 	// decoder is the identity of the schema-registry decoding the client's own
 	// scan would match with, "" for none (see Coverage.decoder).
-	Decoder       string `protobuf:"bytes,8,opt,name=decoder,proto3" json:"decoder,omitempty"`
+	Decoder string `protobuf:"bytes,8,opt,name=decoder,proto3" json:"decoder,omitempty"`
+	// path is a JSON-path predicate in canonical form (jsonpath.Expr.String),
+	// "" for none. The daemon answers an equality from its field terms; a
+	// client sends one only to a daemon whose coverage reports
+	// schema_version >= 4, since an older daemon ignores this field.
+	Path          string `protobuf:"bytes,9,opt,name=path,proto3" json:"path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -135,6 +140,13 @@ func (x *SearchRequest) GetLimit() int32 {
 func (x *SearchRequest) GetDecoder() string {
 	if x != nil {
 		return x.Decoder
+	}
+	return ""
+}
+
+func (x *SearchRequest) GetPath() string {
+	if x != nil {
+		return x.Path
 	}
 	return ""
 }
@@ -300,7 +312,11 @@ type Coverage struct {
 	// framed keys and values with, "" when it stored them as consumed. A client
 	// serves a search from this index only when its own scan would decode the
 	// same way; anything else, an older daemon's "" included, is a scan.
-	Decoder       string `protobuf:"bytes,5,opt,name=decoder,proto3" json:"decoder,omitempty"`
+	Decoder string `protobuf:"bytes,5,opt,name=decoder,proto3" json:"decoder,omitempty"`
+	// schema_version is the index's on-disk schema (index.SchemaVersion); 0
+	// from a daemon predating the field. A client serves a JSON-path search
+	// from the daemon only at 4 or later, when documents carry field terms.
+	SchemaVersion int32 `protobuf:"varint,6,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -368,6 +384,13 @@ func (x *Coverage) GetDecoder() string {
 		return x.Decoder
 	}
 	return ""
+}
+
+func (x *Coverage) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
 }
 
 type Header struct {
@@ -865,7 +888,7 @@ var File_indexv1_index_proto protoreflect.FileDescriptor
 
 const file_indexv1_index_proto_rawDesc = "" +
 	"\n" +
-	"\x13indexv1/index.proto\x12\fk4a.index.v1\"\xdd\x01\n" +
+	"\x13indexv1/index.proto\x12\fk4a.index.v1\"\xf1\x01\n" +
 	"\rSearchRequest\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x18\n" +
 	"\apattern\x18\x02 \x01(\tR\apattern\x12\x16\n" +
@@ -876,7 +899,8 @@ const file_indexv1_index_proto_rawDesc = "" +
 	"partitions\x18\x06 \x03(\x05R\n" +
 	"partitions\x12\x14\n" +
 	"\x05limit\x18\a \x01(\x05R\x05limit\x12\x18\n" +
-	"\adecoder\x18\b \x01(\tR\adecoder\"\xbb\x01\n" +
+	"\adecoder\x18\b \x01(\tR\adecoder\x12\x12\n" +
+	"\x04path\x18\t \x01(\tR\x04path\"\xbb\x01\n" +
 	"\x11PartitionCoverage\x12\x1c\n" +
 	"\tpartition\x18\x01 \x01(\x05R\tpartition\x12\x1b\n" +
 	"\toffset_lo\x18\x02 \x01(\x03R\boffsetLo\x12\x1b\n" +
@@ -887,7 +911,7 @@ const file_indexv1_index_proto_rawDesc = "" +
 	"\tpartition\x18\x01 \x01(\x05R\tpartition\x12\x14\n" +
 	"\x05start\x18\x02 \x01(\x03R\x05start\x12\x10\n" +
 	"\x03end\x18\x03 \x01(\x03R\x03end\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xcc\x01\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xf3\x01\n" +
 	"\bCoverage\x12?\n" +
 	"\n" +
 	"partitions\x18\x01 \x03(\v2\x1f.k4a.index.v1.PartitionCoverageR\n" +
@@ -895,7 +919,8 @@ const file_indexv1_index_proto_rawDesc = "" +
 	"\x04gaps\x18\x02 \x03(\v2\x11.k4a.index.v1.GapR\x04gaps\x12\x1c\n" +
 	"\tfollowing\x18\x03 \x01(\bR\tfollowing\x12 \n" +
 	"\vbackfilling\x18\x04 \x01(\bR\vbackfilling\x12\x18\n" +
-	"\adecoder\x18\x05 \x01(\tR\adecoder\"0\n" +
+	"\adecoder\x18\x05 \x01(\tR\adecoder\x12%\n" +
+	"\x0eschema_version\x18\x06 \x01(\x05R\rschemaVersion\"0\n" +
 	"\x06Header\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"\xb8\x01\n" +

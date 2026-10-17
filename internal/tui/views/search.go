@@ -655,22 +655,25 @@ func matchRow(m kafka.ConsumedMessage) table.Row {
 }
 
 // pathQueryPrefix marks bar input as a JSON-path predicate, the TUI spelling
-// of `k4a search --path`. It only applies when a path ('.') follows, so a
+// of `k4a search --path`: `path:.a.b == "x"`, or the `field:value` shorthand,
+// `path:orderId:42`. It only applies when a predicate parses after it, so a
 // regex search for text like "path: /api" is unaffected.
 const pathQueryPrefix = "path:"
 
-// searchParamsFor interprets the bar input: `path:.a.b == "x"` is a JSON-path
-// predicate (always scanned; the index declines it), anything else a regex.
+// searchParamsFor interprets the bar input: `path:.a.b == "x"` (or
+// `path:a.b:x`) is a JSON-path predicate, which the index answers when it is
+// an equality; anything else is a regex.
 func searchParamsFor(q string) (kafka.SearchParams, error) {
 	params := kafka.SearchParams{Scope: kafka.ScopeKey | kafka.ScopeValue}
-	if rest, ok := strings.CutPrefix(strings.TrimSpace(q), pathQueryPrefix); ok &&
-		strings.HasPrefix(strings.TrimSpace(rest), ".") {
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(q), pathQueryPrefix); ok {
 		expr, err := jsonpath.Parse(rest)
-		if err != nil {
-			return params, err
+		switch {
+		case err == nil:
+			params.Path = expr
+			return params, nil
+		case strings.HasPrefix(strings.TrimSpace(rest), "."):
+			return params, err // meant as a path, and malformed
 		}
-		params.Path = expr
-		return params, nil
 	}
 	re, err := compileSearchQuery(q)
 	if err != nil {

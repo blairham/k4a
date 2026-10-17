@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/blairham/k4a/internal/index"
 	"github.com/blairham/k4a/internal/indexwire/indexv1"
 	"github.com/blairham/k4a/internal/jsonpath"
 	"github.com/blairham/k4a/internal/kafka"
@@ -30,15 +31,18 @@ var (
 type fakeIndex struct {
 	indexv1.UnimplementedIndexServer
 	decoder   string
+	path      atomic.Value // the last SearchRequest.path
 	followed  atomic.Int32
+	schema    int32
 	following bool
 	matches   int
 }
 
 func (f *fakeIndex) cov() *indexv1.Coverage {
 	return &indexv1.Coverage{
-		Decoder:   f.decoder,
-		Following: f.following,
+		Decoder:       f.decoder,
+		SchemaVersion: f.schema,
+		Following:     f.following,
 		Partitions: []*indexv1.PartitionCoverage{
 			{Partition: 0, OffsetLo: 100, OffsetHi: 500, TimestampLoMs: t0.UnixMilli(), TimestampHiMs: t1.UnixMilli()},
 		},
@@ -49,7 +53,8 @@ func (f *fakeIndex) Coverage(context.Context, *indexv1.CoverageRequest) (*indexv
 	return &indexv1.CoverageResponse{Coverage: f.cov()}, nil
 }
 
-func (f *fakeIndex) Search(_ *indexv1.SearchRequest, stream grpc.ServerStreamingServer[indexv1.SearchEvent]) error {
+func (f *fakeIndex) Search(req *indexv1.SearchRequest, stream grpc.ServerStreamingServer[indexv1.SearchEvent]) error {
+	f.path.Store(req.GetPath())
 	if err := stream.Send(&indexv1.SearchEvent{Event: &indexv1.SearchEvent_Coverage{Coverage: f.cov()}}); err != nil {
 		return err
 	}
@@ -269,5 +274,41 @@ func TestWrapServesOnlyTheSameDecoding(t *testing.T) {
 				t.Errorf("served from the shared index = %v, want %v", served, tc.indexed)
 			}
 		})
+	}
+}
+
+// TestWrapServesFieldEqualityFromNewDaemons: an equality JSON path is served
+// by a daemon whose index carries field terms, and the path travels in the
+// request; any other predicate, or an older daemon, scans.
+func TestWrapServesFieldEqualityFromNewDaemons(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		path    string
+		schema  int32
+		indexed bool
+	}{
+		{path: `order.id:42`, schema: index.FieldsSchemaVersion, indexed: true},
+		{path: `order.id:42`, schema: 0},
+		{path: `.order.id > 42`, schema: index.FieldsSchemaVersion},
+	} {
+		fake := &fakeIndex{following: true, matches: 1, schema: tc.schema}
+		client := dialFake(t, fake)
+		var nextCalled atomic.Bool
+		params := coveringParams()
+		expr, err := jsonpath.Parse(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		params.Path = expr
+		m, p, e := client.Wrap(recordingNext(&nextCalled))(context.Background(), "demo", params)
+		drain(t, m, p, e)
+		if served := !nextCalled.Load(); served != tc.indexed {
+			t.Errorf("%s at schema %d: served from the daemon = %v, want %v", tc.path, tc.schema, served, tc.indexed)
+		}
+		if tc.indexed {
+			if got, _ := fake.path.Load().(string); got != expr.String() {
+				t.Errorf("request path = %q, want %q", got, expr.String())
+			}
+		}
 	}
 }

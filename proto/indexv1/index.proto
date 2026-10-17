@@ -49,6 +49,11 @@ message SearchRequest {
   // decoder is the identity of the schema-registry decoding the client's own
   // scan would match with, "" for none (see Coverage.decoder).
   string decoder = 8;
+  // path is a JSON-path predicate in canonical form (jsonpath.Expr.String),
+  // "" for none. The daemon answers an equality from its field terms; a
+  // client sends one only to a daemon whose coverage reports
+  // schema_version >= 4, since an older daemon ignores this field.
+  string path = 9;
 }
 
 // PartitionCoverage is the indexed offset+time window for one partition —
@@ -83,6 +88,10 @@ message Coverage {
   // serves a search from this index only when its own scan would decode the
   // same way; anything else, an older daemon's "" included, is a scan.
   string decoder = 5;
+  // schema_version is the index's on-disk schema (index.SchemaVersion); 0
+  // from a daemon predating the field. A client serves a JSON-path search
+  // from the daemon only at 4 or later, when documents carry field terms.
+  int32 schema_version = 6;
 }
 
 message Header {

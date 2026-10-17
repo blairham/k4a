@@ -53,6 +53,12 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
   (CN, SAN or subject) and per-caller bearer tokens (by SHA-256) to the topic
   globs each caller may search and follow, default-deny once configured, with
   `listener.authz` in both charts. Without a policy nothing changes (#118).
+- Field search from the index (Tier 5): a JSON-path equality, or its new
+  `field:value` shorthand (`--path orderId:42`, `path:orderId:42` in the TUI,
+  MCP `path`), is answered by the local index and `k4a-index` when they cover
+  the window, instead of always scanning. Each JSON key and value, decoded
+  by the schema registry where one is configured, is indexed field by
+  field. `!=`, orderings and `exists` still scan (#116).
 
 ### Fixed
 
@@ -70,10 +76,10 @@ Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes
 
 ### Changed
 
-- The index schema version is now 3, so existing local and shared indexes
+- The index schema version is now 4, so existing local and shared indexes
   rebuild once on upgrade. A client older than this release ignores
   `Coverage.decoder`: upgrade clients before giving `k4a-index` a registry
-  (#115).
+  (#115, #116).
 
 ## [0.0.3] - 2026-10-15
 

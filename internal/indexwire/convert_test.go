@@ -73,6 +73,9 @@ func TestCoverageDecisionParity(t *testing.T) {
 		{name: "other decoder", book: withDecoder(indexedBook(), "sr:b"), params: decoding(inWindow, "sr:a")},
 		{name: "decoded index, raw search", book: withDecoder(indexedBook(), "sr:a"), params: inWindow},
 		{name: "raw index, decoding search", book: indexedBook(), params: decoding(inWindow, "sr:a")},
+		{name: "field equality", book: indexedBook(), params: withPath(inWindow, `.order.id == 42`)},
+		{name: "field ordering", book: indexedBook(), params: withPath(inWindow, `.order.id > 42`)},
+		{name: "field equality, old index", book: preFieldTerms(indexedBook()), params: withPath(inWindow, `.a == 1`)},
 	}
 
 	for _, tc := range cases {
@@ -108,6 +111,7 @@ func TestQueryParamsRoundTrip(t *testing.T) {
 		Partitions: []int32{0, 2},
 		Limit:      500,
 		Decoder:    "sr:a",
+		JSONPath:   `.order.id == 42`,
 	}
 
 	got, err := indexwire.RequestToQueryParams(indexwire.QueryParamsToRequest("t", want))
@@ -122,6 +126,9 @@ func TestQueryParamsRoundTrip(t *testing.T) {
 	}
 	if got.Limit != want.Limit {
 		t.Errorf("limit: got %d want %d", got.Limit, want.Limit)
+	}
+	if got.JSONPath != want.JSONPath {
+		t.Errorf("path: got %q want %q", got.JSONPath, want.JSONPath)
 	}
 	if got.Decoder != want.Decoder {
 		t.Errorf("decoder: got %q want %q", got.Decoder, want.Decoder)
@@ -211,6 +218,38 @@ func TestCoverageCarriesDecoder(t *testing.T) {
 		CanServe(decoding(inWindow, "sr:a")); ok {
 		t.Error("a raw index served a decoding search")
 	}
+}
+
+// TestCoverageCarriesSchemaVersion: a daemon too old to report its version
+// reads as 0, and must not be asked a JSON path it would silently ignore.
+func TestCoverageCarriesSchemaVersion(t *testing.T) {
+	t.Parallel()
+	inWindow := index.QueryParams{
+		Since: time.UnixMilli(t0ms + 100).UTC(),
+		Until: time.UnixMilli(t1ms - 100).UTC(),
+	}
+	book := indexwire.BookkeeperFromCoverage(indexwire.CoverageFromBookkeeper(indexedBook()))
+	if book.SchemaVersion != index.SchemaVersion {
+		t.Fatalf("schema version after round-trip = %d, want %d", book.SchemaVersion, index.SchemaVersion)
+	}
+	if ok, reason := book.CanServe(withPath(inWindow, `order.id:42`)); !ok {
+		t.Errorf("a current daemon declined an equality path: %s", reason)
+	}
+	cov := indexwire.CoverageFromBookkeeper(indexedBook())
+	cov.SchemaVersion = 0
+	if ok, _ := indexwire.BookkeeperFromCoverage(cov).CanServe(withPath(inWindow, `order.id:42`)); ok {
+		t.Error("a daemon predating schema_version was trusted with a JSON path")
+	}
+}
+
+func withPath(p index.QueryParams, src string) index.QueryParams {
+	p.JSONPath = src
+	return p
+}
+
+func preFieldTerms(b index.Bookkeeper) index.Bookkeeper {
+	b.SchemaVersion = index.FieldsSchemaVersion - 1
+	return b
 }
 
 func withDecoder(b index.Bookkeeper, id string) index.Bookkeeper {

@@ -74,7 +74,8 @@ type Expr struct {
 	op    Op
 }
 
-// Parse parses a predicate. Surrounding whitespace is ignored.
+// Parse parses a predicate, or its `field:value` shorthand (parseShorthand).
+// Surrounding whitespace is ignored.
 func Parse(s string) (*Expr, error) {
 	p := &parser{s: strings.TrimSpace(s)}
 	e, err := p.parse()
@@ -93,6 +94,11 @@ func (p *parser) parse() (*Expr, error) {
 	if p.s == "" {
 		return nil, errors.New("empty expression")
 	}
+	if p.s[0] != '.' {
+		if e, ok := parseShorthand(p.s); ok {
+			return e, nil
+		}
+	}
 	steps, err := p.path()
 	if err != nil {
 		return nil, err
@@ -110,6 +116,36 @@ func (p *parser) parse() (*Expr, error) {
 		return nil, err
 	}
 	return e, nil
+}
+
+// parseShorthand reads `field:value`, the short spelling of an equality:
+// a dotted run of names (`order.id`), a colon, then a JSON scalar or, when
+// the rest is not one, the rest as a string. So `orderId:42` is
+// `.orderId == 42`, `status:failed` is `.status == "failed"`, and
+// `flag:"true"` is the string. ok is false when s is not of that shape.
+func parseShorthand(s string) (*Expr, bool) {
+	name, value, found := strings.Cut(s, ":")
+	if !found || name == "" {
+		return nil, false
+	}
+	var steps []step
+	for _, part := range strings.Split(name, ".") {
+		if part == "" || !isIdentStart(part[0]) || strings.IndexFunc(part, notIdentRune) >= 0 {
+			return nil, false
+		}
+		steps = append(steps, step{name: part})
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, false
+	}
+	e := &Expr{steps: steps, op: OpEq}
+	if e.setLiteral(value) != nil {
+		// As a JSON string would decode it, so the canonical form re-parses
+		// to the same predicate.
+		e.lit, e.num = strings.ToValidUTF8(value, "\uFFFD"), nil
+	}
+	return e, true
 }
 
 // cutOp strips a leading comparison operator from s, returning OpExists when
@@ -248,13 +284,24 @@ func parseNum(n json.Number) (*big.Float, bool) {
 // (`.a=="x"`, `.["a"] == "x"`) render, and cache, identically.
 func (e *Expr) String() string {
 	var b strings.Builder
-	if len(e.steps) == 0 || !e.steps[0].isIdentName() {
+	writePath(&b, e.steps)
+	if e.op == OpExists {
+		return b.String()
+	}
+	lit, _ := json.Marshal(e.lit) //nolint:errcheck // a scalar always marshals
+	return b.String() + " " + opText[e.op] + " " + string(lit)
+}
+
+// writePath renders steps in canonical form: `.name` where the name allows,
+// `["name"]` otherwise, `[N]` for an index, and `.` for the root.
+func writePath(b *strings.Builder, steps []step) {
+	if len(steps) == 0 || !steps[0].isIdentName() {
 		b.WriteByte('.')
 	}
-	for _, st := range e.steps {
+	for _, st := range steps {
 		switch {
 		case st.isIndex:
-			fmt.Fprintf(&b, "[%d]", st.index)
+			fmt.Fprintf(b, "[%d]", st.index)
 		case st.isIdentName():
 			b.WriteString("." + st.name)
 		default:
@@ -262,11 +309,6 @@ func (e *Expr) String() string {
 			b.WriteString("[" + string(q) + "]")
 		}
 	}
-	if e.op == OpExists {
-		return b.String()
-	}
-	lit, _ := json.Marshal(e.lit) //nolint:errcheck // a scalar always marshals
-	return b.String() + " " + opText[e.op] + " " + string(lit)
 }
 
 // isIdentName reports whether the step can be written as `.name`.
