@@ -75,20 +75,51 @@ jobs:
           setup="$(git log --format=%H --diff-filter=A -1 origin/main -- release-please-config.json)"
           if git merge-base --is-ancestor "$setup" "$tag"; then base="$tag"; else base="$setup^"; fi
 
+          # What release-please reads for a commit, ported from its
+          # src/commit.ts: when the merged PR's body contains
+          # BEGIN_COMMIT_OVERRIDE anywhere (even quoted in prose), the text
+          # after the FIRST occurrence up to END_COMMIT_OVERRIDE replaces the
+          # commit message, for every commit, conventional or not. That text
+          # is split into several messages only at a blank line followed by a
+          # type (and at BEGIN_NESTED_COMMIT blocks). Prints one subject per
+          # message, or nothing when the body has no override.
+          override_subjects() {
+            python3 -c '
+          import re, sys
+          body = sys.stdin.read()
+          parts = body.split("BEGIN_COMMIT_OVERRIDE")
+          msg = (parts[1] if len(parts) > 1 else "").split("END_COMMIT_OVERRIDE")[0].strip()
+          if not msg:
+              sys.exit(0)
+          nested = msg.split("BEGIN_NESTED_COMMIT")
+          msgs = [nested.pop(0)]
+          for part in nested:
+              new, *rest = part.split("END_NESTED_COMMIT")
+              msgs.append(new)
+              msgs[0] += "END_NESTED_COMMIT".join(rest)
+          types = "feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert"
+          split = re.split(r"\r?\n\r?\n(?=(?:" + types + r")(?:\(.*?\))?: )", msgs[0])
+          for m in [m for m in split if m] + msgs[1:]:
+              print(m.strip().splitlines()[0] if m.strip() else "")
+          '
+          }
+
           bad=0
           while IFS=$'\t' read -r sha author subject; do
             [ "$author" = "dependabot[bot]" ] && continue
-            printf '%s' "$subject" | grep -Eq "$CONVENTIONAL" && continue
-            # release-please's own fix for a bad subject: edit the merged PR's
-            # body to carry the messages it should have had, between
-            # BEGIN_COMMIT_OVERRIDE and END_COMMIT_OVERRIDE, one per line.
-            override="$(gh api "repos/$REPO/commits/$sha/pulls" -q '.[0].body // ""' |
-              tr -d '\r' | sed -n '/^BEGIN_COMMIT_OVERRIDE$/,/^END_COMMIT_OVERRIDE$/p' |
-              sed '1d;$d' | grep -v '^[[:space:]]*$' || true)"
-            if [ -n "$override" ] && ! printf '%s\n' "$override" | grep -Evq "$CONVENTIONAL"; then
+            body="$(gh api "repos/$REPO/commits/$sha/pulls" -q '.[0].body // ""')"
+            subjects="$(printf '%s' "$body" | override_subjects)"
+            if [ -z "$subjects" ]; then
+              printf '%s' "$subject" | grep -Eq "$CONVENTIONAL" && continue
+              echo "::error::${sha:0:7} \"$subject\" is not a Conventional Commit, so release-please leaves it out of this release. Edit its merged pull request's body to add a commit-override block (CONTRIBUTING.md), then re-run this check."
+              bad=1
               continue
             fi
-            echo "::error::${sha:0:7} \"$subject\" is not a Conventional Commit, so release-please leaves it out of this release. Edit its merged pull request's body to add a BEGIN_COMMIT_OVERRIDE block (CONTRIBUTING.md), then re-run this check."
-            bad=1
+            if printf '%s\n' "$subjects" | grep -Evq "$CONVENTIONAL"; then
+              echo "::error::${sha:0:7}: release-please reads its merged pull request's commit-override block instead of the subject, and these messages in it are not Conventional Commits:"
+              printf '%s\n' "$subjects" | grep -Ev "$CONVENTIONAL" | sed 's/^/  /'
+              echo "::error::Separate messages with a blank line, and do not write the block's opening marker anywhere else in the body: release-please starts at its first occurrence (CONTRIBUTING.md)."
+              bad=1
+            fi
           done < <(git log --format='%H%x09%an%x09%s' "$base..origin/main")
           exit "$bad"
