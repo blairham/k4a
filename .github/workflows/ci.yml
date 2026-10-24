@@ -29,7 +29,7 @@ concurrency:
 jobs:
   ci:
     name: CI
-    uses: blairham/.github/.github/workflows/go-ci.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
+    uses: blairham/.github/.github/workflows/go-ci.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
     with:
       # All three binaries, and the generated gRPC code current. The tests
       # include every fuzz target's seed corpus; no Kafka needed.
@@ -37,14 +37,14 @@ jobs:
 
   changes:
     name: Changes
-    uses: blairham/.github/.github/workflows/go-changes.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
+    uses: blairham/.github/.github/workflows/go-changes.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
 
   # Build only; the release publishes (release.yml). Both images, one after the
   # other: the second shares the build stage, so it is mostly cache.
   image:
     name: Image
     needs: changes
-    uses: blairham/.github/.github/workflows/go-image.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
+    uses: blairham/.github/.github/workflows/go-image.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
     with:
       run: ${{ needs.changes.outputs.code == 'true' }}
       targets: '["index", "mcp"]'

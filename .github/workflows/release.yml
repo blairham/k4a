@@ -43,7 +43,7 @@ jobs:
       packages: write # the images on ghcr.io
       id-token: write # keyless cosign and provenance signing
       attestations: write # store the provenance in the repository's attestations
-    uses: blairham/.github/.github/workflows/go-release.yml@48d6c8f94aa8381c550818e0a0b2a0d61f280a6b # v0.0.2
+    uses: blairham/.github/.github/workflows/go-release.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
     with:
       tag: ${{ inputs.tag }}
       snapshot: ${{ inputs.dry-run == true }}
