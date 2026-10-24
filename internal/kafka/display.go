@@ -5,6 +5,7 @@ package kafka
 
 import (
 	"encoding/hex"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -21,13 +22,46 @@ import (
 // mm2-checkpoints, mm2-status) whose keys and values are length-prefixed
 // binary blobs.
 func bytesToDisplay(b []byte) string {
-	if len(b) == 0 {
-		return ""
-	}
-	if utf8.Valid(b) && !hasControlBytes(b) {
+	if displayable(b) {
 		return string(b)
 	}
 	return "hex:" + hex.EncodeToString(b)
+}
+
+// displayable reports whether b renders as itself: valid UTF-8 with no
+// control byte that bytesToDisplay would hex-encode.
+func displayable(b []byte) bool {
+	return utf8.Valid(b) && !hasControlBytes(b)
+}
+
+// displayBytes is bytesToDisplay for a matcher: b itself when it renders as
+// itself (no copy on the scan's hot path), else the hex: rendering. A search
+// matches this text everywhere, so a scan and an index, which stores the
+// rendering, select the same records (#144).
+func displayBytes(b []byte) []byte {
+	if displayable(b) {
+		return b
+	}
+	return []byte(bytesToDisplay(b))
+}
+
+// displayHeaders renders every header value as displayBytes does, copying
+// the slice only when some value changes.
+func displayHeaders(hs []kgo.RecordHeader) []kgo.RecordHeader {
+	var out []kgo.RecordHeader
+	for i, h := range hs {
+		if displayable(h.Value) {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(hs)
+		}
+		out[i].Value = displayBytes(h.Value)
+	}
+	if out == nil {
+		return hs
+	}
+	return out
 }
 
 // hasControlBytes reports whether b contains any C0 control byte other than

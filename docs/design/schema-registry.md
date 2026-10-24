@@ -194,9 +194,10 @@ bumps it, and every index built with the old rendering stops matching.
 
 **Scan.** A record that could be framed is decoded with the scan's context
 (no 3 s display deadline: a search waits for the registry) and the decoded
-key or value is matched; everything else is matched on its bytes, as before.
-A field the registry could not answer for (unreachable, an error status, the
-caller's deadline) is matched on its bytes and marks the result `Truncated`,
+key or value is matched; everything else is matched as displayed, as before
+(the bytes, unless they render as `hex:`; see deep-search.md). A field the
+registry could not answer for (unreachable, an error status, the caller's
+deadline) is matched as its undecoded rendering and marks the result `Truncated`,
 so it is neither cached nor shown as complete. A schema the registry says
 does not exist, or a payload its schema cannot decode, fails the same way
 every time and is not a truncation. Matches are emitted decoded, with

@@ -88,10 +88,14 @@ func TestScanDecodesOnlyFramedRecords(t *testing.T) {
 
 func TestScanUnsettledDecodeIsTruncated(t *testing.T) {
 	t.Parallel()
-	ds := decodingScan("plum", &wordDecoder{unsettled: true})
-	// Undecoded, the value is matched on its bytes as before decoding existed.
+	ds := decodingScan("^hex:00", &wordDecoder{unsettled: true})
+	// Undecoded, the value is matched as its rendering (framed bytes start
+	// with NUL, so hex:), the text Messages shows and an index would store.
 	if _, ok := ds.match(context.Background(), framedRecord("plum")); !ok {
-		t.Error("an undecoded framed record stopped matching its bytes")
+		t.Error("an undecoded framed record stopped matching its rendering")
+	}
+	if _, ok := decodingScan("plum", &wordDecoder{unsettled: true}).match(context.Background(), framedRecord("plum")); ok {
+		t.Error("an undecoded framed record matched its bytes, which the display hides")
 	}
 	if !ds.truncated.Load() {
 		t.Error("a record the decoder could not settle left the scan looking complete")
