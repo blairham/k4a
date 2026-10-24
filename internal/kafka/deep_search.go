@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -742,15 +743,19 @@ func (ds *deepScan) scanRecord(ctx context.Context, r *kgo.Record, start, end in
 	}
 }
 
-// match applies the criteria to r and returns the record to emit. With a
-// decoder, a record that could be framed is decoded first and its decoded
-// key or value matched as text, the text the indexes store; every other
-// field is matched on its bytes, as without one. A decode that could not
-// settle marks the scan truncated: a later run may decode the record and
-// match it, so this result must not be cached or read as complete.
+// match applies the criteria to r and returns the record to emit. Every
+// field is matched as the text Messages shows and the indexes store: the
+// bytes themselves unless they render as hex: (bytesToDisplay), and, with
+// a decoder, the decoded text of a record that could be framed. Matching
+// the rendering rather than the bytes is what keeps a scan and an index
+// answering alike on a payload with a control byte or invalid UTF-8 (#144).
+// A decode that could not settle marks the scan truncated: a later run may
+// decode the record and match it, so this result must not be cached or
+// read as complete.
 func (ds *deepScan) match(ctx context.Context, r *kgo.Record) (ConsumedMessage, bool) {
+	headers := displayHeaders(r.Headers)
 	if ds.decoder == nil || !couldBeFramed(r) {
-		if !ds.selects(r.Key, r.Value, r.Headers) {
+		if !ds.selects(displayBytes(r.Key), displayBytes(r.Value), headers) {
 			return ConsumedMessage{}, false
 		}
 		return recordToConsumed(r), true
@@ -759,14 +764,8 @@ func (ds *deepScan) match(ctx context.Context, r *kgo.Record) (ConsumedMessage, 
 	if !ds.decoder.DecodeRecord(ctx, &m) {
 		ds.truncated.Store(true)
 	}
-	key, value := r.Key, r.Value
-	if m.KeyDecoding.Decoded() {
-		key = []byte(m.Key)
-	}
-	if m.ValueDecoding.Decoded() {
-		value = []byte(m.Value)
-	}
-	if !ds.selects(key, value, r.Headers) {
+	// Decoded text where the decoder settled, the display rendering elsewhere.
+	if !ds.selects([]byte(m.Key), []byte(m.Value), headers) {
 		return ConsumedMessage{}, false
 	}
 	return m, true
@@ -793,8 +792,8 @@ func PathMatches(e *jsonpath.Expr, key, value []byte, scope SearchScope) bool {
 
 // fieldsMatch reports whether re matches the key, value or headers in the
 // configured scope. The literal-prefix prefilter is applied first as a cheap
-// negative gate; it holds for decoded text as for bytes, since a match of re
-// contains its literal prefix whatever it is matched against.
+// negative gate; it holds for decoded or rendered text as for bytes, since a
+// match of re contains its literal prefix whatever it is matched against.
 func fieldsMatch(
 	key, value []byte, headers []kgo.RecordHeader, re *regexp.Regexp, prefilter []byte, scope SearchScope,
 ) bool {
@@ -825,8 +824,10 @@ func fieldsContain(key, value []byte, headers []kgo.RecordHeader, needle []byte,
 		return true
 	}
 	if scope&ScopeHeaders != 0 {
+		// The same `key=value` text the regex sees: a prefix that spans the
+		// join (`h=hex:`) is in neither part alone, and was never found.
 		for _, h := range headers {
-			if bytes.Contains([]byte(h.Key), needle) || bytes.Contains(h.Value, needle) {
+			if strings.Contains(h.Key+"="+string(h.Value), string(needle)) {
 				return true
 			}
 		}

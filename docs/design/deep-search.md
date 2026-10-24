@@ -128,8 +128,11 @@ header) is decoded first and the decoded key or value is matched as text,
 the text Messages shows and the indexes store; the prefilter applies to it
 unchanged, since a match contains its literal prefix whatever it is matched
 against. Every other record, and every field that did not decode, is
-matched on its bytes, so a topic without registry framing pays nothing.
-The JSON-path predicate reads the same decoded text. See
+matched as the text Messages renders it: the bytes themselves, unless they
+hold a control byte or invalid UTF-8 and render as `hex:`
+(`bytesToDisplay`), which is also what the indexes store. A topic without
+registry framing pays only that check. The JSON-path predicate reads the
+same text. See
 [`schema-registry.md`](schema-registry.md) § *Search and the indexes*.
 
 ### 4. Big fetch batches
@@ -205,7 +208,7 @@ type SearchParams struct {
     Until       time.Time     // zero = no upper bound
     Partitions  []int32       // nil = all
     Cap         int           // 0 = default 10,000
-    Decoder     RecordDecoder // nil = match the bytes as consumed
+    Decoder     RecordDecoder // nil = match the text as displayed
 }
 ```
 
@@ -237,7 +240,7 @@ each partition (because of reverse-chunked scan). We do not buffer-and-sort.
 | Failure | Behavior |
 |---|---|
 | Chunk cannot be fully read | `DeepSearchProgress.Truncated` is set; header/CLI say `INCOMPLETE`, and the result is **not** written to the query cache. A scan that ends short must never look like a clean completion |
-| Schema registry cannot answer for a framed record (search with a decoder) | The record is matched on its bytes and `Truncated` is set, as for a short read: once the registry answers, the same search may match it decoded, so this result is neither cached nor presented as complete |
+| Schema registry cannot answer for a framed record (search with a decoder) | The record is matched as its undecoded rendering and `Truncated` is set, as for a short read: once the registry answers, the same search may match it decoded, so this result is neither cached nor presented as complete |
 | Auth error mid-search | abort scan, show formatted error in header, keep already-found matches visible |
 | One partition unreachable | that partition's worker exits; others continue. Header: `scanned 11/12 partitions` |
 | Invalid regex | caught at form submit; the form rejects with inline error |
@@ -364,9 +367,10 @@ multi-valued results and a second query language inside the first — none of
 which the "find the failed orders" case needs. Anything wider can grow from
 this grammar later without breaking it.
 
-**Semantics** (`internal/jsonpath`): evaluated on the raw key and/or value
-bytes per `--scope` (headers are never evaluated); a key or value that is not
-exactly one JSON document never matches. Numbers compare numerically at
+**Semantics** (`internal/jsonpath`): evaluated on the key and/or value as
+displayed, per `--scope` (headers are never evaluated); a key or value that
+is not exactly one JSON document, including one rendered as `hex:`, never
+matches. Numbers compare numerically at
 256-bit precision, so `12.50 == 12.5` and IDs above 2^53 compare exactly;
 strings compare exactly (case-sensitive) and order bytewise. A comparison
 between different JSON types is never `<`/`>`/`==`, and is `!=`. **A missing
@@ -403,11 +407,13 @@ result cache keys on the canonical path (`Expr.String`), so equivalent
 spellings share an entry. `k4a-mcp` still filters the daemon's records by
 the path itself and reports `path_recall` (see shared-index-service.md).
 
-Like the regex, the field terms come from the text the index stores. A key
-or value the display renders as `hex:` (invalid UTF-8 or a control byte)
-holds no terms, while a scan parses its bytes; Go's decoder accepts such
-JSON, so an index can miss a record a scan matches there. It is the same
-gap the regex has on those payloads.
+Like the regex, the field terms come from the text the index stores, and a
+scan matches that same text (#144). A key or value the display renders as
+`hex:` (invalid UTF-8 or a control byte) holds no terms and is not JSON to
+the scan either, although Go's decoder would accept such bytes: a search
+matches what Messages shows, so the index and the scan never disagree on
+such a payload, and `hex:` itself is searchable. Header regexes are held to
+the same `key=value` text on both sides, prefilter included.
 
 `FuzzParsePath` checks that any predicate that parses has a canonical form
 that re-parses to itself and matches exactly the same records.
