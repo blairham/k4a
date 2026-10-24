@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes can land in any `v0.x` bump.
 
+## [0.1.0](https://github.com/blairham/k4a/compare/v0.0.3...v0.1.0) (2026-10-24)
+
+
+### Added
+
+* **auth:** OAUTHBEARER interactive OIDC login by device code or in the browser (PKCE, loopback redirect), with the token cached in the OS keychain and refreshed; `k4a login` (`--force`, `--logout`); SASL extensions (`--oauth-extensions`) and an authorization ID (`--oauth-authzid`) for any token source, also in `k4a-index` and its chart ([#121](https://github.com/blairham/k4a/issues/121)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* context secrets in the OS keychain: `k4a set-credential CONTEXT` stores the password (or `--field oauth-token` / `oauth-client-secret`) in the macOS Keychain, Secret Service or Windows Credential Manager and replaces it in the config with a `keychain:` reference; `delete-credential` removes it; a context with a username and no password is asked for one, on a terminal or in the TUI's masked prompt ([#119](https://github.com/blairham/k4a/issues/119)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **index:** field search from the index (Tier 5): a JSON-path equality or its `field:value` shorthand (`--path orderId:42`, `path:orderId:42` in the TUI, MCP `path`) is answered by the local index and `k4a-index` instead of always scanning ([#116](https://github.com/blairham/k4a/issues/116)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **k4a-index:** keep the follow-set in a compacted Kafka topic (`--followset-topic`, chart `config.followSetTopic`), so a new pod re-follows what the deployment followed and the replicas of a set follow what any one of them starts; off by default, it needs read and write on that topic (and create, unless it exists compacted) ([#123](https://github.com/blairham/k4a/issues/123)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **k4a-index:** per-caller authorization for `k4a-index` and `k4a-mcp`: `--authz-policy` maps client certificates (CN, SAN or subject) and per-caller bearer tokens to the topic globs each may search and follow, default-deny once configured, `listener.authz` in both charts; without a policy nothing changes ([#118](https://github.com/blairham/k4a/issues/118)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **search:** `k4a search --archive` searches a topic's S3 archive with Athena (per-context `archive.topics`): requires `--since`, prunes by time partition, asks above `archive.confirm-bytes`, refuses and stops above `archive.max-bytes`; `--explain` prints the SQL ([#117](https://github.com/blairham/k4a/issues/117)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **search:** cross-topic search: `k4a search -t 'orders.*'` and `:search orders.*` search every topic a glob selects, with coverage per topic; `--format summary` emits one summary per topic ([#114](https://github.com/blairham/k4a/issues/114)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **search:** with a schema registry configured, search, the local index and `k4a-index` match a framed Avro, Protobuf or JSON-Schema key or value as its decoded JSON (`--schema-registry-*`, `--decode raw` for bytes, chart `schemaRegistry`); an index serves a search only when it decoded with the same registry (`Coverage.decoder`). The index schema is now version 4, so indexes rebuild once; upgrade clients before giving `k4a-index` a registry ([#115](https://github.com/blairham/k4a/issues/115)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+* **tui:** background search: a scan keeps running when you leave the results, with progress in the status bar; `:results` brings it back, `x` or `:search-stop` stops it and keeps what it found, marked partial ([#114](https://github.com/blairham/k4a/issues/114)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+
+
+### Fixed
+
+* **tui:** starting a second search no longer leaves the first scanning unseen, and its late matches no longer leak into the new results ([#114](https://github.com/blairham/k4a/issues/114)) ([2d4d06e](https://github.com/blairham/k4a/commit/2d4d06e75f2d1c90b0a6e259657f5944b94b5e92))
+
 ## [0.0.3] - 2026-10-15
 
 ### Breaking
