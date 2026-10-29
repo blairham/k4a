@@ -481,10 +481,16 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   without leaving a check pending) and **CI / Build and test
   (ubuntu-latest)** (`make build`, `make check-proto`, `go vet`,
   `go test -race`), all from `go-ci.yml`, which also fuzzes on main and
-  weekly; **Image / Build image** (`go-image.yml`: both Dockerfile targets,
-  no push); and this repository's own **Helm chart** (`make helm-lint`,
-  which also proves `charts/k4a-index` still refuses to render without an
-  allowlist). `codeql.yml` (security-extended, required as **Analyze**) and
+  weekly; **Image / Build image** (`go-image.yml` with `builder:
+  goreleaser`: the release's own snapshot, so both `*-release` images
+  exactly as a tag would push them, publishing and signing nothing); and
+  this repository's own **Helm chart** (`make helm-lint`, which also
+  proves `charts/k4a-index` still refuses to render without an
+  allowlist). The from-source `index` and `mcp` targets (`make
+  docker-build`) are built by **Image from source**, which is not
+  required and runs only on pull requests that change the Dockerfile and
+  weekly: their Go base comes from public.ecr.aws, whose anonymous pulls
+  from GitHub's shared runner addresses get 429s. `codeql.yml` (security-extended, required as **Analyze**) and
   `scorecard.yml` run alongside. Every action is pinned by commit SHA with a
   `# vX.Y.Z` comment; Dependabot moves the pins, the Go modules (aws-sdk,
   franz-go, Charm and gRPC as groups) and the Dockerfile bases.
