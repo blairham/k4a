@@ -16,7 +16,7 @@ on:
     branches: [main]
   schedule:
     # Weekly, for go-ci.yml's Fuzz job, which explores on main and on this
-    # schedule but never on a pull request.
+    # schedule but never on a pull request, and for Image from source.
     - cron: '53 5 * * 3'
 
 permissions:
@@ -38,15 +38,37 @@ jobs:
   changes:
     name: Changes
     uses: blairham/.github/.github/workflows/go-changes.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
+    with:
+      filters: '{"dockerfile": ["^Dockerfile$", "^\\.dockerignore$"]}'
 
-  # Build only; the release publishes (release.yml). Both images, one after the
-  # other: the second shares the build stage, so it is mostly cache.
+  # Build only; the release publishes (release.yml). The release's own
+  # GoReleaser snapshot, publishing and signing nothing: the `*-release` stages
+  # .goreleaser.yaml names, which start from the distroless runtime and COPY
+  # GoReleaser's binaries, so the Go image on public.ecr.aws is never pulled.
+  # That pull is anonymous from runners that share egress addresses, and
+  # public ECR answered it with 429s often enough to fail this required check.
   image:
     name: Image
     needs: changes
     uses: blairham/.github/.github/workflows/go-image.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
     with:
       run: ${{ needs.changes.outputs.code == 'true' }}
+      builder: goreleaser
+
+  # The from-source targets `make docker-build` uses, which nothing above
+  # builds: on a pull request that changes the Dockerfile (Dependabot's
+  # golang base bumps among them) and weekly. Not a required check, so it
+  # may be skipped at the job level, and a 429 here is a rerun, not a block.
+  image-source:
+    name: Image from source
+    needs: changes
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' && fromJSON(needs.changes.outputs.matches).dockerfile == 'true')
+    uses: blairham/.github/.github/workflows/go-image.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
+    with:
+      # Both images, one after the other: the second shares the build stage,
+      # so it is mostly cache.
       targets: '["index", "mcp"]'
 
   # Lints both charts and renders them, including that k4a-index still refuses

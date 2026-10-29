@@ -3,9 +3,11 @@
 #   target `mcp`   -> k4a-mcp, an MCP server in front of it (HTTP, 9501)
 # The CLI/TUI ships as release archives, not an image.
 #
-# Base images are pinned by digest and pulled from AWS's public mirror of
-# Docker Hub (no anonymous rate limits). The build cross-compiles rather than
-# emulating the target.
+# Base images are pinned by digest. The Go image comes from AWS's public
+# mirror of Docker Hub, which rate-limits anonymous pulls per address too:
+# GitHub's runners share addresses and get 429s, so CI's required image check
+# builds only the `*-release` stages, which never pull it. The build
+# cross-compiles rather than emulating the target.
 FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-alpine@sha256:c95332c2af86b6d89b91bd0500f4b9529ccbd090a0d1855c6d1ceaa142ae8615 AS build
 ARG TARGETOS TARGETARCH
 ARG VERSION=dev
