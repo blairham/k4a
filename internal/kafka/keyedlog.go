@@ -153,15 +153,15 @@ func (l *KeyedLog) Snapshot(ctx context.Context) (table map[string][]byte, next 
 		offsets[p] = kgo.NewOffset().At(start)
 		remaining[p] = next[p]
 	}
-	cl, err := l.c.newConsumerClient(map[string]map[int32]kgo.Offset{l.topic: offsets})
+	cl, ctx, err := l.c.newConsumerClient(ctx, map[string]map[int32]kgo.Offset{l.topic: offsets})
 	if err != nil {
 		return nil, nil, err
 	}
 	defer cl.Close()
 	for len(remaining) > 0 {
 		fetches := cl.PollFetches(ctx)
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+		if ctx.Err() != nil {
+			return nil, nil, context.Cause(ctx)
 		}
 		if stop, err := fatalFetchError(ctx, fetches); stop {
 			return nil, nil, err
@@ -228,7 +228,7 @@ func (l *KeyedLog) Tail(
 			return fmt.Errorf("topic %q has no partitions", l.topic)
 		}
 	}
-	cl, err := l.c.newConsumerClient(map[string]map[int32]kgo.Offset{l.topic: from})
+	cl, ctx, err := l.c.newConsumerClient(ctx, map[string]map[int32]kgo.Offset{l.topic: from})
 	if err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func (l *KeyedLog) Tail(
 			apply(string(r.Key), r.Value, r.Partition, r.Offset)
 		})
 	}
-	return nil
+	return authFailure(ctx)
 }
 
 func applyKeyed(table map[string][]byte, r *kgo.Record) {

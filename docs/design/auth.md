@@ -1,7 +1,7 @@
 # Design: Authentication
 
 **Status:** living document — describes current behavior
-**Code:** `internal/kafka/auth.go`, `internal/kafka/oauth.go`,
+**Code:** `internal/kafka/auth.go`, `internal/kafka/authwatch.go`, `internal/kafka/oauth.go`,
 `internal/kafka/oidc.go`, `internal/kafka/tokenstore.go`, `internal/command/login.go`,
 `internal/secrets`, `internal/command/credentials.go`, `internal/tui/credentials.go`
 
@@ -119,6 +119,30 @@ symptom is connection errors, not silent data corruption. The TUI's
 refresh-error handler calls `CloseIdleConnections`, so the next refresh
 dials new connections that pick up new tokens; `:reconnect` rebuilds the
 client and re-resolves credentials outright.
+
+### Consumers give up on refused credentials
+
+franz-go retries a refused SASL handshake from inside the client, every
+metadata refresh (5s) for as long as the client lives, and never reports it
+to `PollFetches`, which just goes on waiting. Left alone, a `k4a consume`
+whose credentials had expired (most sharply, keys exported into its
+environment, which the per-handshake retrieve re-sends unchanged) retried
+the handshake against every broker for as long as it ran: six forgotten
+terminals kept a production MSK cluster at ~3 refused authentications a
+second for two weeks (#153).
+
+So every consumer client is built by `newWatchedClient`
+(`internal/kafka/authwatch.go`), whose `HookBrokerConnect` counts
+connections that fail to authenticate (a broker refusal, or credentials that
+could not be retrieved; `IsAuthError`). After `authFailureLimit` (3) in a
+row, about ten seconds, it ends the poll loop's context, and the loop returns
+the error: `consume` exits non-zero with it, the TUI's Messages view and the
+k4a-index tail report it on their error channel (a daemon tail that exits
+unfollows its topic until the next search), and an index catch-up records
+what it did not read as a gap. A connection that authenticates resets the
+count, so one stray refusal does not end a long tail; a dial error or a
+dropped connection says nothing about the credentials and neither counts
+nor resets.
 
 ## SASL without TLS
 

@@ -133,9 +133,10 @@ func Catchup(
 
 	// If we couldn't finish the requested ranges, mark the unscanned
 	// remainder as gaps so the dispatcher's CanServe honors the missing
-	// coverage. Record regardless of how ConsumeRange returned — what
-	// matters is whether *we* decided to bail.
-	if res.TimedOut || res.HitRecordCap {
+	// coverage: whether we bailed or the read failed (credentials the
+	// broker refused, #153), the live tail goes on moving the newest
+	// offset past a range nothing filled.
+	if res.TimedOut || res.HitRecordCap || err != nil {
 		gaps := computeRemainingGaps(starts, ends, &indexed, opts.MaxRecords)
 		if len(gaps) > 0 {
 			recordGaps(async.ix, gaps)
