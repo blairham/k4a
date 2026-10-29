@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes can land in any `v0.x` bump.
 
+## [0.1.2](https://github.com/blairham/k4a/compare/v0.1.1...v0.1.2) (2026-10-29)
+
+
+### Fixed
+
+* **deps:** Go 1.26.10 and golang.org/x/net v0.62.0 for three known vulnerabilities ([#158](https://github.com/blairham/k4a/issues/158)) ([1ed4530](https://github.com/blairham/k4a/commit/1ed4530503fa4b60f62ee2214bb0296da86e4497))
+* stop consumers that keep failing to authenticate ([#155](https://github.com/blairham/k4a/issues/155)) ([5c203c3](https://github.com/blairham/k4a/commit/5c203c3218296935380fdffd22b63a3ca88f53b8))
+
 ## [0.1.1](https://github.com/blairham/k4a/compare/v0.1.0...v0.1.1) (2026-10-24)
 
 
