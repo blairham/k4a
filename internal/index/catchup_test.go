@@ -5,10 +5,14 @@ package index
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 
 	"github.com/blairham/k4a/internal/kafka"
 	"github.com/blairham/k4a/internal/state"
@@ -20,6 +24,10 @@ import (
 type fakeKafka struct {
 	hwms    map[int32]int64
 	records map[int32]map[int64]kafka.ConsumedMessage
+	// failAfter, when set, ends ConsumeRange with consumeErr once that many
+	// records have been replayed.
+	consumeErr error
+	failAfter  int
 }
 
 func (f *fakeKafka) EndOffsets(_ context.Context, _ string) (map[int32]int64, error) {
@@ -34,6 +42,7 @@ func (f *fakeKafka) ConsumeRange(
 	starts, ends map[int32]int64,
 	onRecord func(kafka.ConsumedMessage),
 ) error {
+	replayed := 0
 	for partition, start := range starts {
 		end := ends[partition]
 		offsets := sortedOffsets(f.records[partition])
@@ -44,7 +53,11 @@ func (f *fakeKafka) ConsumeRange(
 			if cerr := ctx.Err(); cerr != nil {
 				return cerr
 			}
+			if f.consumeErr != nil && replayed == f.failAfter {
+				return f.consumeErr
+			}
 			onRecord(f.records[partition][off])
+			replayed++
 		}
 	}
 	return nil
@@ -250,5 +263,48 @@ func TestCatchup_RecordCap_LeavesGap(t *testing.T) {
 	}
 	if res.GapsRecorded == 0 {
 		t.Errorf("expected at least one gap recorded, got %+v", res)
+	}
+}
+
+// A catch-up whose read fails part way (here, credentials the broker refused)
+// must mark the range it did not fill as a gap, as a timed-out one does:
+// the live tail moves the newest offset past it either way (#153).
+func TestCatchup_ReadError_LeavesGap(t *testing.T) {
+	t.Parallel()
+
+	root := state.NewRoot(t.TempDir())
+	ix, err := Open(root, testCluster, "orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ix.Close() })
+	if ierr := ix.Index(context.Background(), msgAt(0, 4)); ierr != nil {
+		t.Fatal(ierr)
+	}
+	async := NewAsync(ix)
+	t.Cleanup(func() { _ = async.Stop() })
+
+	records := map[int64]kafka.ConsumedMessage{}
+	for off := int64(5); off < 100; off++ {
+		records[off] = msgAt(0, off)
+	}
+	refused := fmt.Errorf("giving up: %w", kerr.SaslAuthenticationFailed)
+	fake := &fakeKafka{
+		hwms:       map[int32]int64{0: 100},
+		records:    map[int32]map[int64]kafka.ConsumedMessage{0: records},
+		consumeErr: refused,
+		failAfter:  3,
+	}
+
+	res, err := Catchup(context.Background(), fake, async, "orders", CatchupOptions{})
+	if !errors.Is(err, kerr.SaslAuthenticationFailed) {
+		t.Fatalf("Catchup error = %v, want the read's error", err)
+	}
+	if res.GapsRecorded != 1 {
+		t.Fatalf("GapsRecorded = %d, want 1 (%+v)", res.GapsRecorded, res)
+	}
+	gaps := ix.BookkeeperSnapshot().Gaps
+	if len(gaps) != 1 || gaps[0].Partition != 0 || gaps[0].Start != 5 || gaps[0].End != 100 {
+		t.Errorf("gaps = %+v, want partition 0 offsets 5-100", gaps)
 	}
 }

@@ -107,7 +107,10 @@ backfill scan. Two intake paths:
   the indexer kicks off a one-shot backfill scan using the same scan
   machinery as deep search. While catching up, the search dispatcher
   knows the indexed window has a gap and falls back to scan for queries
-  that cross it.
+  that cross it. A catch-up that stops short of the high watermark (its
+  time or record cap, or a read that fails, such as credentials the broker
+  refuses) records the unread remainder as a `catchup_bailed` gap, since
+  the live tail keeps moving the newest offset past it.
 
 The indexer writes Bleve documents shaped like:
 

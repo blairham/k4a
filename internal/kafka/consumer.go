@@ -12,20 +12,17 @@ import (
 )
 
 // newConsumerClient builds a fresh kgo.Client configured to consume the given
-// partitions starting at the given offsets. The returned client is independent
-// of c.kgoClient (which is reserved for admin operations). Caller is
-// responsible for Close.
-func (c *Client) newConsumerClient(partitions map[string]map[int32]kgo.Offset) (*kgo.Client, error) {
+// partitions starting at the given offsets, and the context to poll it with
+// (see newWatchedClient). The returned client is independent of c.kgoClient
+// (which is reserved for admin operations). Caller is responsible for Close.
+func (c *Client) newConsumerClient(
+	ctx context.Context, partitions map[string]map[int32]kgo.Offset,
+) (*kgo.Client, context.Context, error) {
 	opts, err := NewClientOpts(c.authCfg, c.brokers)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	opts = append(opts, kgo.ConsumePartitions(partitions))
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("creating consumer client: %w", err)
-	}
-	return cl, nil
+	return newWatchedClient(ctx, append(opts, kgo.ConsumePartitions(partitions))...)
 }
 
 // recordToConsumed adapts a kgo.Record to the ConsumedMessage type used
@@ -91,7 +88,7 @@ func (c *Client) ConsumeRange(
 		return nil
 	}
 
-	cl, err := c.newConsumerClient(map[string]map[int32]kgo.Offset{topic: partitions})
+	cl, ctx, err := c.newConsumerClient(ctx, map[string]map[int32]kgo.Offset{topic: partitions})
 	if err != nil {
 		return err
 	}
@@ -99,7 +96,7 @@ func (c *Client) ConsumeRange(
 
 	for len(remaining) > 0 {
 		if ctx.Err() != nil {
-			return nil
+			return authFailure(ctx)
 		}
 		fetches := cl.PollFetches(ctx)
 		if stop, err := fatalFetchError(ctx, fetches); stop {
@@ -132,14 +129,15 @@ func consumeInRange(r *kgo.Record, remaining map[int32]int64, onRecord func(Cons
 }
 
 // fatalFetchError reports whether a poll loop should stop: either ctx has
-// ended (stop with a nil error) or a fetch failed on auth or connectivity
-// (stop with that error). Other fetch errors are transient; keep polling.
-// ctx is only consulted when the poll carried errors.
+// ended (stop with authFailure's error, nil unless the client gave up
+// authenticating) or a fetch failed on auth or connectivity (stop with that
+// error). Other fetch errors are transient; keep polling. ctx is only
+// consulted when the poll carried errors.
 func fatalFetchError(ctx context.Context, fetches kgo.Fetches) (stop bool, err error) {
 	for _, fe := range fetches.Errors() {
 		select {
 		case <-ctx.Done():
-			return true, nil
+			return true, authFailure(ctx)
 		default:
 		}
 		if IsAuthError(fe.Err) || isConnectionError(fe.Err) {
@@ -219,15 +217,15 @@ func (c *Client) consumeBlocking(
 		}))
 	}
 
-	cl, err := kgo.NewClient(opts...)
+	cl, ctx, err := newWatchedClient(ctx, opts...)
 	if err != nil {
-		return fmt.Errorf("creating consumer client: %w", err)
+		return err
 	}
 	defer cl.Close()
 
 	for {
 		if ctx.Err() != nil {
-			return nil
+			return authFailure(ctx)
 		}
 		fetches := cl.PollFetches(ctx)
 		if stop, err := fatalFetchError(ctx, fetches); stop {
@@ -334,7 +332,7 @@ func (c *Client) runConsume(
 		}
 	}
 
-	cl, err := c.newConsumerClient(map[string]map[int32]kgo.Offset{topic: partitions})
+	cl, ctx, err := c.newConsumerClient(ctx, map[string]map[int32]kgo.Offset{topic: partitions})
 	if err != nil {
 		sendErr(errCh, err)
 		close(ready)
@@ -345,6 +343,9 @@ func (c *Client) runConsume(
 	first := true
 	for {
 		if ctx.Err() != nil {
+			if err := authFailure(ctx); err != nil {
+				sendErr(errCh, err)
+			}
 			return
 		}
 		fetches := cl.PollFetches(ctx)
