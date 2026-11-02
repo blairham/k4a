@@ -37,6 +37,13 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:
+      # CodeQL refuses to run when its init, autobuild, analyze and
+      # upload-sarif steps are at different versions; split, every bump fails
+      # Analyze.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
   - package-ecosystem: docker
     directory: /
     schedule:
