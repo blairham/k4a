@@ -9,7 +9,7 @@ Guidance for AI coding agents (Claude Code, Cursor, Copilot, Codex, OpenCode, â€
 Two optional daemons share one search index across a team: **`k4a-index`** tails an allowlisted set of topics and answers coverage-reporting searches over gRPC, and **`k4a-mcp`** puts a Model Context Protocol server in front of it. Both ship as container images with Helm charts; the CLI ships as release archives and a Homebrew formula.
 
 - Module: `github.com/blairham/k4a`; Apache-2.0 with a CLA (`CLA.md`).
-- Go 1.26 (`go.mod`'s `go` directive and `.tool-versions` must match exactly).
+- Go 1.27 (`go.mod`'s `go` directive and `.tool-versions` must match exactly).
 
 ## Quick Reference
 

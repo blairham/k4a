@@ -763,7 +763,7 @@ make fmt        # format code (gofumpt; the commit hook runs the linters)
 make check      # vet + test + check-proto + helm-lint (what CI runs)
 ```
 
-Requires Go 1.26+. golangci-lint, gofumpt, goreleaser, and fieldalignment are declared in `go.mod`'s `tool` block — invoke via `go tool <name>`; no separate install needed.
+Requires Go 1.27+. golangci-lint, gofumpt, goreleaser, and fieldalignment are declared in `go.mod`'s `tool` block — invoke via `go tool <name>`; no separate install needed.
 
 ## License
 
