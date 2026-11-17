@@ -13,7 +13,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.6
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.81.1
 	github.com/aws/smithy-go v1.28.7
-	github.com/blairham/tuikit v0.0.25
+	github.com/blairham/tuikit v0.0.26
 	github.com/blevesearch/bleve/v2 v2.6.1
 	github.com/blevesearch/vellum v1.2.0
 	github.com/bufbuild/protocompile v0.14.1
@@ -314,7 +314,7 @@ require (
 	go.etcd.io/bbolt v1.4.3 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20251023183803-a4bb9ffd2546 // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
