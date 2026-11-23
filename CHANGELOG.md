@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes can land in any `v0.x` bump.
 
+## [0.2.0](https://github.com/blairham/k4a/compare/v0.1.3...v0.2.0) (2026-11-23)
+
+
+### Added
+
+* add describe-partitions, a headless leader/replicas/ISR view ([#180](https://github.com/blairham/k4a/issues/180)) ([6bc93fc](https://github.com/blairham/k4a/commit/6bc93fc6b7967d834e02b90865a53cd5193d529f)), closes [#176](https://github.com/blairham/k4a/issues/176)
+
 ## [0.1.3](https://github.com/blairham/k4a/compare/v0.1.2...v0.1.3) (2026-11-23)
 
 
