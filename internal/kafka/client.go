@@ -39,16 +39,18 @@ type Client struct {
 	brokers     string
 	clusterID   string
 	authCfg     AuthConfig
+	extra       []kgo.Opt // caller options, reapplied when the client is rebuilt
 	clusterIDMu sync.Mutex
 }
 
-// NewClient creates a new Kafka client backed by franz-go.
-func NewClient(authCfg AuthConfig, brokers string) (*Client, error) {
+// NewClient creates a new Kafka client backed by franz-go. extra options
+// apply after the connection options, e.g. a producer's partitioner.
+func NewClient(authCfg AuthConfig, brokers string, extra ...kgo.Opt) (*Client, error) {
 	opts, err := NewClientOpts(authCfg, brokers)
 	if err != nil {
 		return nil, err
 	}
-	kc, err := kgo.NewClient(opts...)
+	kc, err := kgo.NewClient(append(opts, extra...)...)
 	if err != nil {
 		return nil, fmt.Errorf("creating kgo client: %w", err)
 	}
@@ -57,6 +59,7 @@ func NewClient(authCfg AuthConfig, brokers string) (*Client, error) {
 		admin:     kadm.NewClient(kc),
 		authCfg:   authCfg,
 		brokers:   brokers,
+		extra:     extra,
 	}, nil
 }
 
@@ -79,7 +82,7 @@ func (c *Client) CloseIdleConnections() {
 		slog.Warn("CloseIdleConnections: rebuilding client opts failed", "err", err)
 		return
 	}
-	kc, err := kgo.NewClient(opts...)
+	kc, err := kgo.NewClient(append(opts, c.extra...)...)
 	if err != nil {
 		slog.Warn("CloseIdleConnections: rebuilding kgo client failed", "err", err)
 		return

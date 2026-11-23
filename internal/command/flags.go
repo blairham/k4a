@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/twmb/franz-go/pkg/kgo"
+
 	"github.com/blairham/k4a/internal/config"
 	"github.com/blairham/k4a/internal/endpointauth"
 	"github.com/blairham/k4a/internal/kafka"
@@ -207,7 +209,7 @@ func (f *ConnectionFlags) Resolve() (string, kafka.AuthConfig, error) {
 }
 
 // BuildClient resolves connection details and builds a Kafka client.
-func (f *ConnectionFlags) BuildClient() (*kafka.Client, error) {
+func (f *ConnectionFlags) BuildClient(extra ...kgo.Opt) (*kafka.Client, error) {
 	brokers, authCfg, err := f.Resolve()
 	if err != nil {
 		return nil, fmt.Errorf("connection failed: %w", err)
@@ -217,7 +219,7 @@ func (f *ConnectionFlags) BuildClient() (*kafka.Client, error) {
 	if loginErr := ensureOAuthLogin(authCfg); loginErr != nil {
 		return nil, loginErr
 	}
-	client, err := kafka.NewClient(authCfg, brokers)
+	client, err := kafka.NewClient(authCfg, brokers, extra...)
 	if err != nil {
 		return nil, fmt.Errorf("client setup failed: %w", err)
 	}
