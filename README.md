@@ -362,6 +362,22 @@ own records go out without a delay unless `--interval` is given. The TUI's
 Produce form (`p`) has the same Value, Key and Headers fields (headers as
 `a=1, b=2`).
 
+To delete a key from a compacted topic, send a tombstone (a null value) to
+the partition the key's records are on:
+
+```bash
+k4a produce -t orders --record-key order-42 --tombstone --partitioner consistent_random
+k4a produce -t orders --record-key order-42 --tombstone --partition 3 --yes
+```
+
+`--value ""` is not a tombstone: it sends an empty value, which compaction
+keeps. A tombstone prints the topic, partition, key and that key's newest
+record on the partition (or none), and asks unless `--yes`. `--partition N`
+and `--partitioner murmur2|crc32|consistent_random` work for `--value` and
+`--stdin` too. Pick the partitioner of the key's real producer: murmur2 for
+the Java client and franz-go, `consistent_random` (crc32 of the key) for
+librdkafka-based clients. A tombstone with neither flag uses murmur2.
+
 ## Search
 
 `k4a search` runs a deep search against a topic without opening the TUI —

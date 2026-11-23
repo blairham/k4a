@@ -104,3 +104,10 @@ func ReadLineRecords(r io.Reader, topic, keySep string, headers []kgo.RecordHead
 	}
 	return records, nil
 }
+
+// TombstoneRecord is a record with a nil value: on a compacted topic it
+// deletes key. An empty value is not one; compaction keeps it as the key's
+// newest record.
+func TombstoneRecord(topic, key string, headers []kgo.RecordHeader) *kgo.Record {
+	return &kgo.Record{Topic: topic, Key: []byte(key), Value: nil, Headers: headers}
+}

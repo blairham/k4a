@@ -24,19 +24,37 @@ type ProduceFlags struct {
 	Topic        string   `short:"t" long:"topic"         env:"KAFKA_TOPIC" description:"Target topic (overrides the schema's topic)"`
 	Schema       string   `short:"s" long:"schema"                          description:"YAML schema file for message generation"`
 	Interval     string   `short:"i" long:"interval"                        description:"Delay between messages (default: 1s generated, 0 for --value/--stdin)"`
-	Key          string   `          long:"record-key"                      description:"Record key (with --value); --key is the mTLS key file"`
+	Key          string   `          long:"record-key"                      description:"Record key (with --value or --tombstone); --key is the mTLS key file"`
 	Value        string   `          long:"value"                           description:"Record value: send this instead of generated messages"`
+	Partitioner  string   `          long:"partitioner"                     description:"Route each record by its key as this producer would"                   choice:"murmur2" choice:"crc32" choice:"consistent_random"`
 	KeySeparator string   `          long:"key-separator"                   description:"With --stdin, split each line into key and value at the first SEP"`
 	Headers      []string `short:"H" long:"header"                          description:"Record header name=value (repeatable)"`
+	Partition    *int32   `          long:"partition"                       description:"Write every record to this partition"`
 	ConnectionFlags
-	Count   int  `short:"c" long:"count"                           description:"Number of messages (default: 10 generated, 1 with --value)"`
-	Stdin   bool `          long:"stdin"                           description:"Read records from stdin, one per line"`
-	Verbose bool `short:"v" long:"verbose"                         description:"Verbose output"`
+	Count     int  `short:"c" long:"count"                           description:"Number of messages (default: 10 generated, 1 with --value)"`
+	Stdin     bool `          long:"stdin"                           description:"Read records from stdin, one per line"`
+	Tombstone bool `          long:"tombstone"                       description:"Send one record with a null value for --record-key"`
+	Yes       bool `short:"y" long:"yes"                             description:"Send a --tombstone without asking for confirmation"`
+	Verbose   bool `short:"v" long:"verbose"                         description:"Verbose output"`
+
+	// valueGiven is set when --value was on the command line, so
+	// --value "" sends an empty value instead of generated messages.
+	valueGiven bool
+}
+
+// hasValue reports whether --value was given, empty or not.
+func (f *ProduceFlags) hasValue() bool { return f.valueGiven || f.Value != "" }
+
+// routed reports whether k4a picks each record's partition itself (and
+// sends through a manual partitioner) rather than leaving it to franz-go.
+func (f *ProduceFlags) routed() bool {
+	return f.Partition != nil || f.Partitioner != "" || f.Tombstone
 }
 
 // ProduceCommand implements the "produce" CLI command.
 type ProduceCommand struct {
-	In io.Reader // stdin when nil; tests replace it
+	In      io.Reader // stdin when nil; tests replace it
+	Confirm Prompt    // the --tombstone confirmation
 }
 
 // Help returns the detailed help text.
@@ -55,6 +73,19 @@ func (c *ProduceCommand) Help() string {
   generated ones included. --value and --stdin send without a delay unless
   --interval is given.
 
+  --tombstone sends one record for --record-key with a null value, which
+  deletes the key from a compacted topic. --value "" is not a tombstone: it
+  sends an empty value, which compaction keeps as the key's newest record,
+  and which a consumer testing for a nil value reads as data. Before sending,
+  --tombstone prints the topic, partition and key and that key's newest
+  record on that partition (or none), then asks; --yes skips the question.
+
+  A tombstone deletes only on the partition the key's record is on.
+  --partition N writes there directly; --partitioner routes each record by
+  its key as a producer would: murmur2 (the Java client and franz-go),
+  crc32 or consistent_random (librdkafka's default, so confluent-kafka-go,
+  -python and -dotnet). A --tombstone with neither uses murmur2.
+
   Connection can be specified via config file (~/.k4a/config.yaml) or flags.
   When both are present, flags override config values.
 
@@ -70,7 +101,11 @@ Options:
   -c, --count=N           Number of messages (default: 10; 1 with --value)
   -i, --interval=DUR      Delay between messages (default: 1s; 0 with --value/--stdin)
       --record-key=KEY    Record key (with --value; --key is the mTLS key file)
-      --value=VALUE       Send this value instead of generated messages
+      --value=VALUE       Send this value instead of generated messages ("" sends an empty value)
+      --tombstone         Send one null-value record for --record-key (deletes it on a compacted topic)
+  -y, --yes               Send a --tombstone without asking
+      --partition=N       Write every record to partition N
+      --partitioner=NAME  Route by key: murmur2, crc32 or consistent_random
   -H, --header=NAME=VAL   Record header (repeatable)
       --stdin             Read records from stdin, one per line
       --key-separator=SEP With --stdin, split each line into key SEP value
@@ -102,7 +137,11 @@ Examples:
   # Your own records
   k4a produce -t orders --record-key order-42 --value '{"id":42}' -H source=cli
   printf 'order-1\t{"id":1}\norder-2\t{"id":2}\n' | \
-    k4a produce -t orders --stdin --key-separator "$(printf '\t')"`
+    k4a produce -t orders --stdin --key-separator "$(printf '\t')"
+
+  # Delete a key a librdkafka producer wrote to a compacted topic
+  k4a produce -t orders --record-key order-42 --tombstone --partitioner consistent_random
+  k4a produce -t orders --record-key order-42 --tombstone --partition 3 --yes`
 }
 
 // Synopsis returns the one-line description.
@@ -121,6 +160,7 @@ func (c *ProduceCommand) Run(args []string) int {
 		log.Error("invalid flags", "err", err)
 		return 1
 	}
+	flags.valueGiven = parser.FindOptionByLongName("value").IsSet()
 
 	expandEnvFlags(&flags)
 
@@ -140,7 +180,11 @@ func (c *ProduceCommand) Run(args []string) int {
 		return 1
 	}
 
-	client, err := flags.BuildClient()
+	var extra []kgo.Opt
+	if flags.routed() {
+		extra = append(extra, kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	}
+	client, err := flags.BuildClient(extra...)
 	if err != nil {
 		log.Error(err.Error())
 		return 1
@@ -149,6 +193,19 @@ func (c *ProduceCommand) Run(args []string) int {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+
+	if flags.routed() {
+		if err := routeRecords(ctx, client, &flags, messages); err != nil {
+			log.Error("choosing partitions failed", "err", err)
+			return 1
+		}
+	}
+	if flags.Tombstone {
+		if err := c.confirmTombstone(ctx, client, &flags, messages[0]); err != nil {
+			log.Error(err.Error())
+			return 1
+		}
+	}
 
 	fmt.Printf("Producing %d messages to %s...\n", len(messages), topic)
 
@@ -199,20 +256,52 @@ func (t *produceTally) summary() string {
 // checkRecordSource refuses flag combinations that would silently drop one
 // of the record sources (--value, --stdin, generation) or their options.
 func checkRecordSource(flags *ProduceFlags) error {
-	explicit := flags.Value != "" || flags.Stdin
+	if err := checkTombstone(flags); err != nil {
+		return err
+	}
+	explicit := flags.hasValue() || flags.Stdin || flags.Tombstone
 	switch {
-	case flags.Value != "" && flags.Stdin:
+	case flags.hasValue() && flags.Stdin:
 		return errors.New("give --value or --stdin, not both")
 	case explicit && flags.Schema != "":
-		return errors.New("--schema generates messages; it cannot be combined with --value or --stdin")
-	case flags.Key != "" && flags.Value == "":
-		return errors.New("--record-key needs --value (with --stdin, use --key-separator)")
+		return errors.New("--schema generates messages; it cannot be combined with --value, --stdin or --tombstone")
+	case flags.Key != "" && !flags.hasValue() && !flags.Tombstone:
+		return errors.New("--record-key needs --value or --tombstone (with --stdin, use --key-separator)")
 	case flags.KeySeparator != "" && !flags.Stdin:
 		return errors.New("--key-separator applies only to --stdin")
 	case flags.Stdin && flags.Count != 0:
 		return errors.New("--count does not apply to --stdin; every line is one record")
 	case explicit && flags.Topic == "":
-		return errors.New("--topic is required with --value or --stdin")
+		return errors.New("--topic is required with --value, --stdin or --tombstone")
+	case flags.Partition != nil && flags.Partitioner != "":
+		return errors.New("give --partition or --partitioner, not both")
+	case flags.Partition != nil && *flags.Partition < 0:
+		return fmt.Errorf("--partition %d is negative", *flags.Partition)
+	case flags.Partitioner != "" && flags.Stdin && flags.KeySeparator == "":
+		return errors.New("--partitioner routes by key; with --stdin, give --key-separator")
+	case flags.Yes && !flags.Tombstone:
+		return errors.New("--yes applies only to --tombstone")
+	}
+	return nil
+}
+
+// checkTombstone refuses a --tombstone that has anything to say about a
+// value, or no key to delete.
+func checkTombstone(flags *ProduceFlags) error {
+	if !flags.Tombstone {
+		return nil
+	}
+	switch {
+	case flags.hasValue():
+		return errors.New("--tombstone sends a null value; it cannot be combined with --value")
+	case flags.Stdin:
+		return errors.New("--tombstone sends one record; it cannot be combined with --stdin")
+	case flags.Schema != "":
+		return errors.New("--tombstone cannot be combined with --schema")
+	case flags.Key == "":
+		return errors.New("--tombstone needs --record-key: a tombstone deletes one key")
+	case flags.Count > 1:
+		return errors.New("--tombstone sends one record; --count does not apply")
 	}
 	return nil
 }
@@ -240,7 +329,9 @@ func buildRecords(flags *ProduceFlags, stdin io.Reader) (string, []*kgo.Record, 
 			return "", nil, errors.New("stdin held no records")
 		}
 		return flags.Topic, records, nil
-	case flags.Value != "":
+	case flags.Tombstone:
+		return flags.Topic, []*kgo.Record{kafka.TombstoneRecord(flags.Topic, flags.Key, headers)}, nil
+	case flags.hasValue():
 		count := flags.Count
 		if count == 0 {
 			count = 1
@@ -270,7 +361,7 @@ func produceInterval(flags ProduceFlags) (time.Duration, error) {
 	switch {
 	case flags.Interval != "":
 		return time.ParseDuration(flags.Interval)
-	case flags.Value != "" || flags.Stdin:
+	case flags.hasValue() || flags.Stdin || flags.Tombstone:
 		return 0, nil
 	default:
 		return time.Second, nil
