@@ -91,6 +91,9 @@ func commands(info version.Info) map[string]cli.CommandFactory {
 		"list-topics": func() (cli.Command, error) {
 			return &command.ListTopicsCmd{}, nil
 		},
+		"describe-partitions": func() (cli.Command, error) {
+			return &command.DescribePartitionsCmd{}, nil
+		},
 		"list-groups": func() (cli.Command, error) {
 			return &command.ListGroupsCmd{}, nil
 		},
