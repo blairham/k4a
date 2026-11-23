@@ -290,6 +290,9 @@ The TUI's list and detail views have headless equivalents. Each takes
 ```bash
 k4a list-topics                          # name, partitions, RF, out-of-sync
 k4a list-topics --counts --internal      # add message counts, show internal topics
+k4a describe-partitions orders           # leader, replicas, ISR, offsets per partition
+k4a describe-partitions --leader 1       # every partition broker 1 leads, all topics
+k4a describe-partitions --under-replicated  # ISR < replicas; --broker N: a replica on N
 k4a list-groups --lag                    # state, members, topics, lag, coordinator
 k4a describe-group orders-consumer       # per-partition committed offset, HWM, lag
 k4a describe-broker-config 1             # non-default broker configs (--all for every key)

@@ -76,7 +76,8 @@ Dockerfile           # Targets `index` and `mcp` (from source) and `*-release` (
 ### Subcommands (`internal/app/app.go`)
 
 `ui` (default), `produce`, `consume`, `verify`, `login`, `create-topic`,
-`create-acl`, `delete-topic`, `describe-topic`, `topic-size`, `list-topics`,
+`create-acl`, `delete-topic`, `describe-topic`, `describe-partitions`,
+`topic-size`, `list-topics`,
 `add-partitions`, `purge-topic`, `list-acls`, `delete-acl`, `list-groups`,
 `describe-group`, `reset-offsets`, `delete-offsets`, `delete-group`,
 `describe-broker-config`, `alter-config`, `alter-replication`, `contexts`,
