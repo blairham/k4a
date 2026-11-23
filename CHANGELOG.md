@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes can land in any `v0.x` bump.
 
+## [0.3.0](https://github.com/blairham/k4a/compare/v0.2.0...v0.3.0) (2026-11-23)
+
+
+### Added
+
+* **produce:** send a tombstone to an explicit partition ([#182](https://github.com/blairham/k4a/issues/182)) ([899a5fd](https://github.com/blairham/k4a/commit/899a5fd249fe419d2b6b7c7fd668ee5b1612230e))
+
 ## [0.2.0](https://github.com/blairham/k4a/compare/v0.1.3...v0.2.0) (2026-11-23)
 
 
