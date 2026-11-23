@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Pre-stable releases (`v0.x.y`) make no API-stability promise -- breaking changes can land in any `v0.x` bump.
 
+## [0.1.3](https://github.com/blairham/k4a/compare/v0.1.2...v0.1.3) (2026-11-23)
+
+
+### Build
+
+* ship the Homebrew formula as a source build with bottles ([#178](https://github.com/blairham/k4a/issues/178)) ([15782d5](https://github.com/blairham/k4a/commit/15782d56134ead23881daceabf8ab53292b9946d))
+
 ## [0.1.2](https://github.com/blairham/k4a/compare/v0.1.1...v0.1.2) (2026-10-29)
 
 
