@@ -169,9 +169,16 @@ docker_signs:
       - "${artifact}@${digest}"
       - "--yes"
 
-# A formula, not a cask. homebrew-core has no k4a, so the keg name is free.
-brews:
+# The formula builds from the source archive below (`brew install -s`) and
+# pours bottles made from the release's darwin and linux k4a binaries, the
+# way homebrew-core ships a CLI: a formula, not a cask, and not a formula
+# that only downloads a prebuilt archive. homebrew_bottles comes from
+# blairham/goreleaser (goreleaser/goreleaser#7342), which release.yml and
+# ci.yml select with goreleaser-ref. homebrew-core has no k4a, so the keg
+# name is free.
+homebrew_bottles:
   - name: k4a
+    # Only the CLI: k4a-index and k4a-mcp are linux images, not tap binaries.
     ids:
       - k4a
     repository:
@@ -179,16 +186,17 @@ brews:
       name: homebrew-tap
       # A fine-grained token with contents:write on blairham/homebrew-tap only.
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
     homepage: https://github.com/blairham/k4a
     description: Terminal UI for Kafka clusters, in the style of k9s
     license: Apache-2.0
     # A prerelease does not move the formula.
     skip_upload: auto
-    install: |
-      bin.install "k4a"
     test: |
       system "#{bin}/k4a", "version"
+
+# The tarball the formula's `url` points at, for building from source.
+source:
+  enabled: true
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

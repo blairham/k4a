@@ -511,7 +511,8 @@ when the whole value is `$VAR` or `${VAR}` (see `docs/design/contexts.md`).
   and calls `release.yml` and `chart.yml`. `release.yml` calls
   `go-release.yml`, which runs GoReleaser to publish `k4a` archives for
   Linux, macOS and Windows (amd64, arm64), a cosign-signed `checksums.txt`,
-  SLSA provenance for the archives, the `k4a` formula in
+  SLSA provenance for the archives, the `k4a` formula (a source build plus
+  bottles of the release binaries, `homebrew_bottles`) in
   `blairham/homebrew-tap`, and the multi-arch images
   `ghcr.io/blairham/k4a-index` and `ghcr.io/blairham/k4a-mcp`, each signed
   and attested. The notes are the tag's `CHANGELOG.md` section. The release

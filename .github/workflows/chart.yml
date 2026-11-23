@@ -36,7 +36,7 @@ jobs:
       contents: read
       packages: write # the charts on ghcr.io
       id-token: write # keyless cosign
-    uses: blairham/.github/.github/workflows/go-chart.yml@2a975269ebbb74aa0b4ec96f45773d7d68cc7bcc # v0.0.3
+    uses: blairham/.github/.github/workflows/go-chart.yml@ed30c1599f3dae98165801429893d397069b433c # v0.0.4
     with:
       tag: ${{ inputs.tag }}
       charts: '["k4a-index", "k4a-mcp"]'
